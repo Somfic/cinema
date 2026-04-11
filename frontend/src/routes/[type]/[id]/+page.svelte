@@ -15,7 +15,6 @@
 		type Stream,
 		type SubtitleTrack,
 		type SubtitleCue,
-		type EmbeddedSubtitleTrack,
 		type SearchResult,
 		similar as fetchSimilar,
 		recordWatch,
@@ -29,6 +28,12 @@
 	import MediaInfo from "$lib/components/MediaInfo.svelte";
 	import SeasonBrowser from "$lib/components/SeasonBrowser.svelte";
 	import EpisodeDetail from "$lib/components/EpisodeDetail.svelte";
+
+	type EmbeddedSubtitleTrack = {
+		stream_index: number;
+		language?: string;
+		codec?: string;
+	};
 
 	// ── Core state ──
 	let item = $state<MediaItem | null>(null);

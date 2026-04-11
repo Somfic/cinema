@@ -7,7 +7,7 @@
 	const base = "";
 
 	let isRoot = $derived(
-		page.url.pathname === base || page.url.pathname === base + "/",
+		page.url.pathname === "/" || page.url.pathname === base + "/",
 	);
 
 	let parentPath = $derived(base);

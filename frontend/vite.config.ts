@@ -6,7 +6,7 @@ export default defineConfig({
 	server: {
 		port: 5174,
 		hmr: {
-			clientPort: 5174,
+			clientPort: Number(process.env.VITE_HMR_PORT) || 5174,
 		},
 		fs: {
 			allow: ['..'],

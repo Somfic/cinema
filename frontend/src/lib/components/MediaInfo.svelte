@@ -207,9 +207,8 @@
 		</div>
 		<Button
 			variant="ghost"
-			icon="Heart"
+			icon={isFavorite ? { name: "Heart", fill: true } : "Heart"}
 			tooltip={isFavorite ? "Remove from favorites" : "Add to favorites"}
-			iconFilled={isFavorite}
 			loading={favoriteLoading}
 			onclick={() =>
 				toggleCollection(
@@ -221,8 +220,7 @@
 		/>
 		<Button
 			variant="ghost"
-			icon="Bookmark"
-			iconFilled={onWatchlist}
+			icon={onWatchlist ? { name: "Bookmark", fill: true } : "Bookmark"}
 			tooltip={onWatchlist ? "Remove from watchlist" : "Add to watchlist"}
 			loading={watchlistLoading}
 			onclick={() =>
