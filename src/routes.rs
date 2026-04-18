@@ -40,6 +40,7 @@ pub fn router() -> OpenApiRouter<AppContext> {
         .routes(routes!(delete_download))
         .routes(routes!(estimate_download))
         .route("/stream/{info_hash}/stats", axum::routing::get(stream_stats))
+        .route("/stream/{info_hash}/{file_idx}/pieces", axum::routing::get(stream_pieces))
         .route("/stream/{info_hash}/{file_idx}", axum::routing::get(stream_file))
         .route("/stream/{info_hash}/{file_idx}/audio", axum::routing::get(stream_audio_tracks))
         .route("/stream/{info_hash}/{file_idx}/subtitles/{stream_index}", axum::routing::get(stream_embedded_subtitles))
@@ -705,16 +706,27 @@ async fn stream_stats(
     }))
 }
 
+async fn stream_pieces(
+    Path((info_hash, file_idx)): Path<(String, usize)>,
+) -> Result<Json<Vec<u8>>, AppError> {
+    let engine = TorrentEngine::get();
+    let pieces = engine.piece_map(&info_hash, file_idx, 200)?;
+    Ok(Json(pieces))
+}
+
 async fn stream_file(
     Path((info_hash, file_idx)): Path<(String, usize)>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
     let engine = TorrentEngine::get();
 
-    // Ensure the torrent is started
+    // Ensure the torrent is started (also registers streaming priority)
     engine.start(&info_hash, file_idx).await?;
 
-    // Get a streaming reader (blocks on missing pieces, prioritizes sequential)
+    // Use librqbit's FileStream which blocks on missing pieces and
+    // prioritizes sequential download. This is correct because the stream
+    // only covers THIS file's pieces — it won't block on pieces belonging
+    // to other files in the torrent.
     let reader = engine.stream(&info_hash, file_idx)?;
     let total_size = reader.len;
 

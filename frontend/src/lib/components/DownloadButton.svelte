@@ -7,7 +7,7 @@
 		type Download,
 		type ResolutionEstimate,
 	} from "$lib/api.gen";
-	import { Button, DropdownMenu, type DropdownMenuItem } from "glow";
+	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
 
 	let {
 		mediaType,
@@ -117,12 +117,13 @@
 				: "Download",
 	);
 
-	const menuItems = $derived<DropdownMenuItem[]>(
+	const menuItems = $derived<PopoverMenuEntry[]>(
 		loadingEstimates
-			? [{ label: "Loading...", disabled: true, onclick: () => {} }]
+			? [{ kind: "item", label: "Loading...", disabled: true, onclick: () => {} }]
 			: estimates.length === 0
-				? [{ label: "No streams found", disabled: true, onclick: () => {} }]
+				? [{ kind: "item", label: "No streams found", disabled: true, onclick: () => {} }]
 				: estimates.map((est) => ({
+						kind: "item" as const,
 						label: est.resolution,
 						shortcut: est.size_display ?? undefined,
 						onclick: () => pickResolution(est.resolution),
@@ -139,9 +140,9 @@
 		onclick={handleClick}
 	/>
 {:else}
-	<DropdownMenu items={menuItems} align="right" bind:open={dropdownOpen}>
+	<PopoverMenu items={menuItems} align="right" bind:open={dropdownOpen}>
 		{#snippet trigger()}
 			<Button variant="ghost" icon="Download" />
 		{/snippet}
-	</DropdownMenu>
+	</PopoverMenu>
 {/if}

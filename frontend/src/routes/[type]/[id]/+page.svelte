@@ -79,6 +79,7 @@
 		finished: boolean;
 	}
 	let streamStats = $state<StreamStats | null>(null);
+	let pieceMap = $state<number[]>([]);
 	let statsPollTimer: ReturnType<typeof setInterval> | undefined;
 
 	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
@@ -86,6 +87,7 @@
 	let activeAudioIdx = $state(0);
 	let mediaDuration = $state(0);
 	let hlsSessionId = $state<string | null>(null);
+	let transcoding = $state(false);
 
 	// ── Derived ──
 	const slideIndex = $derived(
@@ -164,14 +166,15 @@
 
 	// ── Body style management ──
 	$effect(() => {
-		document.body.style.overflowX = selectedStream ? "" : "hidden";
 		if (selectedStream) {
+			document.body.style.overflow = "hidden";
 			document.body.style.setProperty("display", "block", "important");
 		} else {
+			document.body.style.overflow = "";
 			document.body.style.removeProperty("display");
 		}
 		return () => {
-			document.body.style.overflowX = "";
+			document.body.style.overflow = "";
 			document.body.style.removeProperty("display");
 		};
 	});
@@ -354,7 +357,7 @@
 				fileAudioTracks = [];
 				activeAudioIdx = 0;
 				pollAudioTracks(stream.info_hash, stream.file_idx);
-				if (!result.local) pollStreamStats(stream.info_hash);
+				if (!result.local) pollStreamStats(stream.info_hash, stream.file_idx);
 			})
 			.catch((e) => {
 				error = e.message;
@@ -381,6 +384,7 @@
 					// Auto-switch to HLS remux if default audio codec is unsupported by the browser
 					if (!hlsSessionId && tracks[0] && !BROWSER_SAFE_AUDIO.has(tracks[0].codec)) {
 						fileAudioTracks = tracks;
+						transcoding = true;
 						startHlsRemux(infoHash, fileIdx, 0);
 					}
 				}
@@ -410,15 +414,19 @@
 		audioPollTimer = setInterval(check, 10_000);
 	}
 
-	function pollStreamStats(infoHash: string) {
+	function pollStreamStats(infoHash: string, fileIdx: number) {
 		if (statsPollTimer) clearInterval(statsPollTimer);
 		streamStats = null;
+		pieceMap = [];
 
 		const check = async () => {
 			try {
-				const res = await fetch(`/api/stream/${infoHash}/stats`);
-				const data: StreamStats = await res.json();
-				streamStats = data;
+				const [statsRes, piecesRes] = await Promise.all([
+					fetch(`/api/stream/${infoHash}/stats`),
+					fetch(`/api/stream/${infoHash}/${fileIdx}/pieces`),
+				]);
+				streamStats = await statsRes.json();
+				pieceMap = await piecesRes.json();
 			} catch {}
 		};
 
@@ -429,12 +437,24 @@
 	function stopStreamStats() {
 		if (statsPollTimer) { clearInterval(statsPollTimer); statsPollTimer = undefined; }
 		streamStats = null;
+		pieceMap = [];
 	}
 
 	async function switchAudio(idx: number) {
 		if (!selectedStream) return;
 		activeAudioIdx = idx;
 		await startHlsRemux(selectedStream.info_hash, selectedStream.file_idx, idx, playerTime);
+	}
+
+	async function toggleTranscoding(enabled: boolean) {
+		if (!selectedStream) return;
+		if (enabled) {
+			await startHlsRemux(selectedStream.info_hash, selectedStream.file_idx, activeAudioIdx, playerTime);
+		} else {
+			stopHlsSession();
+			const result = await playStream(selectedStream.info_hash, selectedStream.file_idx);
+			streamUrl = result.url;
+		}
 	}
 
 	async function startHlsRemux(infoHash: string, fileIdx: number, audioIdx: number, startAt = 0) {
@@ -674,6 +694,7 @@
 				src={streamUrl ?? ""}
 				subtitles={activeCues}
 				{streamStats}
+				{pieceMap}
 				title={playerTitle}
 				topline={playerTopline}
 				titleImage={item?.logo_path
@@ -697,6 +718,8 @@
 						? imageUrl(item.backdrops[0], "original")
 						: undefined}
 				startTime={playerStartTime}
+				bind:transcoding
+				onTranscodingChange={toggleTranscoding}
 				streams={playingLocal ? [] : streams}
 				activeStreamHash={selectedStream?.info_hash}
 				onStreamSelect={playingLocal ? undefined : switchStream}
@@ -844,6 +867,7 @@
 		opacity: 0;
 		pointer-events: none;
 		transition: opacity 0.5s ease;
+		overflow: hidden;
 	}
 
 	.player-overlay.active {

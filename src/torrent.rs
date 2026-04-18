@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
@@ -8,6 +9,7 @@ use librqbit::{
 };
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -20,6 +22,9 @@ pub struct TorrentEngine {
     http: reqwest::Client,
     cancel: CancellationToken,
     span: tracing::Span,
+    /// Keep a FileStream alive per (info_hash, file_idx) to maintain
+    /// sequential piece prioritization from librqbit's streaming system.
+    stream_handles: Mutex<HashMap<(String, usize), TorrentFileReader>>,
 }
 
 pub struct TorrentHandle {
@@ -150,6 +155,7 @@ impl TorrentEngine {
                 http,
                 cancel,
                 span,
+                stream_handles: Mutex::new(HashMap::new()),
             })
             .map_err(|_| crate::app::Error::Generic("Torrent engine already initialized".into()))?;
 
@@ -207,6 +213,17 @@ impl TorrentEngine {
                 if !files.contains(&file_idx) {
                     files.insert(file_idx);
                     let _ = self.session.update_only_files(&handle, &files).await;
+                }
+                // Unpause this torrent and pause others
+                self.pause_all_except(info_hash);
+
+                // Ensure a persistent stream exists for piece prioritization
+                let key = (info_hash.to_lowercase(), file_idx);
+                let mut handles = self.stream_handles.lock().await;
+                if !handles.contains_key(&key) {
+                    if let Ok(reader) = self.stream(info_hash, file_idx) {
+                        handles.insert(key, reader);
+                    }
                 }
                 return Ok(TorrentHandle { managed: handle });
             }
@@ -317,6 +334,18 @@ impl TorrentEngine {
 
         // Pause other torrents to prioritize the one being watched
         self.pause_all_except(info_hash);
+
+        // Register a persistent FileStream so librqbit prioritizes
+        // sequential pieces from the start of the file (32MB lookahead).
+        {
+            let key = (info_hash.to_lowercase(), file_idx);
+            let mut handles = self.stream_handles.lock().await;
+            if !handles.contains_key(&key) {
+                if let Ok(reader) = self.stream(info_hash, file_idx) {
+                    handles.insert(key, reader);
+                }
+            }
+        }
 
         let name = managed.name().unwrap_or_else(|| "unknown".into());
         let stats = managed.stats();
@@ -648,8 +677,76 @@ impl TorrentEngine {
         Ok(handle.stats())
     }
 
+    /// Get a bucketed piece map for a specific file in a torrent.
+    /// Returns a vector of values 0–255 representing the download ratio
+    /// of each bucket (0 = no pieces, 255 = all pieces downloaded).
+    pub fn piece_map(&self, info_hash: &str, file_idx: usize, bucket_count: usize) -> crate::app::Result<Vec<u8>> {
+        let id = TorrentIdOrHash::parse(info_hash)
+            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+
+        // Get the file's piece range from torrent metadata
+        let handle = self
+            .session
+            .get(id.clone())
+            .ok_or_else(|| crate::app::Error::Generic("Torrent not found".into()))?;
+
+        let piece_range = handle
+            .with_metadata(|meta| {
+                meta.info
+                    .iter_file_details_ext(&meta.lengths)
+                    .ok()
+                    .and_then(|mut iter| iter.nth(file_idx))
+                    .map(|f| f.pieces)
+            })
+            .map_err(|e| crate::app::Error::Generic(format!("No metadata: {e}")))?
+            .ok_or_else(|| crate::app::Error::Generic(format!("File index {file_idx} not found")))?;
+
+        let dump = self
+            .api
+            .api_dump_haves(id)
+            .map_err(|e| crate::app::Error::Generic(format!("Failed to get piece map: {e}")))?;
+
+        // Parse the debug output of BitSlice which looks like:
+        // "BitSlice<u8, Msb0> [1, 0, 1, 1, 0, ...]"
+        // Find the actual bracket-delimited list.
+        let bracket_start = dump.find('[').unwrap_or(0);
+        let inner = dump[bracket_start..].trim_start_matches('[').trim_end_matches(']');
+        if inner.is_empty() {
+            return Ok(vec![0u8; bucket_count]);
+        }
+
+        let all_pieces: Vec<bool> = inner.split(',').map(|s| s.trim() == "1").collect();
+
+        // Extract only the pieces belonging to this file
+        let start_piece = piece_range.start as usize;
+        let end_piece = (piece_range.end as usize).min(all_pieces.len());
+        if start_piece >= all_pieces.len() || start_piece >= end_piece {
+            return Ok(vec![0u8; bucket_count]);
+        }
+        let pieces = &all_pieces[start_piece..end_piece];
+        let total = pieces.len();
+
+        let buckets = bucket_count.min(total);
+        let mut result = Vec::with_capacity(buckets);
+
+        for i in 0..buckets {
+            let s = i * total / buckets;
+            let e = (i + 1) * total / buckets;
+            let count = e - s;
+            if count == 0 {
+                result.push(0);
+            } else {
+                let have = pieces[s..e].iter().filter(|&&b| b).count();
+                result.push((have * 255 / count) as u8);
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Remove a torrent from the session. Files are kept on disk.
     pub async fn stop(&self, info_hash: &str) {
+        self.drop_stream_handles(info_hash).await;
         if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
             let name = self.session.get(id.clone()).and_then(|h| h.name());
             let _ = self.session.delete(id, false).await;
@@ -658,8 +755,15 @@ impl TorrentEngine {
         }
     }
 
+    async fn drop_stream_handles(&self, info_hash: &str) {
+        let hash = info_hash.to_lowercase();
+        let mut handles = self.stream_handles.lock().await;
+        handles.retain(|(h, _), _| h != &hash);
+    }
+
     /// Remove a torrent and delete its downloaded files.
     pub async fn stop_and_delete(&self, info_hash: &str) {
+        self.drop_stream_handles(info_hash).await;
         if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
             let name = self.session.get(id.clone()).and_then(|h| h.name());
             let _ = self.session.delete(id, true).await;

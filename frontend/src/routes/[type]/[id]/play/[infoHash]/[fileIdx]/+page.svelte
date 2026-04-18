@@ -32,6 +32,18 @@
 	let mediaDuration = $state(0);
 	let hlsSessionId = $state<string | null>(null);
 
+	interface StreamStats {
+		progress_bytes: number;
+		total_bytes: number;
+		download_speed_mbps: number;
+		peers: number;
+		finished: boolean;
+	}
+	let streamStats = $state<StreamStats | null>(null);
+	let pieceMap = $state<number[]>([]);
+	let statsPollTimer: ReturnType<typeof setInterval> | undefined;
+	let transcoding = $state(false);
+
 	const backdropUrls = $derived(
 		item?.backdrops?.map((b) => imageUrl(b, 'original')) ?? []
 	);
@@ -62,6 +74,26 @@
 			: undefined
 	);
 
+	function pollStreamStats(hash: string) {
+		if (statsPollTimer) clearInterval(statsPollTimer);
+		streamStats = null;
+		pieceMap = [];
+
+		const check = async () => {
+			try {
+				const [statsRes, piecesRes] = await Promise.all([
+					fetch(`/api/stream/${hash}/stats`),
+					fetch(`/api/stream/${hash}/${fileIdx}/pieces`),
+				]);
+				streamStats = await statsRes.json();
+				pieceMap = await piecesRes.json();
+			} catch {}
+		};
+
+		check();
+		statsPollTimer = setInterval(check, 2000);
+	}
+
 	$effect(() => {
 		const detailsPromise = getDetails(mediaType, mediaId)
 			.then((res) => { item = res.data; })
@@ -72,6 +104,7 @@
 				streamUrl = result.url;
 				activeAudioIdx = 0;
 				pollAudioTracks(infoHash as string, fileIdx as number);
+				pollStreamStats(infoHash as string);
 			})
 			.catch((e) => { error = e.message; });
 
@@ -135,6 +168,7 @@
 					if (data.duration) mediaDuration = data.duration;
 					if (!hlsSessionId && tracks[0] && !BROWSER_SAFE_AUDIO.has(tracks[0].codec)) {
 						fileAudioTracks = tracks;
+						transcoding = true;
 						startHlsRemux(hash, idx, 0);
 					}
 					clearInterval(audioPollTimer);
@@ -152,6 +186,16 @@
 	async function switchAudio(idx: number) {
 		activeAudioIdx = idx;
 		await startHlsRemux(infoHash as string, fileIdx as number, idx, playerTime);
+	}
+
+	async function toggleTranscoding(enabled: boolean) {
+		if (enabled) {
+			await startHlsRemux(infoHash as string, fileIdx as number, activeAudioIdx, playerTime);
+		} else {
+			stopHlsSession();
+			const result = await playStream(infoHash as string, fileIdx as number);
+			streamUrl = result.url;
+		}
 	}
 
 	async function startHlsRemux(hash: string, idx: number, audioIdx: number, startAt = 0) {
@@ -179,6 +223,7 @@
 	}
 
 	function close() {
+		if (statsPollTimer) { clearInterval(statsPollTimer); statsPollTimer = undefined; }
 		stopHlsSession();
 		goto(`/${mediaType}/${mediaId}`);
 	}
@@ -207,6 +252,10 @@
 			onAudioSelect={(track) => switchAudio(track.id)}
 			knownDuration={hlsSessionId ? mediaDuration : 0}
 
+			{streamStats}
+			{pieceMap}
+			bind:transcoding
+			onTranscodingChange={toggleTranscoding}
 			{subtitleTracks}
 			{loadingSubtitles}
 			{activeTrackUrl}
@@ -234,6 +283,7 @@
 		inset: 0;
 		z-index: 100;
 		background: #000;
+		overflow: hidden;
 	}
 
 	.error-overlay {

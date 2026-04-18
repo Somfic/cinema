@@ -6,10 +6,10 @@
 	import {
 		Button,
 		Data,
-		DropdownMenu,
+		PopoverMenu,
 		Icon,
 		Popover,
-		type DropdownMenuItem,
+		type PopoverMenuEntry,
 	} from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
@@ -60,6 +60,9 @@
 		knownDuration = 0,
 		startTime = 0,
 		streamStats = null,
+		pieceMap = [],
+		transcoding = $bindable(false),
+		onTranscodingChange,
 		currentTime = $bindable(0),
 		duration = $bindable(0),
 		paused = $bindable(true),
@@ -95,6 +98,9 @@
 			peers: number;
 			finished: boolean;
 		} | null;
+		pieceMap?: number[];
+		transcoding?: boolean;
+		onTranscodingChange?: (enabled: boolean) => void;
 		paused?: boolean;
 	} = $props();
 
@@ -138,52 +144,106 @@
 		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
 	});
 
-	const resolutionMenuItems = $derived<DropdownMenuItem[]>(
-		resolutions.map((res) => ({
-			label: res,
-			selected: res === activeResolution,
-			onclick: () => {
-				const best = streams.find(
-					(s: StreamOption) => s.resolution === res,
-				);
-				if (best) onStreamSelect?.(best);
-			},
-		})),
-	);
-
-	const subtitleMenuItems = $derived<DropdownMenuItem[]>([
-		{
-			label: "Off",
-			selected: subtitles.length === 0,
-			onclick: () => onSubtitleOff?.(),
-		},
-		...subtitleTracks.map((track) => {
-			const isEmbedded = track.id.startsWith("embedded:");
-			const dupes = subtitleTracks.filter(
-				(t) =>
-					t.language === track.language &&
-					t.id.startsWith("embedded:") === isEmbedded,
-			);
-			const suffix =
-				dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
-			return {
-				label: `${track.language}${suffix}`,
-				selected: track.url === activeTrackUrl,
-				onclick: () => onSubtitleSelect?.(track),
-			} as DropdownMenuItem;
-		}),
-	]);
-
-	const streamMenuItems = $derived<DropdownMenuItem[]>(
-		streams
+	const streamMenuItems = $derived<PopoverMenuEntry[]>([
+		...(resolutions.length > 1
+			? [
+					{ kind: "header" as const, label: "Quality" },
+					...resolutions.map((res) => ({
+						kind: "item" as const,
+						label: res,
+						selected: res === activeResolution,
+						onclick: () => {
+							const best = streams.find(
+								(s: StreamOption) => s.resolution === res,
+							);
+							if (best) onStreamSelect?.(best);
+						},
+					})),
+					"divider" as const,
+				]
+			: []),
+		{ kind: "header" as const, label: "Sources" },
+		...streams
 			.filter((s: StreamOption) => s.resolution === activeResolution)
-			.slice(0, 5)
+			.slice(0, 8)
 			.map((stream: StreamOption) => ({
-				label: `${stream.codec ?? stream.source}${stream.size_display ? ` · ${stream.size_display}` : ""}`,
+				kind: "item" as const,
+				label: `${stream.source}`,
+				description: [stream.codec, stream.audio, stream.source_type].filter(Boolean).join(" · "),
+				shortcut: stream.size_display ?? undefined,
 				selected: stream.info_hash === activeStreamHash,
 				onclick: () => onStreamSelect?.(stream),
 			})),
-	);
+		"divider" as const,
+		{
+			kind: "toggle" as const,
+			label: "Transcoding",
+			description: "Re-encode video for compatibility",
+			checked: transcoding,
+			onChange: (value: boolean) => {
+				transcoding = value;
+				onTranscodingChange?.(value);
+			},
+		},
+	]);
+
+	const audioSubtitleMenuItems = $derived<PopoverMenuEntry[]>([
+		...(audioTracks.length > 1
+			? [
+					{ kind: "header" as const, label: "Audio" },
+					...audioTracks.map((track) => ({
+						kind: "item" as const,
+						label: track.name,
+						description: track.lang ?? undefined,
+						selected: track.id === activeAudioTrack,
+						onclick: () => {
+							if (onAudioSelect) {
+								onAudioSelect(track);
+							} else if (videoEl) {
+								const native = (videoEl as any).audioTracks;
+								if (native) {
+									for (let i = 0; i < native.length; i++) {
+										native[i].enabled = i === track.id;
+									}
+								}
+							}
+							activeAudioTrack = track.id;
+						},
+					})),
+					"divider" as const,
+				]
+			: []),
+		...(subtitleTracks.length > 0
+			? [
+					{ kind: "header" as const, label: "Subtitles" },
+					{
+						kind: "item" as const,
+						label: "Off",
+						selected: subtitles.length === 0,
+						onclick: () => onSubtitleOff?.(),
+					},
+					...subtitleTracks.map((track) => {
+						const isEmbedded = track.id.startsWith("embedded:");
+						const dupes = subtitleTracks.filter(
+							(t) =>
+								t.language === track.language &&
+								t.id.startsWith("embedded:") === isEmbedded,
+						);
+						const suffix =
+							dupes.length > 1
+								? ` #${dupes.indexOf(track) + 1}`
+								: "";
+						return {
+							kind: "item" as const,
+							label: `${track.language}${suffix}`,
+							description: isEmbedded ? "Embedded" : undefined,
+							selected: track.url === activeTrackUrl,
+							onclick: () => onSubtitleSelect?.(track),
+						};
+					}),
+				]
+			: []),
+	]);
 
 	let subtitleOffset = $state(defaultOffset);
 	let cursorHidden = $state(false);
@@ -419,11 +479,17 @@
 			});
 			hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
 				if (data.fatal) {
-					loading = false;
-					hls?.destroy();
-					hls = null;
-					streamError =
-						"Stream failed. The torrent may not have enough peers.";
+					if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+						// Network errors are often transient during torrent streaming — retry
+						console.warn("[hls] network error, retrying:", data.details, data.response?.code);
+						hls?.startLoad();
+					} else {
+						console.error("[hls] fatal error:", data.type, data.details, data.reason, data.response);
+						loading = false;
+						hls?.destroy();
+						hls = null;
+						streamError = `Stream failed: ${data.details ?? data.type}`;
+					}
 				}
 			});
 		} else if (
@@ -545,9 +611,14 @@
 		}}
 		onwaiting={() => (loading = true)}
 		onerror={() => {
-			streamError =
-				"Stream failed. The torrent may not have enough peers.";
-			loading = true;
+			if (!videoEl?.error) return;
+			const code = videoEl.error.code;
+			// MEDIA_ERR_NETWORK (2) is transient during torrent streaming — ignore
+			// MEDIA_ERR_DECODE (3) or MEDIA_ERR_SRC_NOT_SUPPORTED (4) = genuinely unplayable
+			if (code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+				streamError = "Format not supported by browser — try enabling transcoding.";
+				loading = true;
+			}
 		}}
 	></video>
 
@@ -679,6 +750,16 @@
 			tabindex="-1"
 		>
 			<div class="progress-track">
+				{#if pieceMap.length > 0 && streamStats && !streamStats.finished}
+					<div class="progress-pieces">
+						{#each pieceMap as value}
+							<div
+								class="piece"
+								style="opacity: {value / 255}"
+							></div>
+						{/each}
+					</div>
+				{/if}
 				<div
 					class="progress-buffered"
 					style="width: {bufferedPercent}%"
@@ -725,54 +806,19 @@
 			</div>
 
 			<div class="controls-right">
-				{#if resolutions.length > 1 && onStreamSelect}
-					<DropdownMenu items={resolutionMenuItems} align="right">
+				{#if streams.length > 0 && onStreamSelect}
+					<PopoverMenu items={streamMenuItems} align="right">
 						{#snippet trigger()}
-							<Button variant="ghost" icon="Hd" />
+							<Button variant="ghost" icon="Settings2" />
 						{/snippet}
-					</DropdownMenu>
+					</PopoverMenu>
 				{/if}
 
-				{#if streams.length > 1 && onStreamSelect}
-					<DropdownMenu items={streamMenuItems} align="right">
-						{#snippet trigger()}
-							<Button variant="ghost" icon="Radio" />
-						{/snippet}
-					</DropdownMenu>
-				{/if}
-
-				{#if audioTracks.length > 1}
-					<DropdownMenu
-						items={audioTracks.map((track) => ({
-							label: track.name,
-							selected: track.id === activeAudioTrack,
-							onclick: () => {
-								if (onAudioSelect) {
-									onAudioSelect(track);
-								} else if (videoEl) {
-									const native = (videoEl as any).audioTracks;
-									if (native) {
-										for (
-											let i = 0;
-											i < native.length;
-											i++
-										) {
-											native[i].enabled = i === track.id;
-										}
-									}
-								}
-								activeAudioTrack = track.id;
-							},
-						}))}
+				{#if audioTracks.length > 1 || subtitleTracks.length > 0}
+					<PopoverMenu
+						items={audioSubtitleMenuItems}
 						align="right"
 					>
-						{#snippet trigger()}
-							<Button variant="ghost" icon="AudioLines" />
-						{/snippet}
-					</DropdownMenu>
-				{/if}
-				{#if subtitleTracks.length > 0}
-					<Popover align="right">
 						{#snippet trigger()}
 							<Button
 								variant="ghost"
@@ -780,57 +826,7 @@
 								loading={loadingSubtitles}
 							/>
 						{/snippet}
-						{#snippet children()}
-							<div class="sub-menu">
-								{#each subtitleMenuItems as item, i}
-									<button
-										class="sub-item"
-										onclick={item.onclick}
-									>
-										<span>
-											{item.label}
-											{#if i > 0 && subtitleTracks[i - 1]?.id.startsWith("embedded:")}
-												<span class="sub-badge"
-													>Embedded</span
-												>
-											{/if}
-										</span>
-										{#if item.shortcut}
-											<span class="sub-dot"
-												>{item.shortcut}</span
-											>
-										{/if}
-									</button>
-								{/each}
-								{#if subtitles.length > 0}
-									<div class="sub-divider"></div>
-									<div class="sub-offset">
-										<Button
-											variant="ghost"
-											icon="Minus"
-											onclick={() => {
-												subtitleOffset -= 0.25;
-											}}
-										/>
-										<span class="sub-offset-value">
-											{subtitleOffset - defaultOffset > 0
-												? "+"
-												: ""}{(
-												subtitleOffset - defaultOffset
-											).toFixed(1)}s
-										</span>
-										<Button
-											variant="ghost"
-											icon="Plus"
-											onclick={() => {
-												subtitleOffset += 0.25;
-											}}
-										/>
-									</div>
-								{/if}
-							</div>
-						{/snippet}
-					</Popover>
+					</PopoverMenu>
 				{/if}
 				<Button
 					variant="ghost"
@@ -1139,6 +1135,23 @@
 		height: 6px;
 	}
 
+	.progress-pieces {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		display: flex;
+		border-radius: 2px;
+		overflow: hidden;
+	}
+
+	.progress-pieces .piece {
+		flex: 1;
+		background: rgba(255, 255, 255, 0.25);
+		transition: opacity 2s ease;
+	}
+
 	.progress-buffered {
 		position: absolute;
 		top: 0;
@@ -1266,62 +1279,4 @@
 	}
 
 	/* ── Subtitle popover ── */
-	.sub-menu {
-		display: flex;
-		flex-direction: column;
-		min-width: 140px;
-	}
-
-	.sub-item {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 5px 10px;
-		background: none;
-		border: none;
-		color: rgba(255, 255, 255, 0.6);
-		font-size: 0.8rem;
-		text-align: left;
-		cursor: pointer;
-		border-radius: 6px;
-	}
-
-	.sub-item:hover {
-		background: rgba(255, 255, 255, 0.08);
-		color: #fff;
-	}
-
-	.sub-badge {
-		font-size: 0.55rem;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: rgba(255, 255, 255, 0.4);
-		margin-left: 6px;
-		vertical-align: middle;
-	}
-
-	.sub-dot {
-		font-size: 0.6rem;
-		color: rgba(255, 255, 255, 0.5);
-	}
-
-	.sub-divider {
-		height: 1px;
-		background: rgba(255, 255, 255, 0.08);
-		margin: 4px 0;
-	}
-
-	.sub-offset {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-	}
-
-	.sub-offset-value {
-		font-family: "JetBrains Mono", monospace;
-		font-size: 0.75rem;
-		color: rgba(255, 255, 255, 0.7);
-		min-width: 3.5em;
-		text-align: center;
-	}
 </style>
