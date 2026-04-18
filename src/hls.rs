@@ -38,6 +38,22 @@ fn new_session_id() -> String {
 /// Spawns ffmpeg reading from a torrent stream (blocks on missing pieces)
 /// and writing HLS segments to a temp directory.
 /// If `start_time` > 0, ffmpeg seeks to that position before encoding.
+/// Browser-safe video codecs that can be copied directly into HLS.
+const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
+
+/// Probe the video codec of a file using ffprobe.
+pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args(["-v", "quiet", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0"])
+        .arg(path)
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() { return None; }
+    let codec = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+    if codec.is_empty() { None } else { Some(codec) }
+}
+
 pub async fn start_session(
     storage: &crate::app::Storage,
     info_hash: &str,
@@ -63,6 +79,23 @@ pub async fn start_session(
 
     let input_display = format!("torrent:{info_hash}/{file_idx}");
 
+    // Probe video codec to decide whether to copy or transcode
+    let engine = crate::torrent::TorrentEngine::get();
+    let file_path = engine.file_path(info_hash, file_idx)?;
+    let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
+    let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
+
+    let video_args: Vec<String> = if copy_video {
+        vec!["-c:v".into(), "copy".into()]
+    } else {
+        vec![
+            "-c:v".into(), "libx264".into(),
+            "-preset".into(), "ultrafast".into(),
+            "-crf".into(), "23".into(),
+            "-pix_fmt".into(), "yuv420p".into(),
+        ]
+    };
+
     // Feed ffmpeg from stdin using the torrent stream, which blocks on
     // missing pieces rather than hitting premature EOF on a partial file.
     let mut child = tokio::process::Command::new("ffmpeg")
@@ -74,14 +107,9 @@ pub async fn start_session(
             "0:v:0",
             "-map",
             &format!("0:a:{audio_index}"),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "23",
-            "-pix_fmt",
-            "yuv420p",
+        ])
+        .args(&video_args)
+        .args([
             "-c:a",
             "aac",
             "-b:a",
