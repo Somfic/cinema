@@ -75,7 +75,13 @@ pub async fn start_session(
             "-map",
             &format!("0:a:{audio_index}"),
             "-c:v",
-            "copy",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "aac",
             "-b:a",
@@ -121,11 +127,11 @@ pub async fn start_session(
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             match reader.read(&mut buf).await {
-                Ok(0) => break,   // torrent stream finished (full file read)
+                Ok(0) => break,
                 Ok(n) => {
                     use tokio::io::AsyncWriteExt;
                     if stdin.write_all(&buf[..n]).await.is_err() {
-                        break; // ffmpeg closed stdin (killed or done)
+                        break;
                     }
                 }
                 Err(_) => break,
@@ -153,7 +159,7 @@ pub async fn start_session(
                 Ok(_) => {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() {
-                        tracing::debug!(session = %sid, "ffmpeg: {trimmed}");
+                        tracing::info!(session = %sid, "ffmpeg: {trimmed}");
                         // Keep last 5 lines for error reporting
                         if last_lines.len() >= 5 {
                             last_lines.remove(0);
