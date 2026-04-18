@@ -385,11 +385,12 @@
 	}
 
 	function toggleFullscreen() {
-		if (!containerEl) return;
 		if (document.fullscreenElement) {
 			document.exitFullscreen();
 		} else {
-			containerEl.requestFullscreen();
+			// Fullscreen the entire document so that portalled elements
+			// (popovers, menus) remain visible inside the fullscreen context.
+			document.documentElement.requestFullscreen();
 		}
 	}
 
