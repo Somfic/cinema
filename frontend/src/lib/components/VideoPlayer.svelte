@@ -241,6 +241,12 @@
 							onclick: () => onSubtitleSelect?.(track),
 						};
 					}),
+					...(subtitles.length > 0
+						? [
+								"divider" as const,
+								{ kind: "custom" as const, render: subtitleOffsetControls },
+							]
+						: []),
 				]
 			: []),
 	]);
@@ -556,6 +562,16 @@
 		clearTimeout(pauseIdleTimeout);
 	});
 </script>
+
+{#snippet subtitleOffsetControls()}
+	<div style="display: flex; align-items: center; justify-content: space-between; padding: 2px 4px;">
+		<Button variant="ghost" icon="Minus" onclick={() => { subtitleOffset -= 0.25; }} />
+		<span style="font-family: monospace; font-size: 0.75rem; opacity: 0.7; min-width: 3.5em; text-align: center;">
+			{subtitleOffset - defaultOffset > 0 ? "+" : ""}{(subtitleOffset - defaultOffset).toFixed(1)}s
+		</span>
+		<Button variant="ghost" icon="Plus" onclick={() => { subtitleOffset += 0.25; }} />
+	</div>
+{/snippet}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
