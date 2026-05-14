@@ -69,6 +69,7 @@ pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
 
 pub async fn start_session(
     storage: &crate::app::Storage,
+    config: &crate::Config,
     info_hash: &str,
     file_idx: usize,
     audio_index: usize,
@@ -102,6 +103,8 @@ pub async fn start_session(
             "libx264".into(),
             "-preset".into(),
             "ultrafast".into(),
+            "-tune".into(),
+            "zerolatency".into(),
             "-crf".into(),
             "23".into(),
             "-pix_fmt".into(),
@@ -247,21 +250,44 @@ pub async fn start_session(
         },
     );
 
-    // Wait for the playlist to have at least one segment (up to 10s)
-    for _ in 0..100 {
-        // Check if ffmpeg already died before producing any segments
-        if let Some(error) = session_error(&session_id).await {
-            return Err(crate::app::Error::Generic(format!(
-                "ffmpeg failed: {error}"
+    // Wait for the playlist to have at least one segment
+    let result = tokio::time::timeout(config.ffmpeg_max_startup_duration, async {
+        loop {
+            // Check if ffmpeg already died before producing any segments
+            if let Some(error) = session_error(&session_id).await {
+                return Err(crate::app::Error::Generic(format!(
+                    "ffmpeg failed: {error}"
+                )));
+            }
+
+            if let Ok(content) = tokio::fs::read_to_string(&playlist_path).await
+                && content.contains("#EXTINF")
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(config.ffmpeg_startup_poll_interval).await;
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {}             // success
+        Ok(Err(e)) => return Err(e), // ffmpeg error
+        Err(_) => {
+            if let Some(session) = sessions().lock().await.get_mut(&session_id)
+                && let Some(child) = session.child.as_mut()
+                && let Err(err) = child.kill().await
+            {
+                tracing::error!(
+                    ?err,
+                    "Could not close the ffmpeg child process for session {}",
+                    session_id
+                );
+            }
+            return Err(crate::app::Error::Generic(String::from(
+                "ffmpeg startup timeout",
             )));
         }
-
-        if let Ok(content) = tokio::fs::read_to_string(&playlist_path).await
-            && content.contains("#EXTINF")
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     let url = format!("/api/hls/{session_id}/playlist.m3u8");

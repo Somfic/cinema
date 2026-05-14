@@ -45,12 +45,30 @@ pub fn router() -> OpenApiRouter<AppContext> {
         .routes(routes!(list_downloads))
         .routes(routes!(delete_download))
         .routes(routes!(estimate_download))
-        .route("/stream/{info_hash}/stats", axum::routing::get(stream_stats))
-        .route("/stream/{info_hash}/{file_idx}/pieces", axum::routing::get(stream_pieces))
-        .route("/stream/{info_hash}/{file_idx}", axum::routing::get(stream_file))
-        .route("/stream/{info_hash}/{file_idx}/audio", axum::routing::get(stream_audio_tracks))
-        .route("/stream/{info_hash}/{file_idx}/subtitles/{stream_index}", axum::routing::get(stream_embedded_subtitles))
-        .route("/stream/{info_hash}/{file_idx}/remux", axum::routing::post(stream_remux_hls))
+        .route(
+            "/stream/{info_hash}/stats",
+            axum::routing::get(stream_stats),
+        )
+        .route(
+            "/stream/{info_hash}/{file_idx}/pieces",
+            axum::routing::get(stream_pieces),
+        )
+        .route(
+            "/stream/{info_hash}/{file_idx}",
+            axum::routing::get(stream_file),
+        )
+        .route(
+            "/stream/{info_hash}/{file_idx}/audio",
+            axum::routing::get(stream_audio_tracks),
+        )
+        .route(
+            "/stream/{info_hash}/{file_idx}/subtitles/{stream_index}",
+            axum::routing::get(stream_embedded_subtitles),
+        )
+        .route(
+            "/stream/{info_hash}/{file_idx}/remux",
+            axum::routing::post(stream_remux_hls),
+        )
         .route("/hls/{session_id}/{file}", axum::routing::get(hls_serve))
         .route("/hls/{session_id}", axum::routing::delete(hls_stop))
         .route("/image/{*path}", axum::routing::get(image_proxy))
@@ -695,7 +713,8 @@ async fn enqueue_download(
             _ => return Err(Error::Generic("Invalid media type".into()).into()),
         };
         let item = tmdb.details(mt, body.tmdb_id).await?;
-        let imdb_id = item.imdb_id
+        let imdb_id = item
+            .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
 
         let path = if body.media_type == "tv" {
@@ -705,7 +724,8 @@ async fn enqueue_download(
         };
 
         let all_streams = streams::aggregate(&ctx.http, &config.stream_sources, &path).await;
-        let stream = all_streams.iter()
+        let stream = all_streams
+            .iter()
             .find(|s| s.resolution.as_deref() == Some(&body.resolution))
             .or_else(|| all_streams.first())
             .ok_or_else(|| Error::Generic("No streams found".into()))?;
@@ -741,21 +761,18 @@ async fn enqueue_download(
     .await
     .map_err(|e| Error::Generic(e.to_string()))?;
 
-    ctx.events.publish("download:enqueue", serde_json::json!({}));
+    ctx.events
+        .publish("download:enqueue", serde_json::json!({}));
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(get, path = "/downloads", responses((status = 200, body = Vec<Download>)))]
-async fn list_downloads(
-    State(ctx): State<AppContext>,
-) -> Result<Json<Vec<Download>>, AppError> {
-    let items = sqlx::query_as::<_, Download>(
-        "SELECT * FROM downloads ORDER BY created_at DESC"
-    )
-    .fetch_all(&ctx.db)
-    .await
-    .map_err(|e| Error::Generic(e.to_string()))?;
+async fn list_downloads(State(ctx): State<AppContext>) -> Result<Json<Vec<Download>>, AppError> {
+    let items = sqlx::query_as::<_, Download>("SELECT * FROM downloads ORDER BY created_at DESC")
+        .fetch_all(&ctx.db)
+        .await
+        .map_err(|e| Error::Generic(e.to_string()))?;
 
     Ok(Json(items))
 }
@@ -819,7 +836,8 @@ async fn estimate_download(
         _ => return Err(Error::Generic("Invalid media type".into()).into()),
     };
     let item = tmdb.details(mt, tmdb_id).await?;
-    let imdb_id = item.imdb_id
+    let imdb_id = item
+        .imdb_id
         .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
 
     let path = if media_type == "tv" {
@@ -834,7 +852,9 @@ async fn estimate_download(
     // Group by resolution, pick best stream per resolution for size estimate
     let mut seen = std::collections::HashMap::<String, (Option<u64>, Option<String>, usize)>::new();
     for s in &all_streams {
-        let Some(res) = s.resolution.clone() else { continue };
+        let Some(res) = s.resolution.clone() else {
+            continue;
+        };
         let entry = seen.entry(res).or_insert((None, None, 0));
         entry.2 += 1;
         // Use the first (best-scored) stream's size as estimate
@@ -845,12 +865,26 @@ async fn estimate_download(
     }
 
     let order = |r: &str| -> u32 {
-        match r { "4K" | "2160p" => 4, "1080p" => 3, "720p" => 2, "480p" => 1, _ => 0 }
+        match r {
+            "4K" | "2160p" => 4,
+            "1080p" => 3,
+            "720p" => 2,
+            "480p" => 1,
+            _ => 0,
+        }
     };
 
-    let mut estimates: Vec<ResolutionEstimate> = seen.into_iter().map(|(resolution, (size_bytes, size_display, streams_count))| {
-        ResolutionEstimate { resolution, size_bytes, size_display, streams_count }
-    }).collect();
+    let mut estimates: Vec<ResolutionEstimate> = seen
+        .into_iter()
+        .map(
+            |(resolution, (size_bytes, size_display, streams_count))| ResolutionEstimate {
+                resolution,
+                size_bytes,
+                size_display,
+                streams_count,
+            },
+        )
+        .collect();
     estimates.sort_by(|a, b| order(&b.resolution).cmp(&order(&a.resolution)));
 
     Ok(Json(estimates))
@@ -871,10 +905,7 @@ async fn stream_stats(
     let engine = TorrentEngine::get();
     let stats = engine.stats(&info_hash)?;
     let (download_speed_mbps, peers) = match &stats.live {
-        Some(live) => (
-            live.download_speed.mbps,
-            live.snapshot.peer_stats.live,
-        ),
+        Some(live) => (live.download_speed.mbps, live.snapshot.peer_stats.live),
         None => (0.0, 0),
     };
     Ok(Json(StreamStatsResponse {
@@ -933,7 +964,12 @@ async fn stream_audio_tracks(
 
     // Filter embedded subtitle tracks by configured languages
     let subtitles = {
-        let allowed: Vec<&str> = ctx.config.subtitle_languages.iter().map(|l| crate::subtitles::to_iso639_2(l)).collect();
+        let allowed: Vec<&str> = ctx
+            .config
+            .subtitle_languages
+            .iter()
+            .map(|l| crate::subtitles::to_iso639_2(l))
+            .collect();
         subtitles
             .into_iter()
             .filter(|s| {
@@ -983,8 +1019,15 @@ async fn stream_remux_hls(
     let engine = TorrentEngine::get();
     engine.start(&info_hash, file_idx).await?;
 
-    let (session_id, playlist_url) =
-        crate::hls::start_session(&ctx.storage, &info_hash, file_idx, params.audio, params.t).await?;
+    let (session_id, playlist_url) = crate::hls::start_session(
+        &ctx.storage,
+        &ctx.config,
+        &info_hash,
+        file_idx,
+        params.audio,
+        params.t,
+    )
+    .await?;
 
     Ok(Json(RemuxResponse {
         session_id,
@@ -1012,7 +1055,9 @@ async fn hls_serve(
         Err(_) => {
             // Check if ffmpeg crashed — return the real error instead of "file not found"
             if let Some(error) = crate::hls::session_error(&session_id).await {
-                return Err(Error::Generic(format!("Stream failed (ffmpeg exited): {error}")).into());
+                return Err(
+                    Error::Generic(format!("Stream failed (ffmpeg exited): {error}")).into(),
+                );
             }
             return Err(Error::Generic(format!("HLS file not found: {file}")).into());
         }
@@ -1032,9 +1077,7 @@ async fn hls_serve(
         .unwrap())
 }
 
-async fn hls_stop(
-    Path(session_id): Path<String>,
-) -> StatusCode {
+async fn hls_stop(Path(session_id): Path<String>) -> StatusCode {
     crate::hls::stop_session(&session_id).await;
     StatusCode::NO_CONTENT
 }
@@ -1140,7 +1183,10 @@ fn serve_range_response<R: tokio::io::AsyncRead + tokio::io::AsyncSeek + Send + 
             .status(StatusCode::PARTIAL_CONTENT)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, content_length)
-            .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total_size}"))
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total_size}"),
+            )
             .header(header::ACCEPT_RANGES, "bytes")
             .body(body)
             .unwrap())
