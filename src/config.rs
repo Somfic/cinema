@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::env;
 use std::path::PathBuf;
 
@@ -27,6 +28,11 @@ pub struct Config {
     pub torrent_port: u16,
     #[serde(default = "default_dht_enabled")]
     pub use_dht: bool,
+
+    #[serde(default = "default_ffmpeg_max_startup_duration")]
+    pub ffmpeg_max_startup_duration: Duration,
+    #[serde(default = "default_ffmpeg_startup_poll_interval")]
+    pub ffmpeg_startup_poll_interval: Duration,
 }
 
 impl Config {
@@ -67,6 +73,16 @@ impl Config {
                 self.use_dht = b;
             }
         }
+        if let Ok(v) = env::var("CINEMA_FFMPEG_MAX_STARTUP_DURATION_MS")
+            && let Ok(d_ms) = v.parse()
+        {
+            self.ffmpeg_max_startup_duration = Duration::from_millis(d_ms);
+        }
+        if let Ok(v) = env::var("CINEMA_FFMPEG_STARTUP_POLL_INTERVAL_MS")
+            && let Ok(d_ms) = v.parse()
+        {
+            self.ffmpeg_startup_poll_interval = Duration::from_millis(d_ms);
+        }
     }
 }
 
@@ -100,4 +116,12 @@ fn default_torrent_listen_port() -> u16 {
 
 fn default_dht_enabled() -> bool {
     true
+}
+
+fn default_ffmpeg_max_startup_duration() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_ffmpeg_startup_poll_interval() -> Duration {
+    Duration::from_millis(100)
 }

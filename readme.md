@@ -23,3 +23,5 @@ docker run -e CINEMA_TMDB_API_KEY=your_api_key -v ./data:/app/data -p 3000:3000 
 | `CINEMA_MAX_CONCURRENT_DOWNLOADS` | Max concurrent background downloads | `2` |
 | `CINEMA_TORRENT_PORT` | Torrent listen port | `6881` |
 | `CINEMA_USE_DHT` | Enable DHT for peer discovery | `true` |
+| `CINEMA_FFMPEG_MAX_STARTUP_DURATION_MS` | Maximum ffmpeg startup timeout. Configure this if Cinema is run on a limited hardware. | 10 seconds |
+| `CINEMA_FFMPEG_STARTUP_POLL_INTERVAL_MS` | Interval at which the success of ffmpeg startup is checked. | 100 milliseconds |
