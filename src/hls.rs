@@ -44,13 +44,26 @@ const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
 /// Probe the video codec of a file using ffprobe.
 pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
     let output = tokio::process::Command::new("ffprobe")
-        .args(["-v", "quiet", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(path)
         .output()
         .await
         .ok()?;
-    if !output.status.success() { return None; }
-    let codec = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+    if !output.status.success() {
+        return None;
+    }
+    let codec = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase();
     if codec.is_empty() { None } else { Some(codec) }
 }
 
@@ -70,11 +83,7 @@ pub async fn start_session(
 
     let mut pre_args: Vec<String> = Vec::new();
     if start_time > 0.0 {
-        pre_args.extend_from_slice(&[
-            "-ss".into(),
-            format!("{start_time:.3}"),
-            "-copyts".into(),
-        ]);
+        pre_args.extend_from_slice(&["-ss".into(), format!("{start_time:.3}"), "-copyts".into()]);
     }
 
     let input_display = format!("torrent:{info_hash}/{file_idx}");
@@ -89,10 +98,14 @@ pub async fn start_session(
         vec!["-c:v".into(), "copy".into()]
     } else {
         vec![
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "ultrafast".into(),
-            "-crf".into(), "23".into(),
-            "-pix_fmt".into(), "yuv420p".into(),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "ultrafast".into(),
+            "-crf".into(),
+            "23".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
         ]
     };
 
@@ -139,7 +152,9 @@ pub async fn start_session(
         .map_err(|e| crate::app::Error::Generic(format!("Failed to start ffmpeg HLS: {e}")))?;
 
     // Pipe the torrent stream into ffmpeg's stdin
-    let stdin = child.stdin.take()
+    let stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| crate::app::Error::Generic("Failed to open ffmpeg stdin".into()))?;
 
     let engine = crate::torrent::TorrentEngine::get();
@@ -172,49 +187,55 @@ pub async fn start_session(
     let stderr = child.stderr.take();
     let sid = session_id.clone();
 
-    tokio::spawn(tracing::Instrument::instrument(async move {
-        use tokio::io::{AsyncBufReadExt, BufReader};
+    tokio::spawn(tracing::Instrument::instrument(
+        async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
 
-        let Some(stderr) = stderr else { return };
-        let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        let mut last_lines: Vec<String> = Vec::new();
+            let Some(stderr) = stderr else { return };
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            let mut last_lines: Vec<String> = Vec::new();
 
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break, // EOF — ffmpeg exited
-                Ok(_) => {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        tracing::info!(session = %sid, "ffmpeg: {trimmed}");
-                        // Keep last 5 lines for error reporting
-                        if last_lines.len() >= 5 {
-                            last_lines.remove(0);
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break, // EOF — ffmpeg exited
+                    Ok(_) => {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            tracing::info!(session = %sid, "ffmpeg: {trimmed}");
+                            // Keep last 5 lines for error reporting
+                            if last_lines.len() >= 5 {
+                                last_lines.remove(0);
+                            }
+                            last_lines.push(trimmed.to_string());
                         }
-                        last_lines.push(trimmed.to_string());
+                    }
+                    Err(e) => {
+                        tracing::warn!(session = %sid, "ffmpeg stderr read error: {e}");
+                        break;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(session = %sid, "ffmpeg stderr read error: {e}");
-                    break;
-                }
             }
-        }
 
-        // ffmpeg has exited — check if it completed successfully or failed
-        let has_error = last_lines.iter().any(|l| {
-            l.contains("Error") || l.contains("error") || l.contains("Invalid") || l.contains("No such file")
-        });
+            // ffmpeg has exited — check if it completed successfully or failed
+            let has_error = last_lines.iter().any(|l| {
+                l.contains("Error")
+                    || l.contains("error")
+                    || l.contains("Invalid")
+                    || l.contains("No such file")
+            });
 
-        if has_error {
-            let error_context = last_lines.join("\n");
-            tracing::warn!(session = %sid, input = %input_display, "ffmpeg failed: {error_context}");
-            let _ = exit_tx.send(Some(error_context));
-        } else {
-            tracing::info!(session = %sid, input = %input_display, "ffmpeg finished transcoding successfully");
-        }
-    }, span));
+            if has_error {
+                let error_context = last_lines.join("\n");
+                tracing::warn!(session = %sid, input = %input_display, "ffmpeg failed: {error_context}");
+                let _ = exit_tx.send(Some(error_context));
+            } else {
+                tracing::info!(session = %sid, input = %input_display, "ffmpeg finished transcoding successfully");
+            }
+        },
+        span,
+    ));
 
     sessions().lock().await.insert(
         session_id.clone(),
@@ -230,13 +251,15 @@ pub async fn start_session(
     for _ in 0..100 {
         // Check if ffmpeg already died before producing any segments
         if let Some(error) = session_error(&session_id).await {
-            return Err(crate::app::Error::Generic(format!("ffmpeg failed: {error}")));
+            return Err(crate::app::Error::Generic(format!(
+                "ffmpeg failed: {error}"
+            )));
         }
 
-        if let Ok(content) = tokio::fs::read_to_string(&playlist_path).await {
-            if content.contains("#EXTINF") {
-                break;
-            }
+        if let Ok(content) = tokio::fs::read_to_string(&playlist_path).await
+            && content.contains("#EXTINF")
+        {
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -254,7 +277,11 @@ pub async fn touch(session_id: &str) {
 
 /// Get the directory for a session (if it exists).
 pub async fn session_dir(session_id: &str) -> Option<PathBuf> {
-    sessions().lock().await.get(session_id).map(|s| s.dir.clone())
+    sessions()
+        .lock()
+        .await
+        .get(session_id)
+        .map(|s| s.dir.clone())
 }
 
 /// Check if the ffmpeg process for a session has exited with an error.
