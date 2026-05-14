@@ -109,6 +109,10 @@ pub async fn start_session(
             "23".into(),
             "-pix_fmt".into(),
             "yuv420p".into(),
+            "-bf".into(),
+            "0".into(),
+            "-b_strategy".into(),
+            "0".into(),
         ]
     };
 
