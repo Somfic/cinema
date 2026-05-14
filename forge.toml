@@ -1,8 +1,0 @@
-host = "0.0.0.0"
-port = 3000
-data_dir = "./data/"
-
-[cinema]
-tmdb_api_key = "baa80ebe8457f8dfcbc9b521857a35ca"
-stream_sources = ["https://torrentio.strem.fun/", "https://mediafusion.elfhosted.com/"]
-subtitle_languages = ["en", "nl"]
