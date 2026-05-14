@@ -58,20 +58,20 @@ impl Config {
         if let Ok(v) = env::var("CINEMA_SUBTITLE_LANGUAGES") {
             self.subtitle_languages = v.split(',').map(|s| s.trim().to_string()).collect();
         }
-        if let Ok(v) = env::var("CINEMA_MAX_CONCURRENT_DOWNLOADS") {
-            if let Ok(n) = v.parse() {
-                self.max_concurrent_downloads = n;
-            }
+        if let Ok(v) = env::var("CINEMA_MAX_CONCURRENT_DOWNLOADS")
+            && let Ok(n) = v.parse()
+        {
+            self.max_concurrent_downloads = n;
         }
-        if let Ok(v) = env::var("CINEMA_TORRENT_PORT") {
-            if let Ok(n) = v.parse() {
-                self.torrent_port = n;
-            }
+        if let Ok(v) = env::var("CINEMA_TORRENT_PORT")
+            && let Ok(n) = v.parse()
+        {
+            self.torrent_port = n;
         }
-        if let Ok(v) = env::var("CINEMA_USE_DHT") {
-            if let Ok(b) = v.parse() {
-                self.use_dht = b;
-            }
+        if let Ok(v) = env::var("CINEMA_USE_DHT")
+            && let Ok(b) = v.parse()
+        {
+            self.use_dht = b;
         }
         if let Ok(v) = env::var("CINEMA_FFMPEG_MAX_STARTUP_DURATION_MS")
             && let Ok(d_ms) = v.parse()
