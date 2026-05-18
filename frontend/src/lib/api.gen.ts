@@ -5,6 +5,15 @@
  * Utoipa's axum bindings for seamless integration for the two
  * OpenAPI spec version: 0.2.0
  */
+export interface CastMember {
+  /** @nullable */
+  character?: string | null;
+  id: number;
+  name: string;
+  /** @nullable */
+  profile_path?: string | null;
+}
+
 export interface CollectionDef {
   created_at: string;
   hidden: number;
@@ -42,6 +51,14 @@ export interface CreateCollectionRequest {
   kind: string;
   slug: string;
   title: string;
+}
+
+export interface CrewMember {
+  id: number;
+  job: string;
+  name: string;
+  /** @nullable */
+  profile_path?: string | null;
 }
 
 export interface Download {
@@ -126,6 +143,8 @@ export interface Video {
 
 export interface MediaItem {
   backdrops: string[];
+  cast: CastMember[];
+  directors: CrewMember[];
   genres: Genre[];
   id: number;
   /** @nullable */

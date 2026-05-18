@@ -794,6 +794,34 @@
   },
   "components": {
     "schemas": {
+      "CastMember": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "character": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CollectionDef": {
         "type": "object",
         "required": [
@@ -923,6 +951,32 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "CrewMember": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "job"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "job": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile_path": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1122,13 +1176,27 @@
           "title",
           "backdrops",
           "genres",
-          "videos"
+          "videos",
+          "cast",
+          "directors"
         ],
         "properties": {
           "backdrops": {
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "cast": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CastMember"
+            }
+          },
+          "directors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CrewMember"
             }
           },
           "genres": {

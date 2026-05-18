@@ -19,6 +19,24 @@ pub struct MediaItem {
     pub videos: Vec<Video>,
     pub logo_path: Option<String>,
     pub seasons: Option<Vec<Season>>,
+    pub cast: Vec<CastMember>,
+    pub directors: Vec<CrewMember>,
+}
+
+#[derive(Serialize, Clone, ToSchema)]
+pub struct CastMember {
+    pub id: i64,
+    pub name: String,
+    pub character: Option<String>,
+    pub profile_path: Option<String>,
+}
+
+#[derive(Serialize, Clone, ToSchema)]
+pub struct CrewMember {
+    pub id: i64,
+    pub name: String,
+    pub job: String,
+    pub profile_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, ToSchema)]
@@ -130,6 +148,7 @@ struct TmdbMovie {
     genres: Vec<Genre>,
     videos: Option<TmdbVideos>,
     images: Option<TmdbImages>,
+    credits: Option<TmdbCredits>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +167,31 @@ struct TmdbTv {
     images: Option<TmdbImages>,
     seasons: Option<Vec<TmdbSeason>>,
     external_ids: Option<TmdbExternalIds>,
+    credits: Option<TmdbCredits>,
+}
+
+#[derive(Deserialize)]
+struct TmdbCredits {
+    #[serde(default)]
+    cast: Vec<TmdbCastMember>,
+    #[serde(default)]
+    crew: Vec<TmdbCrewMember>,
+}
+
+#[derive(Deserialize)]
+struct TmdbCastMember {
+    id: i64,
+    name: String,
+    character: Option<String>,
+    profile_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TmdbCrewMember {
+    id: i64,
+    name: String,
+    job: String,
+    profile_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -225,6 +269,42 @@ fn convert_videos(videos: Option<TmdbVideos>) -> Vec<Video> {
                     site: v.site,
                     name: v.name,
                     video_type: v.video_type,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn convert_cast(credits: &Option<TmdbCredits>) -> Vec<CastMember> {
+    credits
+        .as_ref()
+        .map(|c| {
+            c.cast
+                .iter()
+                .take(20)
+                .map(|m| CastMember {
+                    id: m.id,
+                    name: m.name.clone(),
+                    character: m.character.clone(),
+                    profile_path: m.profile_path.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn convert_directors(credits: &Option<TmdbCredits>) -> Vec<CrewMember> {
+    credits
+        .as_ref()
+        .map(|c| {
+            c.crew
+                .iter()
+                .filter(|m| m.job == "Director")
+                .map(|m| CrewMember {
+                    id: m.id,
+                    name: m.name.clone(),
+                    job: m.job.clone(),
+                    profile_path: m.profile_path.clone(),
                 })
                 .collect()
         })
@@ -342,6 +422,8 @@ impl From<TmdbMovie> for MediaItem {
             videos: convert_videos(m.videos),
             logo_path: pick_logo(&m.images),
             seasons: None,
+            cast: convert_cast(&m.credits),
+            directors: convert_directors(&m.credits),
         }
     }
 }
@@ -377,6 +459,8 @@ impl From<TmdbTv> for MediaItem {
                     })
                     .collect()
             }),
+            cast: convert_cast(&t.credits),
+            directors: convert_directors(&t.credits),
         }
     }
 }
@@ -489,7 +573,7 @@ impl TmdbClient {
             MediaType::Tv => "tv",
         };
         let url = format!(
-            "https://api.themoviedb.org/3/{}/{}?api_key={}&append_to_response=videos,images,external_ids&include_image_language=en,null",
+            "https://api.themoviedb.org/3/{}/{}?api_key={}&append_to_response=videos,images,external_ids,credits&include_image_language=en,null",
             type_str, id, self.api_key
         );
         let res = self.client.get(&url).send().await?.error_for_status()?;

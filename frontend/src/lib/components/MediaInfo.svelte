@@ -11,9 +11,53 @@
 		isInCollection,
 	} from "$lib/api.gen";
 	import { imageUrl } from "$lib/utils";
-	import { Button, Icon, Card, Pill, Text } from "glow";
+	import {
+		Button,
+		Icon,
+		Card,
+		Text,
+		Avatar,
+		Modal,
+		useModal,
+		Data,
+	} from "glow";
+	import type { IconName, DataItem } from "glow";
 	import PlayCard from "./PlayCard.svelte";
 	import DownloadButton from "./DownloadButton.svelte";
+
+	// Map TMDB genre names to glow (lucide) icons
+	const GENRE_ICONS: Record<string, IconName> = {
+		action: "Bomb",
+		adventure: "Compass",
+		animation: "Palette",
+		comedy: "Laugh",
+		crime: "Siren",
+		documentary: "Video",
+		drama: "Drama",
+		family: "Users",
+		fantasy: "Sparkles",
+		history: "Landmark",
+		horror: "Ghost",
+		music: "Music",
+		mystery: "HatGlasses",
+		romance: "Heart",
+		"science fiction": "Rocket",
+		"tv movie": "Tv",
+		thriller: "HeartPulse",
+		war: "Shield",
+		western: "Mountain",
+		"action & adventure": "Bomb",
+		kids: "Baby",
+		news: "Newspaper",
+		reality: "Camera",
+		"sci-fi & fantasy": "Rocket",
+		soap: "Heart",
+		talk: "Mic",
+		"war & politics": "Shield",
+	};
+
+	const genreIcon = (name: string): IconName =>
+		GENRE_ICONS[name.toLowerCase()] ?? "Tag";
 
 	let {
 		item,
@@ -34,6 +78,15 @@
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
 	} = $props();
+
+	const infoModal = useModal();
+
+	const releaseYear = $derived(item.release_date?.slice(0, 4));
+	const runtimeLabel = $derived(
+		item.runtime
+			? `${Math.floor(item.runtime / 60) > 0 ? `${Math.floor(item.runtime / 60)}h ` : ""}${item.runtime % 60}min`
+			: undefined,
+	);
 
 	let onWatchlist = $state(false);
 	let isFavorite = $state(false);
@@ -231,6 +284,12 @@
 					(v) => (onWatchlist = v),
 				)}
 		/>
+		<Button
+			variant="ghost"
+			icon="Info"
+			tooltip="More information"
+			onclick={infoModal.show}
+		/>
 		{#if onselectseason && item.seasons?.length}
 			<Button
 				variant="ghost"
@@ -300,6 +359,148 @@
 	{/if} -->
 </div>
 
+{#if item.genres?.length}
+	<div class="genres-overlay">
+		{#each item.genres as genre}
+			<Button
+				variant="ghost"
+				icon={genreIcon(genre.name)}
+				tooltip={genre.name}
+			/>
+		{/each}
+	</div>
+{/if}
+
+{#snippet overviewVal()}
+	<Text size="sm">{item.overview}</Text>
+{/snippet}
+{#snippet genresVal()}
+	<div class="info-chips">
+		{#each item.genres as genre}
+			<Button
+				variant="outlined"
+				icon={genreIcon(genre.name)}
+				label={genre.name}
+			/>
+		{/each}
+	</div>
+{/snippet}
+{#snippet directorsVal()}
+	<div class="info-people">
+		{#each item.directors as person}
+			<div class="person">
+				<Avatar
+					name={person.name}
+					src={person.profile_path
+						? imageUrl(person.profile_path, "w185")
+						: undefined}
+					size="md"
+				/>
+				<Text size="sm">{person.name}</Text>
+			</div>
+		{/each}
+	</div>
+{/snippet}
+{#snippet castVal()}
+	<div class="info-people">
+		{#each item.cast as person}
+			<div class="person">
+				<Avatar
+					name={person.name}
+					src={person.profile_path
+						? imageUrl(person.profile_path, "w185")
+						: undefined}
+					size="md"
+				/>
+				<div class="person-meta">
+					<Text size="sm">{person.name}</Text>
+					{#if person.character}
+						<Text size="xs" variant="secondary"
+							>{person.character}</Text
+						>
+					{/if}
+				</div>
+			</div>
+		{/each}
+	</div>
+{/snippet}
+
+<Modal bind:open={infoModal.open} title={item.title} size="large">
+	<div class="info-dialog">
+		<Data
+			variant="inline"
+			divided={false}
+			properties={[
+				releaseYear &&
+					({
+						label: "Year",
+						icon: "Calendar",
+						value: releaseYear,
+					} satisfies DataItem),
+				runtimeLabel &&
+					({
+						label: "Runtime",
+						icon: "Clock",
+						value: runtimeLabel,
+					} satisfies DataItem),
+				item.seasons?.length &&
+					({
+						label: "Seasons",
+						icon: "Layers",
+						value: `${item.seasons.length}`,
+					} satisfies DataItem),
+				item.rating &&
+					({
+						label: "Rating",
+						icon: "Star",
+						value: `${item.rating.toFixed(1)} / 10`,
+					} satisfies DataItem),
+				item.tagline &&
+					({
+						label: "Tagline",
+						icon: "Quote",
+						value: item.tagline,
+						muted: true,
+					} satisfies DataItem),
+			].filter(Boolean) as DataItem[]}
+		/>
+
+		<Data
+			variant="stacked"
+			divided={false}
+			properties={[
+				item.overview &&
+					({
+						label: "Overview",
+						icon: "FileText",
+						render: overviewVal,
+					} satisfies DataItem),
+				item.genres?.length &&
+					({
+						label: "Genres",
+						icon: "Tags",
+						render: genresVal,
+					} satisfies DataItem),
+				item.directors?.length &&
+					({
+						label:
+							item.directors.length > 1
+								? "Directors"
+								: "Director",
+						icon: "Clapperboard",
+						render: directorsVal,
+					} satisfies DataItem),
+				item.cast?.length &&
+					({
+						label: "Cast",
+						icon: "Users",
+						render: castVal,
+					} satisfies DataItem),
+			].filter(Boolean) as DataItem[]}
+		/>
+	</div>
+</Modal>
+
 <style>
 	.sidebar {
 		width: 40vw;
@@ -348,10 +549,54 @@
 		justify-content: flex-end;
 	}
 
-	.genres {
+	.genres-overlay {
+		position: absolute;
+		left: 0;
+		bottom: 0;
+		padding: 2rem;
 		display: flex;
-		gap: 0.4rem;
+		gap: 0.5rem;
 		flex-wrap: wrap;
+		max-width: 55vw;
+		z-index: 2;
+	}
+
+	.info-dialog {
+		display: flex;
+		flex-direction: column;
+		gap: 1.25rem;
+	}
+
+	.info-chips {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.info-people {
+		display: flex;
+		gap: 1rem 1.25rem;
+		flex-wrap: wrap;
+	}
+
+	.person {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-shrink: 0;
+		max-width: 14rem;
+	}
+
+	.person-meta {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.person-meta :global(span) {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	@media (max-width: 768px) {
