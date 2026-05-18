@@ -35,6 +35,12 @@ pub fn router() -> OpenApiRouter<AppContext> {
         .routes(routes!(remove_from_collection))
         .routes(routes!(get_collection))
         .routes(routes!(is_in_collection))
+        .routes(routes!(list_collection_defs))
+        .routes(routes!(create_collection_def))
+        .routes(routes!(delete_collection_def))
+        .routes(routes!(set_collection_visibility))
+        .routes(routes!(reorder_collection_defs))
+        .routes(routes!(reorder_collection))
         .routes(routes!(enqueue_download))
         .routes(routes!(list_downloads))
         .routes(routes!(delete_download))
@@ -393,11 +399,51 @@ struct CollectionItem {
     title: String,
     poster_path: Option<String>,
     added_at: String,
+    position: i64,
 }
 
 #[derive(Serialize, ToSchema)]
 struct CollectionStatus {
     in_collection: bool,
+}
+
+#[derive(Serialize, ToSchema, sqlx::FromRow)]
+struct CollectionDef {
+    slug: String,
+    title: String,
+    kind: String,
+    created_at: String,
+    // 0/1 flags (sqlite has no native bool; kept as ints for AnyPool safety)
+    system: i64,
+    hidden: i64,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct VisibilityRequest {
+    hidden: bool,
+}
+
+#[derive(Deserialize, Serialize, ToSchema)]
+struct CreateCollectionRequest {
+    slug: String,
+    title: String,
+    kind: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct ReorderItem {
+    media_type: String,
+    tmdb_id: i64,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct ReorderRequest {
+    items: Vec<ReorderItem>,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct ReorderCollectionsRequest {
+    slugs: Vec<String>,
 }
 
 #[utoipa::path(post, path = "/collection",
@@ -447,8 +493,8 @@ async fn get_collection(
     Path(collection): Path<String>,
 ) -> Result<Json<Vec<CollectionItem>>, AppError> {
     let items = sqlx::query_as::<_, CollectionItem>(
-        "SELECT collection, media_type, tmdb_id, title, poster_path, added_at
-         FROM collections WHERE collection = ? ORDER BY added_at DESC",
+        "SELECT collection, media_type, tmdb_id, title, poster_path, added_at, position
+         FROM collections WHERE collection = ? ORDER BY position ASC, added_at DESC",
     )
     .bind(&collection)
     .fetch_all(&ctx.db)
@@ -476,6 +522,140 @@ async fn is_in_collection(
     Ok(Json(CollectionStatus {
         in_collection: count.0 > 0,
     }))
+}
+
+#[utoipa::path(get, path = "/collections", responses((status = 200, body = Vec<CollectionDef>)))]
+async fn list_collection_defs(
+    State(ctx): State<AppContext>,
+) -> Result<Json<Vec<CollectionDef>>, AppError> {
+    let defs = sqlx::query_as::<_, CollectionDef>(
+        "SELECT slug, title, kind, created_at, system, hidden FROM collection_meta ORDER BY position ASC, created_at ASC",
+    )
+    .fetch_all(&ctx.db)
+    .await
+    .map_err(|e| Error::Generic(e.to_string()))?;
+
+    Ok(Json(defs))
+}
+
+#[utoipa::path(post, path = "/collections",
+    request_body = CreateCollectionRequest,
+    responses((status = 204))
+)]
+async fn create_collection_def(
+    State(ctx): State<AppContext>,
+    Json(body): Json<CreateCollectionRequest>,
+) -> Result<StatusCode, AppError> {
+    sqlx::query(
+        "INSERT INTO collection_meta (slug, title, kind) VALUES (?, ?, ?)
+         ON CONFLICT(slug) DO UPDATE SET title = excluded.title, kind = excluded.kind",
+    )
+    .bind(&body.slug)
+    .bind(&body.title)
+    .bind(&body.kind)
+    .execute(&ctx.db)
+    .await
+    .map_err(|e| Error::Generic(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(delete, path = "/collections/{slug}", responses((status = 204)))]
+async fn delete_collection_def(
+    State(ctx): State<AppContext>,
+    Path(slug): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let system: Option<(i64,)> =
+        sqlx::query_as("SELECT system FROM collection_meta WHERE slug = ?")
+            .bind(&slug)
+            .fetch_optional(&ctx.db)
+            .await
+            .map_err(|e| Error::Generic(e.to_string()))?;
+
+    if matches!(system, Some((1,))) {
+        return Err(
+            Error::Generic("system collections cannot be deleted".to_string()).into(),
+        );
+    }
+
+    sqlx::query("DELETE FROM collection_meta WHERE slug = ?")
+        .bind(&slug)
+        .execute(&ctx.db)
+        .await
+        .map_err(|e| Error::Generic(e.to_string()))?;
+
+    sqlx::query("DELETE FROM collections WHERE collection = ?")
+        .bind(&slug)
+        .execute(&ctx.db)
+        .await
+        .map_err(|e| Error::Generic(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(post, path = "/collections/{slug}/visibility",
+    request_body = VisibilityRequest,
+    responses((status = 204))
+)]
+async fn set_collection_visibility(
+    State(ctx): State<AppContext>,
+    Path(slug): Path<String>,
+    Json(body): Json<VisibilityRequest>,
+) -> Result<StatusCode, AppError> {
+    sqlx::query("UPDATE collection_meta SET hidden = ? WHERE slug = ?")
+        .bind(body.hidden as i64)
+        .bind(&slug)
+        .execute(&ctx.db)
+        .await
+        .map_err(|e| Error::Generic(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(post, path = "/collections/reorder",
+    request_body = ReorderCollectionsRequest,
+    responses((status = 204))
+)]
+async fn reorder_collection_defs(
+    State(ctx): State<AppContext>,
+    Json(body): Json<ReorderCollectionsRequest>,
+) -> Result<StatusCode, AppError> {
+    for (idx, slug) in body.slugs.iter().enumerate() {
+        sqlx::query("UPDATE collection_meta SET position = ? WHERE slug = ?")
+            .bind(idx as i64)
+            .bind(slug)
+            .execute(&ctx.db)
+            .await
+            .map_err(|e| Error::Generic(e.to_string()))?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(post, path = "/collection/{collection}/reorder",
+    request_body = ReorderRequest,
+    responses((status = 204))
+)]
+async fn reorder_collection(
+    State(ctx): State<AppContext>,
+    Path(collection): Path<String>,
+    Json(body): Json<ReorderRequest>,
+) -> Result<StatusCode, AppError> {
+    for (idx, item) in body.items.iter().enumerate() {
+        sqlx::query(
+            "UPDATE collections SET position = ?
+             WHERE collection = ? AND media_type = ? AND tmdb_id = ?",
+        )
+        .bind(idx as i64)
+        .bind(&collection)
+        .bind(&item.media_type)
+        .bind(item.tmdb_id)
+        .execute(&ctx.db)
+        .await
+        .map_err(|e| Error::Generic(e.to_string()))?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ── Downloads ──

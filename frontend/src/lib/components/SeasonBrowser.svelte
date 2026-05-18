@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Season } from "$lib/api.gen";
 	import { imageUrl } from "$lib/utils";
-	import { MediaCard, Text } from "glow";
+	import { Card, Text } from "glow";
 
 	let {
 		seasons,
@@ -20,11 +20,14 @@
 <div class="browser">
 	<div class="season-grid" style="grid-template-columns: repeat({cols}, 180px)">
 		{#each selectableSeasons as season}
-			<MediaCard
-				src={season.poster_path
-					? imageUrl(season.poster_path, "w780")
-					: ""}
-				aspectRatio="2/3"
+			<Card
+				media={{
+					src: season.poster_path
+						? imageUrl(season.poster_path, "w780")
+						: "",
+					aspectRatio: "2/3",
+				}}
+				mediaLayout="overlay"
 				onclick={() => {
 					onscrollseason(season.season_number);
 					onselectepisode(season.season_number, 1);

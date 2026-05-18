@@ -44,7 +44,13 @@
 		</ButtonGroup>
 	</div>
 	<div class="center"></div>
-	<div class="right"></div>
+	<div class="right">
+		<Button
+			icon="List"
+			variant="ghost"
+			onclick={() => goto("/collections")}
+		/>
+	</div>
 </header>
 
 <style lang="scss">

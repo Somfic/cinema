@@ -64,6 +64,36 @@
         }
       }
     },
+    "/collection/{collection}/reorder": {
+      "post": {
+        "operationId": "reorder_collection",
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/collection/{collection}/{type}/{id}": {
       "get": {
         "operationId": "is_in_collection",
@@ -136,6 +166,114 @@
             }
           }
         ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/collections": {
+      "get": {
+        "operationId": "list_collection_defs",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollectionDef"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_collection_def",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCollectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/collections/reorder": {
+      "post": {
+        "operationId": "reorder_collection_defs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderCollectionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/collections/{slug}": {
+      "delete": {
+        "operationId": "delete_collection_def",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/collections/{slug}/visibility": {
+      "post": {
+        "operationId": "set_collection_visibility",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "204": {
             "description": ""
@@ -656,6 +794,39 @@
   },
   "components": {
     "schemas": {
+      "CollectionDef": {
+        "type": "object",
+        "required": [
+          "slug",
+          "title",
+          "kind",
+          "created_at",
+          "system",
+          "hidden"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "system": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "CollectionItem": {
         "type": "object",
         "required": [
@@ -663,7 +834,8 @@
           "media_type",
           "tmdb_id",
           "title",
-          "added_at"
+          "added_at",
+          "position"
         ],
         "properties": {
           "added_at": {
@@ -674,6 +846,10 @@
           },
           "media_type": {
             "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64"
           },
           "poster_path": {
             "type": [
@@ -728,6 +904,25 @@
         "properties": {
           "in_collection": {
             "type": "boolean"
+          }
+        }
+      },
+      "CreateCollectionRequest": {
+        "type": "object",
+        "required": [
+          "slug",
+          "title",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
           }
         }
       },
@@ -1093,6 +1288,50 @@
           }
         }
       },
+      "ReorderCollectionsRequest": {
+        "type": "object",
+        "required": [
+          "slugs"
+        ],
+        "properties": {
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ReorderItem": {
+        "type": "object",
+        "required": [
+          "media_type",
+          "tmdb_id"
+        ],
+        "properties": {
+          "media_type": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ReorderRequest": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReorderItem"
+            }
+          }
+        }
+      },
       "ResolutionEstimate": {
         "type": "object",
         "required": [
@@ -1382,6 +1621,17 @@
           },
           "video_type": {
             "type": "string"
+          }
+        }
+      },
+      "VisibilityRequest": {
+        "type": "object",
+        "required": [
+          "hidden"
+        ],
+        "properties": {
+          "hidden": {
+            "type": "boolean"
           }
         }
       },

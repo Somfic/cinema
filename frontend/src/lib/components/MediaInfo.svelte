@@ -11,7 +11,7 @@
 		isInCollection,
 	} from "$lib/api.gen";
 	import { imageUrl } from "$lib/utils";
-	import { Button, Icon, MediaCard, Pill, Text } from "glow";
+	import { Button, Icon, Card, Pill, Text } from "glow";
 	import PlayCard from "./PlayCard.svelte";
 	import DownloadButton from "./DownloadButton.svelte";
 
@@ -279,18 +279,21 @@
 			<Text weight="semibold" size="sm">Similar</Text>
 			<div class="similar-grid">
 				{#each similarItems.slice(0, 8) as sim}
-					<MediaCard
-						src={sim.poster_path
-							? imageUrl(sim.poster_path, "w185")
-							: ""}
-						aspectRatio="2/3"
+					<Card
+						media={{
+							src: sim.poster_path
+								? imageUrl(sim.poster_path, "w185")
+								: "",
+							aspectRatio: "2/3",
+						}}
+						mediaLayout="overlay"
 						onclick={() =>
 							(window.location.href = `/${sim.media_type}/${sim.id}`)}
 					>
 						{#snippet bottomLeft()}
 							<Text size="xs" variant="on-image">{sim.title}</Text>
 						{/snippet}
-					</MediaCard>
+					</Card>
 				{/each}
 			</div>
 		</div>
