@@ -35,7 +35,7 @@ fn new_session_id() -> String {
 }
 
 /// Browser-safe video codecs that can be copied directly into HLS.
-const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
+const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "hevc", "avc", "avc1"];
 
 /// Probe the video codec of a file using ffprobe.
 pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
