@@ -33,6 +33,12 @@ pub struct Config {
     pub ffmpeg_max_startup_duration: Duration,
     #[serde(default = "default_ffmpeg_startup_poll_interval")]
     pub ffmpeg_startup_poll_interval: Duration,
+    #[serde(default = "default_ffmpeg_hwaccel")]
+    pub ffmpeg_hwaccel: String,
+    #[serde(default = "default_ffmpeg_video_preset")]
+    pub ffmpeg_video_preset: String,
+    #[serde(default = "default_ffmpeg_video_crf")]
+    pub ffmpeg_video_crf: u8,
 }
 
 impl Config {
@@ -83,6 +89,17 @@ impl Config {
         {
             self.ffmpeg_startup_poll_interval = Duration::from_millis(d_ms);
         }
+        if let Ok(v) = env::var("CINEMA_FFMPEG_HWACCEL") {
+            self.ffmpeg_hwaccel = v;
+        }
+        if let Ok(v) = env::var("CINEMA_FFMPEG_VIDEO_PRESET") {
+            self.ffmpeg_video_preset = v;
+        }
+        if let Ok(v) = env::var("CINEMA_FFMPEG_VIDEO_CRF")
+            && let Ok(n) = v.parse()
+        {
+            self.ffmpeg_video_crf = n;
+        }
     }
 }
 
@@ -124,4 +141,16 @@ fn default_ffmpeg_max_startup_duration() -> Duration {
 
 fn default_ffmpeg_startup_poll_interval() -> Duration {
     Duration::from_millis(100)
+}
+
+fn default_ffmpeg_hwaccel() -> String {
+    "auto".to_string()
+}
+
+fn default_ffmpeg_video_preset() -> String {
+    "ultrafast".to_string()
+}
+
+fn default_ffmpeg_video_crf() -> u8 {
+    23
 }
