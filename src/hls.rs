@@ -34,10 +34,6 @@ fn new_session_id() -> String {
     format!("{:08x}{:08x}", t as u32, stack_val as u32)
 }
 
-/// Start an HLS remux session. Returns (session_id, playlist_path).
-/// Spawns ffmpeg reading from a torrent stream (blocks on missing pieces)
-/// and writing HLS segments to a temp directory.
-/// If `start_time` > 0, ffmpeg seeks to that position before encoding.
 /// Browser-safe video codecs that can be copied directly into HLS.
 const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
 
@@ -67,6 +63,10 @@ pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
     if codec.is_empty() { None } else { Some(codec) }
 }
 
+/// Start an HLS remux session. Returns (session_id, playlist_path).
+/// Spawns ffmpeg reading from a torrent stream (blocks on missing pieces)
+/// and writing HLS segments to a temp directory.
+/// If `start_time` > 0, ffmpeg seeks to that position before encoding.
 pub async fn start_session(
     storage: &crate::app::Storage,
     config: &crate::Config,
