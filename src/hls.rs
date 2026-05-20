@@ -83,6 +83,9 @@ pub async fn start_session(
     let segment_pattern = dir.join("seg%05d.ts");
 
     let mut pre_args: Vec<String> = Vec::new();
+    if config.ffmpeg_hwaccel != "none" {
+        pre_args.extend_from_slice(&["-hwaccel".into(), config.ffmpeg_hwaccel.clone()]);
+    }
     if start_time > 0.0 {
         pre_args.extend_from_slice(&["-ss".into(), format!("{start_time:.3}"), "-copyts".into()]);
     }
@@ -102,11 +105,11 @@ pub async fn start_session(
             "-c:v".into(),
             "libx264".into(),
             "-preset".into(),
-            "ultrafast".into(),
+            config.ffmpeg_video_preset.clone(),
             "-tune".into(),
             "zerolatency".into(),
             "-crf".into(),
-            "23".into(),
+            config.ffmpeg_video_crf.to_string(),
             "-pix_fmt".into(),
             "yuv420p".into(),
             "-bf".into(),

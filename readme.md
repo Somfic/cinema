@@ -25,3 +25,8 @@ docker run -e CINEMA_TMDB_API_KEY=your_api_key -v ./data:/app/data -p 3000:3000 
 | `CINEMA_USE_DHT` | Enable DHT for peer discovery | `true` |
 | `CINEMA_FFMPEG_MAX_STARTUP_DURATION_MS` | Maximum ffmpeg startup timeout. Configure this if Cinema is run on a limited hardware. | 10 seconds |
 | `CINEMA_FFMPEG_STARTUP_POLL_INTERVAL_MS` | Interval at which the success of ffmpeg startup is checked. | 100 milliseconds |
+| `CINEMA_FFMPEG_HWACCEL` | ffmpeg `-hwaccel` value. `auto` enables HW-accelerated decoding (e.g. V4L2/DRM on RPi 5) with software fallback. Set to `none` to disable. | `auto` |
+| `CINEMA_FFMPEG_VIDEO_PRESET` | libx264 preset for transcoded video. Faster presets reduce CPU; on Pi 5 keep at `ultrafast`. | `ultrafast` |
+| `CINEMA_FFMPEG_VIDEO_CRF` | libx264 CRF (quality). Higher = faster + lower quality. Try `28`–`30` on Pi 5 for native-4K transcoding. | `23` |
+
+Note: the RPi 5 has no hardware H.264 encoder, so native 4K transcoding remains CPU-bound even with `CINEMA_FFMPEG_HWACCEL=auto`. If real-time playback isn't met, raise `CINEMA_FFMPEG_VIDEO_CRF` (lower quality, faster encode).
