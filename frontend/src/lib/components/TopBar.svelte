@@ -36,15 +36,19 @@
 
 <header class="top-bar">
 	<div class="left">
-		<ButtonGroup>
-			<Button icon="Search" variant="ghost" onclick={handleHome} />
-			{#if !isRoot}
-				<Button icon="ArrowLeft" variant="ghost" onclick={handleBack} />
-			{/if}
-		</ButtonGroup>
+		<Button icon="Search" variant="ghost" onclick={handleHome} />
+		{#if !isRoot}
+			<Button icon="ArrowLeft" variant="ghost" onclick={handleBack} />
+		{/if}
 	</div>
 	<div class="center"></div>
-	<div class="right"></div>
+	<div class="right">
+		<Button
+			icon="List"
+			variant="ghost"
+			onclick={() => goto("/collections")}
+		/>
+	</div>
 </header>
 
 <style lang="scss">
@@ -66,6 +70,7 @@
 		flex: 1;
 		display: flex;
 		align-items: center;
+		gap: 0.5rem;
 	}
 
 	.center {

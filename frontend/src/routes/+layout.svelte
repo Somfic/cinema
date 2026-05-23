@@ -22,6 +22,7 @@
 	main {
 		flex: 1;
 		min-height: 0;
+		overflow-x: clip;
 	}
 
 	@font-face {

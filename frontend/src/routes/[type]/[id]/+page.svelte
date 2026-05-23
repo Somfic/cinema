@@ -845,6 +845,7 @@
 	.page-info {
 		display: flex;
 		justify-content: flex-end;
+		position: relative;
 	}
 
 	.page-episodes {
