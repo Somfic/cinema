@@ -54,14 +54,7 @@ pub struct EmbeddedSubtitleTrack {
 }
 
 /// Text-based subtitle codecs that can be extracted as SRT
-const TEXT_SUB_CODECS: &[&str] = &[
-    "srt",
-    "subrip",
-    "ass",
-    "ssa",
-    "webvtt",
-    "mov_text",
-];
+const TEXT_SUB_CODECS: &[&str] = &["srt", "subrip", "ass", "ssa", "webvtt", "mov_text"];
 
 /// Trait combining AsyncRead + AsyncSeek for torrent file streaming.
 trait AsyncReadSeek: AsyncRead + AsyncSeek + Send + Unpin {}
@@ -142,7 +135,9 @@ impl TorrentEngine {
 
         let session = Session::new_with_opts(output_folder, opts)
             .await
-            .map_err(|e| crate::app::Error::Generic(format!("Failed to init torrent session: {e}")))?;
+            .map_err(|e| {
+                crate::app::Error::Generic(format!("Failed to init torrent session: {e}"))
+            })?;
 
         let api = Api::new(session.clone(), None);
 
@@ -201,32 +196,37 @@ impl TorrentEngine {
 
     /// Start a torrent for the given info_hash and file index.
     /// Idempotent -- returns immediately if already active.
-    pub async fn start(&self, info_hash: &str, file_idx: usize) -> crate::app::Result<TorrentHandle> {
+    pub async fn start(
+        &self,
+        info_hash: &str,
+        file_idx: usize,
+        config: &Config,
+    ) -> crate::app::Result<TorrentHandle> {
         // Fast path: torrent already active, no logging/fetching needed
-        if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
-            if let Some(handle) = self.session.get(id) {
-                let mut files: std::collections::HashSet<usize> = handle
-                    .only_files()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
-                if !files.contains(&file_idx) {
-                    files.insert(file_idx);
-                    let _ = self.session.update_only_files(&handle, &files).await;
-                }
-                // Unpause this torrent and pause others
-                self.pause_all_except(info_hash);
-
-                // Ensure a persistent stream exists for piece prioritization
-                let key = (info_hash.to_lowercase(), file_idx);
-                let mut handles = self.stream_handles.lock().await;
-                if !handles.contains_key(&key) {
-                    if let Ok(reader) = self.stream(info_hash, file_idx) {
-                        handles.insert(key, reader);
-                    }
-                }
-                return Ok(TorrentHandle { managed: handle });
+        if let Ok(id) = TorrentIdOrHash::parse(info_hash)
+            && let Some(handle) = self.session.get(id)
+        {
+            let mut files: std::collections::HashSet<usize> = handle
+                .only_files()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            if !files.contains(&file_idx) {
+                files.insert(file_idx);
+                let _ = self.session.update_only_files(&handle, &files).await;
             }
+            // Unpause this torrent and pause others
+            self.pause_all_except(info_hash);
+
+            // Ensure a persistent stream exists for piece prioritization
+            let key = (info_hash.to_lowercase(), file_idx);
+            let mut handles = self.stream_handles.lock().await;
+            if !handles.contains_key(&key)
+                && let Ok(reader) = self.stream(info_hash, file_idx)
+            {
+                handles.insert(key, reader);
+            }
+            return Ok(TorrentHandle { managed: handle });
         }
 
         let make_opts = || AddTorrentOptions {
@@ -254,7 +254,9 @@ impl TorrentEngine {
                     self.session
                         .add_torrent(add, Some(make_opts()))
                         .await
-                        .map_err(|e| crate::app::Error::Generic(format!("Failed to add torrent: {e}")))?
+                        .map_err(|e| {
+                            crate::app::Error::Generic(format!("Failed to add torrent: {e}"))
+                        })?
                 }
             }
         } else {
@@ -284,46 +286,32 @@ impl TorrentEngine {
         // Log progress so slow peer discovery is visible.
         {
             let init_fut = managed.wait_until_initialized();
-            tokio::pin!(init_fut);
 
-            let mut elapsed = 0u64;
-            let result = loop {
-                tokio::select! {
-                    res = &mut init_fut => break Some(res),
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                        elapsed += 5;
-                        let stats = managed.stats();
-                        let peers = stats.live.as_ref()
-                            .map(|l| l.snapshot.peer_stats.queued + l.snapshot.peer_stats.live)
-                            .unwrap_or(0);
-                        self.span.in_scope(|| {
-                            tracing::info!(
-                                info_hash,
-                                elapsed_secs = elapsed,
-                                peers,
-                                downloaded = %format_bytes(stats.progress_bytes),
-                                "Waiting for torrent metadata..."
-                            )
-                        });
-                        if elapsed >= 30 {
-                            break None;
-                        }
-                    }
-                }
-            };
+            tracing::info!(
+                info_hash,
+                timeout = ?config.torrent_validation_timeout,
+                "Validating torrent metadata"
+            );
+            let result = tokio::time::timeout(config.torrent_validation_timeout, init_fut).await;
 
             match result {
-                Some(Ok(())) => {}
-                Some(Err(e)) => {
-                    return Err(crate::app::Error::Generic(format!("Torrent init failed: {e}")));
+                Ok(Ok(())) => {
+                    tracing::info!(info_hash, "Torrent metadata validated");
                 }
-                None => {
+                Ok(Err(e)) => {
+                    return Err(crate::app::Error::Generic(format!(
+                        "Torrent init failed: {e}"
+                    )));
+                }
+                Err(_) => {
                     let stats = managed.stats();
-                    let peers = stats.live.as_ref()
+                    let peers = stats
+                        .live
+                        .as_ref()
                         .map(|l| l.snapshot.peer_stats.queued + l.snapshot.peer_stats.live)
                         .unwrap_or(0);
                     self.span.in_scope(|| {
-                        tracing::warn!(info_hash, peers, "Torrent metadata timeout after 30s")
+                        tracing::warn!(info_hash, peers, timeout = ?config.torrent_validation_timeout, "Torrent metadata timeout");
                     });
                     return Err(crate::app::Error::Generic(format!(
                         "Timed out waiting for torrent metadata ({peers} peers found but metadata exchange incomplete)"
@@ -340,10 +328,10 @@ impl TorrentEngine {
         {
             let key = (info_hash.to_lowercase(), file_idx);
             let mut handles = self.stream_handles.lock().await;
-            if !handles.contains_key(&key) {
-                if let Ok(reader) = self.stream(info_hash, file_idx) {
-                    handles.insert(key, reader);
-                }
+            if !handles.contains_key(&key)
+                && let Ok(reader) = self.stream(info_hash, file_idx)
+            {
+                handles.insert(key, reader);
             }
         }
 
@@ -364,7 +352,11 @@ impl TorrentEngine {
 
     /// Get a streaming reader for a torrent file via the Api.
     /// The reader blocks on missing pieces and prioritizes sequential download.
-    pub fn stream(&self, info_hash: &str, file_idx: usize) -> crate::app::Result<TorrentFileReader> {
+    pub fn stream(
+        &self,
+        info_hash: &str,
+        file_idx: usize,
+    ) -> crate::app::Result<TorrentFileReader> {
         let id = TorrentIdOrHash::parse(info_hash)
             .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
 
@@ -381,22 +373,25 @@ impl TorrentEngine {
     }
 
     /// Get the on-disk file path for a torrent file.
-    pub fn file_path(&self, info_hash: &str, file_idx: usize) -> crate::app::Result<std::path::PathBuf> {
+    pub fn file_path(
+        &self,
+        info_hash: &str,
+        file_idx: usize,
+    ) -> crate::app::Result<std::path::PathBuf> {
         let id = TorrentIdOrHash::parse(info_hash)
             .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
 
-        let details = self
-            .api
-            .api_torrent_details(id)
-            .map_err(|e| crate::app::Error::Generic(format!("Failed to get torrent details: {e}")))?;
+        let details = self.api.api_torrent_details(id).map_err(|e| {
+            crate::app::Error::Generic(format!("Failed to get torrent details: {e}"))
+        })?;
 
         let files = details
             .files
             .ok_or_else(|| crate::app::Error::Generic("No file metadata available".into()))?;
 
-        let file = files
-            .get(file_idx)
-            .ok_or_else(|| crate::app::Error::Generic(format!("File index {file_idx} not found")))?;
+        let file = files.get(file_idx).ok_or_else(|| {
+            crate::app::Error::Generic(format!("File index {file_idx} not found"))
+        })?;
 
         let mut path = std::path::PathBuf::from(&details.output_folder);
         for component in &file.components {
@@ -680,7 +675,12 @@ impl TorrentEngine {
     /// Get a bucketed piece map for a specific file in a torrent.
     /// Returns a vector of values 0–255 representing the download ratio
     /// of each bucket (0 = no pieces, 255 = all pieces downloaded).
-    pub fn piece_map(&self, info_hash: &str, file_idx: usize, bucket_count: usize) -> crate::app::Result<Vec<u8>> {
+    pub fn piece_map(
+        &self,
+        info_hash: &str,
+        file_idx: usize,
+        bucket_count: usize,
+    ) -> crate::app::Result<Vec<u8>> {
         let id = TorrentIdOrHash::parse(info_hash)
             .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
 
@@ -699,7 +699,9 @@ impl TorrentEngine {
                     .map(|f| f.pieces)
             })
             .map_err(|e| crate::app::Error::Generic(format!("No metadata: {e}")))?
-            .ok_or_else(|| crate::app::Error::Generic(format!("File index {file_idx} not found")))?;
+            .ok_or_else(|| {
+                crate::app::Error::Generic(format!("File index {file_idx} not found"))
+            })?;
 
         let dump = self
             .api
@@ -710,7 +712,9 @@ impl TorrentEngine {
         // "BitSlice<u8, Msb0> [1, 0, 1, 1, 0, ...]"
         // Find the actual bracket-delimited list.
         let bracket_start = dump.find('[').unwrap_or(0);
-        let inner = dump[bracket_start..].trim_start_matches('[').trim_end_matches(']');
+        let inner = dump[bracket_start..]
+            .trim_start_matches('[')
+            .trim_end_matches(']');
         if inner.is_empty() {
             return Ok(vec![0u8; bucket_count]);
         }

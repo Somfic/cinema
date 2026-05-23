@@ -159,13 +159,15 @@ struct StartStreamResponse {
     responses((status = 200, body = StartStreamResponse))
 )]
 async fn start_stream(
-    State(_ctx): State<AppContext>,
+    State(ctx): State<AppContext>,
     Path((info_hash, file_idx)): Path<(String, i64)>,
 ) -> Result<Json<StartStreamResponse>, AppError> {
     // Start torrent via native engine (idempotent — if already downloaded,
     // librqbit's fastresume picks it up instantly from disk)
     let engine = TorrentEngine::get();
-    engine.start(&info_hash, file_idx as usize).await?;
+    engine
+        .start(&info_hash, file_idx as usize, &ctx.config)
+        .await?;
 
     let url = format!("/api/stream/{}/{}", info_hash, file_idx);
     Ok(Json(StartStreamResponse { url, local: false }))
@@ -746,13 +748,14 @@ async fn stream_pieces(
 }
 
 async fn stream_file(
+    State(ctx): State<AppContext>,
     Path((info_hash, file_idx)): Path<(String, usize)>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
     let engine = TorrentEngine::get();
 
     // Ensure the torrent is started (also registers streaming priority)
-    engine.start(&info_hash, file_idx).await?;
+    engine.start(&info_hash, file_idx, &ctx.config).await?;
 
     // Use librqbit's FileStream which blocks on missing pieces and
     // prioritizes sequential download. This is correct because the stream
@@ -837,7 +840,7 @@ async fn stream_remux_hls(
     Query(params): Query<RemuxParams>,
 ) -> Result<Json<RemuxResponse>, AppError> {
     let engine = TorrentEngine::get();
-    engine.start(&info_hash, file_idx).await?;
+    engine.start(&info_hash, file_idx, &ctx.config).await?;
 
     let (session_id, playlist_url) = crate::hls::start_session(
         &ctx.storage,

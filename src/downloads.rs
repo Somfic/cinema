@@ -44,12 +44,16 @@ impl DownloadManager {
 
     pub async fn run(self) {
         // Reset interrupted downloads on startup
-        let reset = sqlx::query("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
-            .execute(&self.ctx.db)
-            .await;
+        let reset =
+            sqlx::query("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
+                .execute(&self.ctx.db)
+                .await;
         if let Ok(r) = &reset {
             if r.rows_affected() > 0 {
-                tracing::info!(count = r.rows_affected(), "Reset interrupted downloads to queued");
+                tracing::info!(
+                    count = r.rows_affected(),
+                    "Reset interrupted downloads to queued"
+                );
             }
         }
         tracing::info!("Download manager started");
@@ -129,33 +133,33 @@ async fn download_file(ctx: AppContext, download: Download) {
 async fn do_download(ctx: &AppContext, download: &Download) -> crate::app::Result<()> {
     let engine = TorrentEngine::get();
     let handle = engine
-        .start(&download.info_hash, download.file_idx as usize)
+        .start(&download.info_hash, download.file_idx as usize, &ctx.config)
         .await?;
 
     // Poll progress until complete
     loop {
         let (downloaded, total) = handle.progress();
 
-        let _ = sqlx::query("UPDATE downloads SET downloaded_bytes = ?, total_bytes = ? WHERE id = ?")
-            .bind(downloaded as i64)
-            .bind(total as i64)
-            .bind(download.id)
-            .execute(&ctx.db)
-            .await;
+        let _ =
+            sqlx::query("UPDATE downloads SET downloaded_bytes = ?, total_bytes = ? WHERE id = ?")
+                .bind(downloaded as i64)
+                .bind(total as i64)
+                .bind(download.id)
+                .execute(&ctx.db)
+                .await;
 
         // Check cancellation
-        let status: Option<(String,)> =
-            sqlx::query_as("SELECT status FROM downloads WHERE id = ?")
-                .bind(download.id)
-                .fetch_optional(&ctx.db)
-                .await
-                .unwrap_or(None);
+        let status: Option<(String,)> = sqlx::query_as("SELECT status FROM downloads WHERE id = ?")
+            .bind(download.id)
+            .fetch_optional(&ctx.db)
+            .await
+            .unwrap_or(None);
 
-        if let Some((s,)) = status {
-            if s == "cancelled" {
-                engine.stop(&download.info_hash).await;
-                return Err(crate::app::Error::Generic("Download cancelled".into()));
-            }
+        if let Some((s,)) = status
+            && s == "cancelled"
+        {
+            engine.stop(&download.info_hash).await;
+            return Err(crate::app::Error::Generic("Download cancelled".into()));
         }
 
         let stats = handle.managed.stats();
