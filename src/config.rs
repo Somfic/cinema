@@ -29,6 +29,9 @@ pub struct Config {
     #[serde(default = "default_dht_enabled")]
     pub use_dht: bool,
 
+    #[serde(default = "default_torrent_validation_timeout")]
+    pub torrent_validation_timeout: Duration,
+
     #[serde(default = "default_ffmpeg_max_startup_duration")]
     pub ffmpeg_max_startup_duration: Duration,
     #[serde(default = "default_ffmpeg_startup_poll_interval")]
@@ -78,6 +81,11 @@ impl Config {
             && let Ok(b) = v.parse()
         {
             self.use_dht = b;
+        }
+        if let Ok(v) = env::var("CINEMA_TORRENT_VALIDATION_TIMEOUT_MS")
+            && let Ok(d_ms) = v.parse()
+        {
+            self.torrent_validation_timeout = Duration::from_millis(d_ms);
         }
         if let Ok(v) = env::var("CINEMA_FFMPEG_MAX_STARTUP_DURATION_MS")
             && let Ok(d_ms) = v.parse()
@@ -133,6 +141,10 @@ fn default_torrent_listen_port() -> u16 {
 
 fn default_dht_enabled() -> bool {
     true
+}
+
+fn default_torrent_validation_timeout() -> Duration {
+    Duration::from_secs(30)
 }
 
 fn default_ffmpeg_max_startup_duration() -> Duration {
