@@ -35,7 +35,7 @@ fn new_session_id() -> String {
 }
 
 /// Browser-safe video codecs that can be copied directly into HLS.
-const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "hevc", "avc", "avc1"];
+const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
 
 /// Probe the video codec of a file using ffprobe.
 pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
@@ -74,6 +74,7 @@ pub async fn start_session(
     file_idx: usize,
     audio_index: usize,
     start_time: f64,
+    only_audio: bool,
 ) -> crate::app::Result<(String, String)> {
     let session_id = new_session_id();
     let dir = storage.join(format!("hls/{session_id}"));
@@ -93,30 +94,34 @@ pub async fn start_session(
     let input_display = format!("torrent:{info_hash}/{file_idx}");
 
     // Probe video codec to decide whether to copy or transcode
-    let engine = crate::torrent::TorrentEngine::get();
-    let file_path = engine.file_path(info_hash, file_idx)?;
-    let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
-    let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
-
-    let video_args: Vec<String> = if copy_video {
+    let video_args: Vec<String> = if only_audio {
         vec!["-c:v".into(), "copy".into()]
     } else {
-        vec![
-            "-c:v".into(),
-            "libx264".into(),
-            "-preset".into(),
-            config.ffmpeg_video_preset.clone(),
-            "-tune".into(),
-            "zerolatency".into(),
-            "-crf".into(),
-            config.ffmpeg_video_crf.to_string(),
-            "-pix_fmt".into(),
-            "yuv420p".into(),
-            "-bf".into(),
-            "0".into(),
-            "-b_strategy".into(),
-            "0".into(),
-        ]
+        let engine = crate::torrent::TorrentEngine::get();
+        let file_path = engine.file_path(info_hash, file_idx)?;
+        let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
+        let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
+
+        if copy_video {
+            vec!["-c:v".into(), "copy".into()]
+        } else {
+            vec![
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                config.ffmpeg_video_preset.clone(),
+                "-tune".into(),
+                "zerolatency".into(),
+                "-crf".into(),
+                config.ffmpeg_video_crf.to_string(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                "-bf".into(),
+                "0".into(),
+                "-b_strategy".into(),
+                "0".into(),
+            ]
+        }
     };
 
     // Feed ffmpeg from stdin using the torrent stream, which blocks on

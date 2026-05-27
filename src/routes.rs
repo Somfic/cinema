@@ -593,9 +593,7 @@ async fn delete_collection_def(
             .map_err(|e| Error::Generic(e.to_string()))?;
 
     if matches!(system, Some((1,))) {
-        return Err(
-            Error::Generic("system collections cannot be deleted".to_string()).into(),
-        );
+        return Err(Error::Generic("system collections cannot be deleted".to_string()).into());
     }
 
     sqlx::query("DELETE FROM collection_meta WHERE slug = ?")
@@ -1006,6 +1004,8 @@ struct RemuxParams {
     audio: usize,
     #[serde(default)]
     t: f64,
+    #[serde(default)]
+    only_audio: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -1029,6 +1029,7 @@ async fn stream_remux_hls(
         file_idx,
         params.audio,
         params.t,
+        params.only_audio,
     )
     .await?;
 
