@@ -61,7 +61,7 @@
 		startTime = 0,
 		streamStats = null,
 		pieceMap = [],
-		transcoding = $bindable(false),
+		transcoding = $bindable({ enabled: true, onlyAudio: false }),
 		onTranscodingChange,
 		currentTime = $bindable(0),
 		duration = $bindable(0),
@@ -99,8 +99,11 @@
 			finished: boolean;
 		} | null;
 		pieceMap?: number[];
-		transcoding?: boolean;
-		onTranscodingChange?: (enabled: boolean) => void;
+		transcoding?: {
+			enabled: boolean;
+			onlyAudio: boolean;
+		};
+		onTranscodingChange?: (enabled: boolean, onlyAudio: boolean) => void;
 		paused?: boolean;
 	} = $props();
 
@@ -159,7 +162,6 @@
 							if (best) onStreamSelect?.(best);
 						},
 					})),
-					"divider" as const,
 				]
 			: []),
 		{ kind: "header" as const, label: "Sources" },
@@ -169,7 +171,9 @@
 			.map((stream: StreamOption) => ({
 				kind: "item" as const,
 				label: `${stream.source}`,
-				description: [stream.codec, stream.audio, stream.source_type].filter(Boolean).join(" · "),
+				description: [stream.codec, stream.audio, stream.source_type]
+					.filter(Boolean)
+					.join(" · "),
 				shortcut: stream.size_display ?? undefined,
 				selected: stream.info_hash === activeStreamHash,
 				onclick: () => onStreamSelect?.(stream),
@@ -178,11 +182,22 @@
 		{
 			kind: "toggle" as const,
 			label: "Transcoding",
-			description: "Re-encode video for compatibility",
-			checked: transcoding,
+			description: "Re-encode stream for compatibility",
+			checked: transcoding.enabled,
 			onChange: (value: boolean) => {
-				transcoding = value;
-				onTranscodingChange?.(value);
+				transcoding.enabled = value;
+				onTranscodingChange?.(value, transcoding.onlyAudio);
+			},
+		},
+		{
+			kind: "toggle" as const,
+			label: "Only audio",
+			description: "Only re-encode audio",
+			disabled: !transcoding.enabled,
+			checked: transcoding.onlyAudio,
+			onChange: (value: boolean) => {
+				transcoding.onlyAudio = value;
+				onTranscodingChange?.(transcoding.enabled, value);
 			},
 		},
 	]);
@@ -230,9 +245,7 @@
 								t.id.startsWith("embedded:") === isEmbedded,
 						);
 						const suffix =
-							dupes.length > 1
-								? ` #${dupes.indexOf(track) + 1}`
-								: "";
+							dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
 						return {
 							kind: "item" as const,
 							label: `${track.language}${suffix}`,
@@ -244,7 +257,10 @@
 					...(subtitles.length > 0
 						? [
 								"divider" as const,
-								{ kind: "custom" as const, render: subtitleOffsetControls },
+								{
+									kind: "custom" as const,
+									render: subtitleOffsetControls,
+								},
 							]
 						: []),
 				]
@@ -291,10 +307,7 @@
 	);
 	const torrentPercent = $derived(
 		streamStats && streamStats.total_bytes > 0
-			? Math.round(
-					(streamStats.progress_bytes / streamStats.total_bytes) *
-						100,
-				)
+			? Math.round((streamStats.progress_bytes / streamStats.total_bytes) * 100)
 			: 0,
 	);
 	let statsOpen = $state(false);
@@ -334,10 +347,7 @@
 	function seek(e: MouseEvent & { currentTarget: HTMLDivElement }) {
 		if (!videoEl || !duration) return;
 		const rect = e.currentTarget.getBoundingClientRect();
-		const pct = Math.max(
-			0,
-			Math.min(1, (e.clientX - rect.left) / rect.width),
-		);
+		const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
 		seekTo(pct * duration);
 	}
 
@@ -349,9 +359,7 @@
 
 		const onMove = (ev: MouseEvent) => {
 			if (!videoEl || !duration) return;
-			const rect = (
-				e.currentTarget as HTMLDivElement
-			).getBoundingClientRect();
+			const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
 			const pct = Math.max(
 				0,
 				Math.min(1, (ev.clientX - rect.left) / rect.width),
@@ -488,10 +496,20 @@
 				if (data.fatal) {
 					if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
 						// Network errors are often transient during torrent streaming — retry
-						console.warn("[hls] network error, retrying:", data.details, data.response?.code);
+						console.warn(
+							"[hls] network error, retrying:",
+							data.details,
+							data.response?.code,
+						);
 						hls?.startLoad();
 					} else {
-						console.error("[hls] fatal error:", data.type, data.details, data.reason, data.response);
+						console.error(
+							"[hls] fatal error:",
+							data.type,
+							data.details,
+							data.reason,
+							data.response,
+						);
 						loading = false;
 						hls?.destroy();
 						hls = null;
@@ -499,10 +517,7 @@
 					}
 				}
 			});
-		} else if (
-			isHls &&
-			videoEl.canPlayType("application/vnd.apple.mpegurl")
-		) {
+		} else if (isHls && videoEl.canPlayType("application/vnd.apple.mpegurl")) {
 			videoEl.src = src;
 		} else {
 			videoEl.src = src;
@@ -547,10 +562,7 @@
 	$effect(() => {
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
 		return () =>
-			document.removeEventListener(
-				"fullscreenchange",
-				handleFullscreenChange,
-			);
+			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 	});
 
 	onDestroy(() => {
@@ -564,12 +576,30 @@
 </script>
 
 {#snippet subtitleOffsetControls()}
-	<div style="display: flex; align-items: center; justify-content: space-between; padding: 2px 4px;">
-		<Button variant="ghost" icon="Minus" onclick={() => { subtitleOffset -= 0.25; }} />
-		<span style="font-family: monospace; font-size: 0.75rem; opacity: 0.7; min-width: 3.5em; text-align: center;">
-			{subtitleOffset - defaultOffset > 0 ? "+" : ""}{(subtitleOffset - defaultOffset).toFixed(1)}s
+	<div
+		style="display: flex; align-items: center; justify-content: space-between; padding: 2px 4px;"
+	>
+		<Button
+			variant="ghost"
+			icon="Minus"
+			onclick={() => {
+				subtitleOffset -= 0.25;
+			}}
+		/>
+		<span
+			style="font-family: monospace; font-size: 0.75rem; opacity: 0.7; min-width: 3.5em; text-align: center;"
+		>
+			{subtitleOffset - defaultOffset > 0 ? "+" : ""}{(
+				subtitleOffset - defaultOffset
+			).toFixed(1)}s
 		</span>
-		<Button variant="ghost" icon="Plus" onclick={() => { subtitleOffset += 0.25; }} />
+		<Button
+			variant="ghost"
+			icon="Plus"
+			onclick={() => {
+				subtitleOffset += 0.25;
+			}}
+		/>
 	</div>
 {/snippet}
 
@@ -632,8 +662,12 @@
 			const code = videoEl.error.code;
 			// MEDIA_ERR_NETWORK (2) is transient during torrent streaming — ignore
 			// MEDIA_ERR_DECODE (3) or MEDIA_ERR_SRC_NOT_SUPPORTED (4) = genuinely unplayable
-			if (code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-				streamError = "Format not supported by browser — try enabling transcoding.";
+			if (
+				code === MediaError.MEDIA_ERR_DECODE ||
+				code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+			) {
+				streamError =
+					"Format not supported by browser — try enabling transcoding.";
 				loading = true;
 			}
 		}}
@@ -670,10 +704,7 @@
 		{/if}
 	</div>
 
-	<div
-		class="pause-icon"
-		class:visible={paused && !loading && currentTime > 0}
-	>
+	<div class="pause-icon" class:visible={paused && !loading && currentTime > 0}>
 		<Icon name="Pause" size={48} />
 	</div>
 
@@ -694,11 +725,7 @@
 			<div class="top-gradient"></div>
 			<div class="top-content">
 				{#if onClose}
-					<Button
-						variant="ghost"
-						icon="ArrowLeft"
-						onclick={onClose}
-					/>
+					<Button variant="ghost" icon="ArrowLeft" onclick={onClose} />
 				{/if}
 				<div class="top-text">
 					{#if title}
@@ -736,9 +763,7 @@
 									},
 									{
 										label: "Status",
-										value: streamStats.finished
-											? "Complete"
-											: "Downloading",
+										value: streamStats.finished ? "Complete" : "Downloading",
 									},
 								]}
 							/>
@@ -770,17 +795,11 @@
 				{#if pieceMap.length > 0 && streamStats && !streamStats.finished}
 					<div class="progress-pieces">
 						{#each pieceMap as value}
-							<div
-								class="piece"
-								style="opacity: {value / 255}"
-							></div>
+							<div class="piece" style="opacity: {value / 255}"></div>
 						{/each}
 					</div>
 				{/if}
-				<div
-					class="progress-buffered"
-					style="width: {bufferedPercent}%"
-				></div>
+				<div class="progress-buffered" style="width: {bufferedPercent}%"></div>
 				<div class="progress-fill" style="width: {progressPercent}%">
 					<div class="progress-thumb"></div>
 				</div>
@@ -832,10 +851,7 @@
 				{/if}
 
 				{#if audioTracks.length > 1 || subtitleTracks.length > 0}
-					<PopoverMenu
-						items={audioSubtitleMenuItems}
-						align="right"
-					>
+					<PopoverMenu items={audioSubtitleMenuItems} align="right">
 						{#snippet trigger()}
 							<Button
 								variant="ghost"

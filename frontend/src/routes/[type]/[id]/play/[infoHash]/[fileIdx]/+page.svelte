@@ -2,8 +2,13 @@
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import {
-		movieSubtitles, tvSubtitles, subtitleCues,
-		type MediaItem, type MediaType, type SubtitleTrack, type SubtitleCue
+		movieSubtitles,
+		tvSubtitles,
+		subtitleCues,
+		type MediaItem,
+		type MediaType,
+		type SubtitleTrack,
+		type SubtitleCue,
 	} from "$lib/api.gen";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
@@ -17,7 +22,11 @@
 	}
 
 	const BROWSER_SAFE_AUDIO = new Set([
-		"aac", "mp3", "opus", "vorbis", "flac",
+		"aac",
+		"mp3",
+		"opus",
+		"vorbis",
+		"flac",
 	]);
 
 	let item = $state<MediaItem | null>(null);
@@ -42,10 +51,10 @@
 	let streamStats = $state<StreamStats | null>(null);
 	let pieceMap = $state<number[]>([]);
 	let statsPollTimer: ReturnType<typeof setInterval> | undefined;
-	let transcoding = $state(false);
+	let transcoding = $state({ enabled: false, onlyAudio: false });
 
 	const backdropUrls = $derived(
-		item?.backdrops?.map((b) => imageUrl(b, 'original')) ?? []
+		item?.backdrops?.map((b) => imageUrl(b, "original")) ?? [],
 	);
 
 	const mediaType = $derived(page.params.type as MediaType);
@@ -54,24 +63,35 @@
 	const fileIdx = $derived(Number(page.params.fileIdx));
 
 	// Parse season/episode from query params for TV
-	const season = $derived(page.url.searchParams.get('s') ? Number(page.url.searchParams.get('s')) : null);
-	const episode = $derived(page.url.searchParams.get('e') ? Number(page.url.searchParams.get('e')) : null);
+	const season = $derived(
+		page.url.searchParams.get("s")
+			? Number(page.url.searchParams.get("s"))
+			: null,
+	);
+	const episode = $derived(
+		page.url.searchParams.get("e")
+			? Number(page.url.searchParams.get("e"))
+			: null,
+	);
 
 	const episodeName = $derived(() => {
-		if (!item || mediaType !== 'tv' || season === null || episode === null) return null;
+		if (!item || mediaType !== "tv" || season === null || episode === null)
+			return null;
 		const s = item.seasons?.find((s) => s.season_number === season);
-		return s?.episodes?.find((e) => e.episode_number === episode)?.name ?? null;
+		return (
+			s?.episodes?.find((e) => e.episode_number === episode)?.name ?? null
+		);
 	});
 
 	const playerTitle = $derived(
-		mediaType === 'tv' && item
-			? episodeName() ?? `Episode ${episode}`
-			: item?.title
+		mediaType === "tv" && item
+			? (episodeName() ?? `Episode ${episode}`)
+			: item?.title,
 	);
 	const playerTopline = $derived(
-		mediaType === 'tv' && item && season !== null && episode !== null
+		mediaType === "tv" && item && season !== null && episode !== null
 			? `S${season} E${episode} · ${item.title}`
-			: undefined
+			: undefined,
 	);
 
 	function pollStreamStats(hash: string) {
@@ -96,8 +116,12 @@
 
 	$effect(() => {
 		const detailsPromise = getDetails(mediaType, mediaId)
-			.then((res) => { item = res.data; })
-			.catch((e) => { error = e.message; });
+			.then((res) => {
+				item = res.data;
+			})
+			.catch((e) => {
+				error = e.message;
+			});
 
 		const streamPromise = playStream(infoHash as string, fileIdx as number)
 			.then(async (result) => {
@@ -106,7 +130,9 @@
 				pollAudioTracks(infoHash as string, fileIdx as number);
 				pollStreamStats(infoHash as string);
 			})
-			.catch((e) => { error = e.message; });
+			.catch((e) => {
+				error = e.message;
+			});
 
 		Promise.all([detailsPromise, streamPromise]).then(() => {
 			loadSubtitleTracks();
@@ -117,7 +143,7 @@
 		if (!item) return;
 		loadingSubtitles = true;
 		try {
-			if (mediaType === 'movie') {
+			if (mediaType === "movie") {
 				const res = await movieSubtitles(item.id);
 				subtitleTracks = res.data;
 			} else if (season !== null && episode !== null) {
@@ -166,10 +192,14 @@
 				if (tracks.length > 0) {
 					if (tracks.length > 1) fileAudioTracks = tracks;
 					if (data.duration) mediaDuration = data.duration;
-					if (!hlsSessionId && tracks[0] && !BROWSER_SAFE_AUDIO.has(tracks[0].codec)) {
+					if (
+						!hlsSessionId &&
+						tracks[0] &&
+						!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
+					) {
 						fileAudioTracks = tracks;
-						transcoding = true;
-						startHlsRemux(hash, idx, 0);
+						transcoding.enabled = true;
+						startHlsRemux(hash, idx, 0, transcoding.onlyAudio);
 					}
 					clearInterval(audioPollTimer);
 					audioPollTimer = undefined;
@@ -185,26 +215,47 @@
 
 	async function switchAudio(idx: number) {
 		activeAudioIdx = idx;
-		await startHlsRemux(infoHash as string, fileIdx as number, idx, playerTime);
+		await startHlsRemux(
+			infoHash as string,
+			fileIdx as number,
+			idx,
+			transcoding.onlyAudio,
+			playerTime,
+		);
 	}
 
-	async function toggleTranscoding(enabled: boolean) {
+	async function toggleTranscoding(enabled: boolean, onlyAudio: boolean) {
 		if (enabled) {
-			await startHlsRemux(infoHash as string, fileIdx as number, activeAudioIdx, playerTime);
+			await startHlsRemux(
+				infoHash as string,
+				fileIdx as number,
+				activeAudioIdx,
+				onlyAudio,
+				playerTime,
+			);
 		} else {
 			stopHlsSession();
-			const result = await playStream(infoHash as string, fileIdx as number);
+			const result = await playStream(
+				infoHash as string,
+				fileIdx as number,
+			);
 			streamUrl = result.url;
 		}
 	}
 
-	async function startHlsRemux(hash: string, idx: number, audioIdx: number, startAt = 0) {
+	async function startHlsRemux(
+		hash: string,
+		idx: number,
+		audioIdx: number,
+		onlyAudio: boolean,
+		startAt = 0,
+	) {
 		stopHlsSession();
 		streamUrl = null;
 		try {
 			const t = startAt > 0 ? `&t=${startAt.toFixed(1)}` : "";
 			const res = await fetch(
-				`/api/stream/${hash}/${idx}/remux?audio=${audioIdx}${t}`,
+				`/api/stream/${hash}/${idx}/remux?audio=${audioIdx}${t}&onlyAudio=${onlyAudio}`,
 				{ method: "POST" },
 			);
 			const data = await res.json();
@@ -217,13 +268,18 @@
 
 	function stopHlsSession() {
 		if (hlsSessionId) {
-			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(() => {});
+			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(
+				() => {},
+			);
 			hlsSessionId = null;
 		}
 	}
 
 	function close() {
-		if (statsPollTimer) { clearInterval(statsPollTimer); statsPollTimer = undefined; }
+		if (statsPollTimer) {
+			clearInterval(statsPollTimer);
+			statsPollTimer = undefined;
+		}
 		stopHlsSession();
 		goto(`/${mediaType}/${mediaId}`);
 	}
@@ -241,8 +297,9 @@
 			subtitles={activeCues}
 			title={playerTitle}
 			topline={playerTopline}
-			titleImage={item?.logo_path ? imageUrl(item.logo_path, 'original') : undefined}
-
+			titleImage={item?.logo_path
+				? imageUrl(item.logo_path, "original")
+				: undefined}
 			audioTracks={fileAudioTracks.map((t) => ({
 				id: t.stream_index,
 				name: t.name,
@@ -251,7 +308,6 @@
 			activeAudioTrack={activeAudioIdx}
 			onAudioSelect={(track) => switchAudio(track.id)}
 			knownDuration={hlsSessionId ? mediaDuration : 0}
-
 			{streamStats}
 			{pieceMap}
 			bind:transcoding
@@ -270,8 +326,9 @@
 			src=""
 			title={playerTitle}
 			topline={playerTopline}
-			titleImage={item?.logo_path ? imageUrl(item.logo_path, 'original') : undefined}
-
+			titleImage={item?.logo_path
+				? imageUrl(item.logo_path, "original")
+				: undefined}
 			onClose={close}
 		/>
 	{/if}
