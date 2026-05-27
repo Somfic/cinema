@@ -279,10 +279,10 @@ async fn image_proxy(
     let bytes = res.bytes().await?;
 
     // Write to disk cache
-    if let Some(parent) = cache_path.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            tracing::warn!("failed to create image cache dir {}: {e}", parent.display());
-        }
+    if let Some(parent) = cache_path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        tracing::warn!("failed to create image cache dir {}: {e}", parent.display());
     }
     if let Err(e) = tokio::fs::write(&cache_path, &bytes).await {
         tracing::warn!("failed to write image cache {}: {e}", cache_path.display());
@@ -885,7 +885,7 @@ async fn estimate_download(
             },
         )
         .collect();
-    estimates.sort_by(|a, b| order(&b.resolution).cmp(&order(&a.resolution)));
+    estimates.sort_by_key(|e| std::cmp::Reverse(order(&e.resolution)));
 
     Ok(Json(estimates))
 }
@@ -1160,11 +1160,9 @@ fn serve_range_response<R: tokio::io::AsyncRead + tokio::io::AsyncSeek + Send + 
     let body = Body::from_stream(async_stream::stream! {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
         let mut reader = std::pin::pin!(reader);
-        if start > 0 {
-            if let Err(e) = reader.as_mut().seek(std::io::SeekFrom::Start(start)).await {
+        if start > 0 && let Err(e) = reader.as_mut().seek(std::io::SeekFrom::Start(start)).await {
                 yield Err(e);
                 return;
-            }
         }
         let mut remaining = content_length;
         let mut buf = vec![0u8; 64 * 1024];
