@@ -9,13 +9,27 @@ static SESSIONS: OnceLock<Mutex<HashMap<String, HlsSession>>> = OnceLock::new();
 
 use std::sync::OnceLock;
 
-pub struct HlsSession {
-    pub dir: PathBuf,
-    pub child: Option<tokio::process::Child>,
-    pub last_access: Instant,
+struct HlsSession {
+    dir: PathBuf,
+    child: tokio::process::Child,
+    last_access: Instant,
     /// Receives the ffmpeg error message when the process exits with failure.
     /// `None` means still running, `Some(msg)` means exited with that error.
-    pub exit_error: watch::Receiver<Option<String>>,
+    exit_error: watch::Receiver<Option<String>>,
+    abort_handles: [tokio::task::AbortHandle; 2],
+}
+
+impl Drop for HlsSession {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        for handle in &self.abort_handles {
+            handle.abort();
+        }
+        let dir = std::mem::take(&mut self.dir);
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        });
+    }
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, HlsSession>> {
@@ -63,6 +77,14 @@ pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
     if codec.is_empty() { None } else { Some(codec) }
 }
 
+pub struct HlsSessionStartInput {
+    pub info_hash: String,
+    pub file_idx: usize,
+    pub audio_index: usize,
+    pub start_time: f64,
+    pub only_audio: bool,
+}
+
 /// Start an HLS remux session. Returns (session_id, playlist_path).
 /// Spawns ffmpeg reading from a torrent stream (blocks on missing pieces)
 /// and writing HLS segments to a temp directory.
@@ -70,16 +92,27 @@ pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
 pub async fn start_session(
     storage: &crate::app::Storage,
     config: &crate::Config,
-    info_hash: &str,
-    file_idx: usize,
-    audio_index: usize,
-    start_time: f64,
-    only_audio: bool,
+    session_input: HlsSessionStartInput,
 ) -> crate::app::Result<(String, String)> {
     let session_id = new_session_id();
     let dir = storage.join(format!("hls/{session_id}"));
     tokio::fs::create_dir_all(&dir).await?;
 
+    match start_transcoding(config, session_input, &session_id, dir.clone()).await {
+        Ok(url) => Ok((session_id, url)),
+        Err(err) => {
+            let _ = tokio::fs::remove_dir_all(dir).await;
+            Err(err)
+        }
+    }
+}
+
+async fn start_transcoding(
+    config: &crate::Config,
+    session_input: HlsSessionStartInput,
+    session_id: &String,
+    dir: PathBuf,
+) -> crate::app::Result<String> {
     let playlist_path = dir.join("playlist.m3u8");
     let segment_pattern = dir.join("seg%05d.ts");
 
@@ -87,18 +120,25 @@ pub async fn start_session(
     if config.ffmpeg_hwaccel != "none" {
         pre_args.extend_from_slice(&["-hwaccel".into(), config.ffmpeg_hwaccel.clone()]);
     }
-    if start_time > 0.0 {
-        pre_args.extend_from_slice(&["-ss".into(), format!("{start_time:.3}"), "-copyts".into()]);
+    if session_input.start_time > 0.0 {
+        pre_args.extend_from_slice(&[
+            "-ss".into(),
+            format!("{:.3}", session_input.start_time),
+            "-copyts".into(),
+        ]);
     }
 
-    let input_display = format!("torrent:{info_hash}/{file_idx}");
+    let input_display = format!(
+        "torrent:{}/{}",
+        session_input.info_hash, session_input.file_idx
+    );
 
     // Probe video codec to decide whether to copy or transcode
-    let video_args: Vec<String> = if only_audio {
+    let video_args: Vec<String> = if session_input.only_audio {
         vec!["-c:v".into(), "copy".into()]
     } else {
         let engine = crate::torrent::TorrentEngine::get();
-        let file_path = engine.file_path(info_hash, file_idx)?;
+        let file_path = engine.file_path(&session_input.info_hash, session_input.file_idx)?;
         let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
         let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
 
@@ -134,7 +174,7 @@ pub async fn start_session(
             "-map",
             "0:v:0",
             "-map",
-            &format!("0:a:{audio_index}"),
+            &format!("0:a:{}", session_input.audio_index),
         ])
         .args(&video_args)
         .args([
@@ -163,6 +203,7 @@ pub async fn start_session(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| crate::app::Error::Generic(format!("Failed to start ffmpeg HLS: {e}")))?;
 
@@ -173,11 +214,11 @@ pub async fn start_session(
         .ok_or_else(|| crate::app::Error::Generic("Failed to open ffmpeg stdin".into()))?;
 
     let engine = crate::torrent::TorrentEngine::get();
-    let reader = engine.stream(info_hash, file_idx)?;
+    let reader = engine.stream(&session_input.info_hash, session_input.file_idx)?;
 
     let span = tracing::Span::current();
 
-    tokio::spawn(async move {
+    let write_task = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
 
         let mut reader = reader;
@@ -202,7 +243,7 @@ pub async fn start_session(
     let stderr = child.stderr.take();
     let sid = session_id.clone();
 
-    tokio::spawn(tracing::Instrument::instrument(
+    let error_task = tokio::spawn(tracing::Instrument::instrument(
         async move {
             use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -256,9 +297,10 @@ pub async fn start_session(
         session_id.clone(),
         HlsSession {
             dir,
-            child: Some(child),
+            child,
             last_access: Instant::now(),
             exit_error: exit_rx,
+            abort_handles: [write_task.abort_handle(), error_task.abort_handle()],
         },
     );
 
@@ -266,7 +308,7 @@ pub async fn start_session(
     let result = tokio::time::timeout(config.ffmpeg_max_startup_duration, async {
         loop {
             // Check if ffmpeg already died before producing any segments
-            if let Some(error) = session_error(&session_id).await {
+            if let Some(error) = session_error(session_id).await {
                 return Err(crate::app::Error::Generic(format!(
                     "ffmpeg failed: {error}"
                 )));
@@ -283,27 +325,21 @@ pub async fn start_session(
     .await;
 
     match result {
-        Ok(Ok(())) => {}             // success
-        Ok(Err(e)) => return Err(e), // ffmpeg error
+        Ok(Ok(())) => {} // success
+        Ok(Err(e)) => {
+            stop_session(session_id).await;
+            return Err(e);
+        } // ffmpeg error
         Err(_) => {
-            if let Some(session) = sessions().lock().await.get_mut(&session_id)
-                && let Some(child) = session.child.as_mut()
-                && let Err(err) = child.kill().await
-            {
-                tracing::error!(
-                    ?err,
-                    "Could not close the ffmpeg child process for session {}",
-                    session_id
-                );
-            }
+            stop_session(session_id).await;
             return Err(crate::app::Error::Generic(String::from(
                 "ffmpeg startup timeout",
             )));
         }
-    }
+    };
 
     let url = format!("/api/hls/{session_id}/playlist.m3u8");
-    Ok((session_id, url))
+    Ok(url)
 }
 
 /// Touch the session's last_access timestamp.
@@ -332,13 +368,7 @@ pub async fn session_error(session_id: &str) -> Option<String> {
 
 /// Stop and clean up a specific session.
 pub async fn stop_session(session_id: &str) {
-    let session = sessions().lock().await.remove(session_id);
-    if let Some(mut session) = session {
-        if let Some(ref mut child) = session.child {
-            let _ = child.kill().await;
-        }
-        let _ = tokio::fs::remove_dir_all(&session.dir).await;
-    }
+    sessions().lock().await.remove(session_id);
 }
 
 /// Clean up sessions that haven't been accessed in `max_idle_secs`.
@@ -353,23 +383,12 @@ pub async fn cleanup_idle(max_idle_secs: u64) -> usize {
         .collect();
     let count = idle.len();
     for id in idle {
-        if let Some(mut session) = map.remove(&id) {
-            if let Some(ref mut child) = session.child {
-                let _ = child.kill().await;
-            }
-            let _ = tokio::fs::remove_dir_all(&session.dir).await;
-        }
+        map.remove(&id);
     }
     count
 }
 
 /// Stop all sessions (for shutdown).
 pub async fn stop_all() {
-    let mut map = sessions().lock().await;
-    for (_, mut session) in map.drain() {
-        if let Some(ref mut child) = session.child {
-            let _ = child.kill().await;
-        }
-        let _ = tokio::fs::remove_dir_all(&session.dir).await;
-    }
+    sessions().lock().await.drain();
 }

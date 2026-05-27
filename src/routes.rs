@@ -10,11 +10,11 @@ use utoipa_axum::routes;
 
 use crate::app::{AppContext, Error};
 use crate::downloads::Download;
-use crate::streams;
 use crate::streams::Stream;
 use crate::subtitles::{SubtitleCue, SubtitleTrack};
 use crate::tmdb::{MediaItem, MediaType, SearchResult, TmdbClient};
 use crate::torrent::TorrentEngine;
+use crate::{hls, streams};
 
 pub fn router() -> OpenApiRouter<AppContext> {
     OpenApiRouter::new()
@@ -1025,11 +1025,13 @@ async fn stream_remux_hls(
     let (session_id, playlist_url) = crate::hls::start_session(
         &ctx.storage,
         &ctx.config,
-        &info_hash,
-        file_idx,
-        params.audio,
-        params.t,
-        params.only_audio,
+        hls::HlsSessionStartInput {
+            info_hash,
+            file_idx,
+            audio_index: params.audio,
+            start_time: params.t,
+            only_audio: params.only_audio,
+        },
     )
     .await?;
 
