@@ -438,11 +438,13 @@
 					onClose();
 				}
 				break;
+			case "j":
 			case "ArrowLeft":
 				e.preventDefault();
 				seekTo(Math.max(0, currentTime - 10));
 				showControls();
 				break;
+			case "l":
 			case "ArrowRight":
 				e.preventDefault();
 				seekTo(Math.min(duration, currentTime + 10));
@@ -603,6 +605,8 @@
 	</div>
 {/snippet}
 
+<svelte:window onkeydown={handleKeydown} />
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="player"
@@ -614,7 +618,6 @@
 	bind:this={containerEl}
 	onmousemove={showControls}
 	onmouseenter={showControls}
-	onkeydown={handleKeydown}
 	tabindex="-1"
 >
 	<!-- svelte-ignore a11y_media_has_caption -->
