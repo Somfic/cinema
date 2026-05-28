@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from "svelte";
 	import { fade } from "svelte/transition";
-	// @ts-ignore — hls.js types are resolved at build time
 	import Hls from "hls.js";
 	import {
 		Button,
@@ -487,6 +486,8 @@
 				debug: false,
 				enableWorker: true,
 				lowLatencyMode: false,
+				fragLoadingMaxRetry: 5,
+				fragLoadingRetryDelay: 500,
 			});
 			hls.loadSource(src);
 			hls.attachMedia(videoEl);
@@ -503,7 +504,12 @@
 							data.details,
 							data.response?.code,
 						);
-						hls?.startLoad();
+						if (data.response?.code === 404) {
+							// Could not find session, try restaring transcoding
+							onTranscodingChange?.(transcoding.enabled, transcoding.onlyAudio);
+						} else {
+							hls?.startLoad();
+						}
 					} else {
 						console.error(
 							"[hls] fatal error:",

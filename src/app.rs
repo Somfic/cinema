@@ -32,6 +32,8 @@ pub enum Error {
     AddressParseError(#[from] std::net::AddrParseError),
     #[error("{0}")]
     Generic(String),
+    #[error("{0}")]
+    NotFound(String),
     #[error("json error: {0}")]
     JsonError(#[from] serde_json::Error),
 }

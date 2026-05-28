@@ -1051,7 +1051,7 @@ async fn hls_serve(
 
     let dir = crate::hls::session_dir(&session_id)
         .await
-        .ok_or_else(|| Error::Generic("HLS session not found".into()))?;
+        .ok_or_else(|| Error::NotFound("HLS session not found".into()))?;
 
     crate::hls::touch(&session_id).await;
 
@@ -1065,7 +1065,7 @@ async fn hls_serve(
                     Error::Generic(format!("Stream failed (ffmpeg exited): {error}")).into(),
                 );
             }
-            return Err(Error::Generic(format!("HLS file not found: {file}")).into());
+            return Err(Error::NotFound(format!("HLS file not found: {file}")).into());
         }
     };
 
@@ -1209,7 +1209,12 @@ struct AppError(Error);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
+        let (status, message) = match self.0 {
+            Error::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            err => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+        };
+
+        (status, message).into_response()
     }
 }
 
