@@ -44,6 +44,11 @@
 	<div class="center"></div>
 	<div class="right">
 		<Button
+			icon="HardDrive"
+			variant="ghost"
+			onclick={() => goto("/cache")}
+		/>
+		<Button
 			icon="List"
 			variant="ghost"
 			onclick={() => goto("/collections")}

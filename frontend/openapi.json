@@ -14,6 +14,73 @@
     "version": "0.2.0"
   },
   "paths": {
+    "/cache/clear-app-cache": {
+      "post": {
+        "operationId": "clear_app_cache",
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/cache/disk": {
+      "get": {
+        "operationId": "get_cache_disk",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiskStats"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/items": {
+      "get": {
+        "operationId": "list_cache_items",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CacheEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/orphan/{info_hash}": {
+      "delete": {
+        "operationId": "delete_cache_orphan",
+        "parameters": [
+          {
+            "name": "info_hash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/collection": {
       "post": {
         "operationId": "add_to_collection",
@@ -794,6 +861,108 @@
   },
   "components": {
     "schemas": {
+      "CacheEntry": {
+        "type": "object",
+        "required": [
+          "kind",
+          "info_hash",
+          "category",
+          "disk_bytes"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "\"movies\" | \"tv\" | \"orphan\" — used by the UI for grouping/filtering."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disk_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Actual on-disk size of the torrent directory.",
+            "minimum": 0
+          },
+          "downloaded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "downloads.id; null for orphans."
+          },
+          "info_hash": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "\"download\" for tracked downloads, \"orphan\" for stray torrent dirs."
+          },
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "\"movie\" | \"tv\" for tracked downloads."
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "queued | downloading | completed | failed | cancelled for tracked items."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "CastMember": {
         "type": "object",
         "required": [
@@ -977,6 +1146,76 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "DiskStats": {
+        "type": "object",
+        "required": [
+          "total_bytes",
+          "free_bytes",
+          "used_bytes",
+          "cinema_bytes",
+          "torrents_bytes",
+          "hls_bytes",
+          "movies_bytes",
+          "tv_bytes",
+          "orphan_bytes"
+        ],
+        "properties": {
+          "cinema_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of the entire cinema data_dir.",
+            "minimum": 0
+          },
+          "free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Free bytes on that filesystem (available to non-root).",
+            "minimum": 0
+          },
+          "hls_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of data_dir/fs/hls (active transcoding sessions).",
+            "minimum": 0
+          },
+          "movies_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Subtotal of torrent dirs belonging to category==\"movies\".",
+            "minimum": 0
+          },
+          "orphan_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Subtotal of orphan torrent dirs (no DB row).",
+            "minimum": 0
+          },
+          "torrents_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of data_dir/fs/torrents (all per-info-hash dirs).",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total filesystem size containing data_dir.",
+            "minimum": 0
+          },
+          "tv_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Subtotal of torrent dirs belonging to category==\"tv\".",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "total_bytes - free_bytes.",
+            "minimum": 0
           }
         }
       },

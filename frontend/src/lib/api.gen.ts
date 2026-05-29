@@ -5,6 +5,50 @@
  * Utoipa's axum bindings for seamless integration for the two
  * OpenAPI spec version: 0.2.0
  */
+export interface CacheEntry {
+  /** "movies" | "tv" | "orphan" — used by the UI for grouping/filtering. */
+  category: string;
+  /** @nullable */
+  created_at?: string | null;
+  /**
+     * Actual on-disk size of the torrent directory.
+     * @minimum 0
+     */
+  disk_bytes: number;
+  /** @nullable */
+  downloaded_bytes?: number | null;
+  /** @nullable */
+  episode?: number | null;
+  /**
+     * downloads.id; null for orphans.
+     * @nullable
+     */
+  id?: number | null;
+  info_hash: string;
+  /** "download" for tracked downloads, "orphan" for stray torrent dirs. */
+  kind: string;
+  /**
+     * "movie" | "tv" for tracked downloads.
+     * @nullable
+     */
+  media_type?: string | null;
+  /** @nullable */
+  poster_path?: string | null;
+  /** @nullable */
+  resolution?: string | null;
+  /** @nullable */
+  season?: number | null;
+  /**
+     * queued | downloading | completed | failed | cancelled for tracked items.
+     * @nullable
+     */
+  status?: string | null;
+  /** @nullable */
+  title?: string | null;
+  /** @nullable */
+  total_bytes?: number | null;
+}
+
 export interface CastMember {
   /** @nullable */
   character?: string | null;
@@ -59,6 +103,54 @@ export interface CrewMember {
   name: string;
   /** @nullable */
   profile_path?: string | null;
+}
+
+export interface DiskStats {
+  /**
+     * Size of the entire cinema data_dir.
+     * @minimum 0
+     */
+  cinema_bytes: number;
+  /**
+     * Free bytes on that filesystem (available to non-root).
+     * @minimum 0
+     */
+  free_bytes: number;
+  /**
+     * Size of data_dir/fs/hls (active transcoding sessions).
+     * @minimum 0
+     */
+  hls_bytes: number;
+  /**
+     * Subtotal of torrent dirs belonging to category=="movies".
+     * @minimum 0
+     */
+  movies_bytes: number;
+  /**
+     * Subtotal of orphan torrent dirs (no DB row).
+     * @minimum 0
+     */
+  orphan_bytes: number;
+  /**
+     * Size of data_dir/fs/torrents (all per-info-hash dirs).
+     * @minimum 0
+     */
+  torrents_bytes: number;
+  /**
+     * Total filesystem size containing data_dir.
+     * @minimum 0
+     */
+  total_bytes: number;
+  /**
+     * Subtotal of torrent dirs belonging to category=="tv".
+     * @minimum 0
+     */
+  tv_bytes: number;
+  /**
+     * total_bytes - free_bytes.
+     * @minimum 0
+     */
+  used_bytes: number;
 }
 
 export interface Download {
@@ -312,6 +404,166 @@ export type SubtitleCuesParams = {
  */
 url: string;
 };
+
+export type clearAppCacheResponse204 = {
+  data: void
+  status: 204
+}
+
+export type clearAppCacheResponseSuccess = (clearAppCacheResponse204) & {
+  headers: Headers;
+};
+;
+
+export type clearAppCacheResponse = (clearAppCacheResponseSuccess)
+
+export const getClearAppCacheUrl = () => {
+
+
+
+
+  return `/api/cache/clear-app-cache`
+}
+
+export const clearAppCache = async ( options?: RequestInit): Promise<clearAppCacheResponse> => {
+
+  const res = await fetch(getClearAppCacheUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: clearAppCacheResponse['data'] = body ? JSON.parse(body) : undefined
+  return { data, status: res.status, headers: res.headers } as clearAppCacheResponse
+}
+
+
+
+export type getCacheDiskResponse200 = {
+  data: DiskStats
+  status: 200
+}
+
+export type getCacheDiskResponseSuccess = (getCacheDiskResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getCacheDiskResponse = (getCacheDiskResponseSuccess)
+
+export const getGetCacheDiskUrl = () => {
+
+
+
+
+  return `/api/cache/disk`
+}
+
+export const getCacheDisk = async ( options?: RequestInit): Promise<getCacheDiskResponse> => {
+
+  const res = await fetch(getGetCacheDiskUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getCacheDiskResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getCacheDiskResponse
+}
+
+
+
+export type listCacheItemsResponse200 = {
+  data: CacheEntry[]
+  status: 200
+}
+
+export type listCacheItemsResponseSuccess = (listCacheItemsResponse200) & {
+  headers: Headers;
+};
+;
+
+export type listCacheItemsResponse = (listCacheItemsResponseSuccess)
+
+export const getListCacheItemsUrl = () => {
+
+
+
+
+  return `/api/cache/items`
+}
+
+export const listCacheItems = async ( options?: RequestInit): Promise<listCacheItemsResponse> => {
+
+  const res = await fetch(getListCacheItemsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listCacheItemsResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listCacheItemsResponse
+}
+
+
+
+export type deleteCacheOrphanResponse204 = {
+  data: void
+  status: 204
+}
+
+export type deleteCacheOrphanResponseSuccess = (deleteCacheOrphanResponse204) & {
+  headers: Headers;
+};
+;
+
+export type deleteCacheOrphanResponse = (deleteCacheOrphanResponseSuccess)
+
+export const getDeleteCacheOrphanUrl = (infoHash: string,) => {
+
+
+
+
+  return `/api/cache/orphan/${infoHash}`
+}
+
+export const deleteCacheOrphan = async (infoHash: string, options?: RequestInit): Promise<deleteCacheOrphanResponse> => {
+
+  const res = await fetch(getDeleteCacheOrphanUrl(infoHash),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: deleteCacheOrphanResponse['data'] = body ? JSON.parse(body) : undefined
+  return { data, status: res.status, headers: res.headers } as deleteCacheOrphanResponse
+}
+
+
 
 export type addToCollectionResponse204 = {
   data: void

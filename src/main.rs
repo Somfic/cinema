@@ -10,6 +10,7 @@ use tracing::info;
 mod app;
 mod config;
 mod downloads;
+mod file_system;
 mod hls;
 mod logging;
 mod proxy;
@@ -178,7 +179,14 @@ async fn run() -> Result<()> {
         if frontend_dir.join("package.json").exists() {
             info!("starting vite dev server on port {dev_port}");
             let _child = tokio::process::Command::new("bun")
-                .args(["run", "dev", "--", "--port", &dev_port.to_string(), "--strictPort"])
+                .args([
+                    "run",
+                    "dev",
+                    "--",
+                    "--port",
+                    &dev_port.to_string(),
+                    "--strictPort",
+                ])
                 .current_dir(&frontend_dir)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())

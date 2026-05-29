@@ -12,6 +12,7 @@
 	} from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
+	import { formatBytes } from "$lib/utils";
 
 	interface SubtitleCue {
 		start: number;
@@ -310,13 +311,6 @@
 			: 0,
 	);
 	let statsOpen = $state(false);
-
-	function formatBytes(bytes: number): string {
-		if (bytes >= 1_073_741_824)
-			return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-		if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(0)} MB`;
-		return `${(bytes / 1024).toFixed(0)} KB`;
-	}
 
 	function formatTime(seconds: number): string {
 		if (!isFinite(seconds) || seconds < 0) return "0:00";

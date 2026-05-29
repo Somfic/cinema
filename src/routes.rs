@@ -45,6 +45,10 @@ pub fn router() -> OpenApiRouter<AppContext> {
         .routes(routes!(list_downloads))
         .routes(routes!(delete_download))
         .routes(routes!(estimate_download))
+        .routes(routes!(crate::file_system::cache::list_cache_items))
+        .routes(routes!(crate::file_system::stats::get_cache_disk))
+        .routes(routes!(crate::file_system::cache::delete_cache_orphan))
+        .routes(routes!(crate::file_system::cache::clear_app_cache))
         .route(
             "/stream/{info_hash}/stats",
             axum::routing::get(stream_stats),
@@ -1205,11 +1209,12 @@ fn serve_range_response<R: tokio::io::AsyncRead + tokio::io::AsyncSeek + Send + 
     }
 }
 
-struct AppError(Error);
+pub(crate) struct AppError(Error);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self.0 {
+            Error::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             Error::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             err => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
         };
