@@ -61,7 +61,9 @@
 					alt=""
 				/>
 				<div class="ep-info">
-					<Text size="xs" variant="muted">Episode {ep.episode_number}</Text>
+					<Text size="xs" variant="muted"
+						>Episode {ep.episode_number}</Text
+					>
 					<Text size="sm" weight="semibold">{ep.name}</Text>
 				</div>
 			</button>
@@ -180,7 +182,7 @@
 		height: 100%;
 		overflow-y: auto;
 		padding: 2rem;
-		padding-top: 15vh;
+		padding-top: 3.7rem;
 		display: flex;
 		flex-direction: column;
 		justify-content: space-between;
