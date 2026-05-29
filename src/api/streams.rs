@@ -40,6 +40,15 @@ pub struct AudioTracks {
     pub duration: Option<f64>,
 }
 
+/// Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
+/// 0..=255 each. Emitted only for files currently being streamed.
+#[cinema_type]
+pub struct PiecesUpdate {
+    pub info_hash: String,
+    pub file_idx: i64,
+    pub pieces: Vec<u8>,
+}
+
 #[cinema_api(namespace = "streams")]
 pub trait StreamsApi {
     /// Aggregates available torrent streams for a movie.
@@ -168,4 +177,9 @@ pub trait StreamsEvents {
     /// Per-torrent download stats, emitted every ~2s for each active torrent.
     /// Topic: `streams_stats`. Subscribers filter by `info_hash`.
     fn stats(payload: StreamStatsUpdate);
+
+    /// Per-file piece bitmap, emitted every ~2s for each file currently
+    /// being streamed. Topic: `streams_pieces`. Subscribers filter by
+    /// `(info_hash, file_idx)`.
+    fn pieces(payload: PiecesUpdate);
 }

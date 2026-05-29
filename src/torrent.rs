@@ -671,6 +671,13 @@ impl TorrentEngine {
             .with_torrents(|iter| iter.map(|(_, h)| h.info_hash().as_string()).collect())
     }
 
+    /// `(info_hash, file_idx)` for every file currently being streamed via
+    /// `stream()`. Used by the pieces broadcaster to push bitmap updates only
+    /// for files a client is actively watching.
+    pub async fn active_streams(&self) -> Vec<(String, usize)> {
+        self.stream_handles.lock().await.keys().cloned().collect()
+    }
+
     /// Get stats for an active torrent by info hash.
     pub fn stats(&self, info_hash: &str) -> crate::app::Result<librqbit::TorrentStats> {
         let id = TorrentIdOrHash::parse(info_hash)

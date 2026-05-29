@@ -168,6 +168,19 @@ async fn run() -> Result<()> {
                         finished: stats.finished,
                     });
                 }
+                // Piece bitmaps for files currently being streamed. Only
+                // pushed for active streams (not every file in every
+                // torrent), keeping the wire chatter bounded.
+                for (hash, file_idx) in engine.active_streams().await {
+                    let Ok(pieces) = engine.piece_map(&hash, file_idx, 200) else {
+                        continue;
+                    };
+                    events.streams.emit_pieces(&api::streams::PiecesUpdate {
+                        info_hash: hash,
+                        file_idx: file_idx as i64,
+                        pieces,
+                    });
+                }
             }
         });
     }

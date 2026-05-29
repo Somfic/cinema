@@ -77,10 +77,9 @@
 	}
 	let streamStats = $state<StreamStats | null>(null);
 	let pieceMap = $state<number[]>([]);
-	// Stats arrive via WS push (streams_stats topic). Pieces stay on a poll
-	// for now — the bitmap is too big to broadcast on every tick.
+	// Both stats and the piece bitmap arrive via WS push.
 	let statsUnsub: (() => void) | undefined;
-	let piecesPollTimer: ReturnType<typeof setInterval> | undefined;
+	let piecesUnsub: (() => void) | undefined;
 
 	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
 	let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
@@ -437,7 +436,6 @@
 		streamStats = null;
 		pieceMap = [];
 
-		// Push channel: subscribe once, filter to this torrent.
 		statsUnsub = api.streamsEvents.onStats((p) => {
 			if (p.info_hash !== infoHash) return;
 			streamStats = {
@@ -449,14 +447,10 @@
 			};
 		});
 
-		// Piece map stays on a short poll — too large for per-tick push.
-		const pollPieces = async () => {
-			try {
-				pieceMap = await api.streams.pieces(infoHash, fileIdx);
-			} catch {}
-		};
-		pollPieces();
-		piecesPollTimer = setInterval(pollPieces, 2000);
+		piecesUnsub = api.streamsEvents.onPieces((p) => {
+			if (p.info_hash !== infoHash || p.file_idx !== fileIdx) return;
+			pieceMap = p.pieces;
+		});
 	}
 
 	function stopStreamStats() {
@@ -464,9 +458,9 @@
 			statsUnsub();
 			statsUnsub = undefined;
 		}
-		if (piecesPollTimer) {
-			clearInterval(piecesPollTimer);
-			piecesPollTimer = undefined;
+		if (piecesUnsub) {
+			piecesUnsub();
+			piecesUnsub = undefined;
 		}
 		streamStats = null;
 		pieceMap = [];

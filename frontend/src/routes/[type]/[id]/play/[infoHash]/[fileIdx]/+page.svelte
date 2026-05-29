@@ -49,7 +49,7 @@
 	let streamStats = $state<StreamStats | null>(null);
 	let pieceMap = $state<number[]>([]);
 	let statsUnsub: (() => void) | undefined;
-	let piecesPollTimer: ReturnType<typeof setInterval> | undefined;
+	let piecesUnsub: (() => void) | undefined;
 	let transcoding = $state({ enabled: false, onlyAudio: false });
 
 	const backdropUrls = $derived(
@@ -95,7 +95,7 @@
 
 	function pollStreamStats(hash: string) {
 		if (statsUnsub) statsUnsub();
-		if (piecesPollTimer) clearInterval(piecesPollTimer);
+		if (piecesUnsub) piecesUnsub();
 		streamStats = null;
 		pieceMap = [];
 
@@ -110,13 +110,10 @@
 			};
 		});
 
-		const pollPieces = async () => {
-			try {
-				pieceMap = await api.streams.pieces(hash, fileIdx);
-			} catch {}
-		};
-		pollPieces();
-		piecesPollTimer = setInterval(pollPieces, 2000);
+		piecesUnsub = api.streamsEvents.onPieces((p) => {
+			if (p.info_hash !== hash || p.file_idx !== fileIdx) return;
+			pieceMap = p.pieces;
+		});
 	}
 
 	$effect(() => {
@@ -282,9 +279,9 @@
 			statsUnsub();
 			statsUnsub = undefined;
 		}
-		if (piecesPollTimer) {
-			clearInterval(piecesPollTimer);
-			piecesPollTimer = undefined;
+		if (piecesUnsub) {
+			piecesUnsub();
+			piecesUnsub = undefined;
 		}
 		stopHlsSession();
 		goto(`/${mediaType}/${mediaId}`);
