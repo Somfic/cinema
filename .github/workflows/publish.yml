@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ultrazi0/cinema
+  IMAGE_NAME: somfic/cinema
 
 permissions:
   contents: write
