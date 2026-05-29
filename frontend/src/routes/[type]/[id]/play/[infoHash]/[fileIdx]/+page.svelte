@@ -2,14 +2,12 @@
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import {
-		movieSubtitles,
-		tvSubtitles,
-		subtitleCues,
+		api,
 		type MediaItem,
 		type MediaType,
 		type SubtitleTrack,
 		type SubtitleCue,
-	} from "$lib/api.gen";
+	} from "$lib/schema";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 
@@ -50,7 +48,8 @@
 	}
 	let streamStats = $state<StreamStats | null>(null);
 	let pieceMap = $state<number[]>([]);
-	let statsPollTimer: ReturnType<typeof setInterval> | undefined;
+	let statsUnsub: (() => void) | undefined;
+	let piecesPollTimer: ReturnType<typeof setInterval> | undefined;
 	let transcoding = $state({ enabled: false, onlyAudio: false });
 
 	const backdropUrls = $derived(
@@ -95,29 +94,35 @@
 	);
 
 	function pollStreamStats(hash: string) {
-		if (statsPollTimer) clearInterval(statsPollTimer);
+		if (statsUnsub) statsUnsub();
+		if (piecesPollTimer) clearInterval(piecesPollTimer);
 		streamStats = null;
 		pieceMap = [];
 
-		const check = async () => {
+		statsUnsub = api.streamsEvents.onStats((p) => {
+			if (p.info_hash !== hash) return;
+			streamStats = {
+				progress_bytes: p.progress_bytes,
+				total_bytes: p.total_bytes,
+				download_speed_mbps: p.download_speed_mbps,
+				peers: p.peers,
+				finished: p.finished,
+			};
+		});
+
+		const pollPieces = async () => {
 			try {
-				const [statsRes, piecesRes] = await Promise.all([
-					fetch(`/api/stream/${hash}/stats`),
-					fetch(`/api/stream/${hash}/${fileIdx}/pieces`),
-				]);
-				streamStats = await statsRes.json();
-				pieceMap = await piecesRes.json();
+				pieceMap = await api.streams.pieces(hash, fileIdx);
 			} catch {}
 		};
-
-		check();
-		statsPollTimer = setInterval(check, 2000);
+		pollPieces();
+		piecesPollTimer = setInterval(pollPieces, 2000);
 	}
 
 	$effect(() => {
 		const detailsPromise = getDetails(mediaType, mediaId)
 			.then((res) => {
-				item = res.data;
+				item = res;
 			})
 			.catch((e) => {
 				error = e.message;
@@ -144,11 +149,9 @@
 		loadingSubtitles = true;
 		try {
 			if (mediaType === "movie") {
-				const res = await movieSubtitles(item.id);
-				subtitleTracks = res.data;
+				subtitleTracks = await api.subtitles.movie(item.id);
 			} else if (season !== null && episode !== null) {
-				const res = await tvSubtitles(item.id, season, episode);
-				subtitleTracks = res.data;
+				subtitleTracks = await api.subtitles.tv(item.id, season, episode);
 			}
 
 			if (subtitleTracks.length > 0) {
@@ -165,8 +168,7 @@
 		loadingSubtitles = true;
 		activeTrackUrl = track.url;
 		try {
-			const res = await subtitleCues({ url: track.url });
-			activeCues = res.data;
+			activeCues = await api.subtitles.cues(track.url);
 		} catch {
 			activeCues = [];
 		} finally {
@@ -276,9 +278,13 @@
 	}
 
 	function close() {
-		if (statsPollTimer) {
-			clearInterval(statsPollTimer);
-			statsPollTimer = undefined;
+		if (statsUnsub) {
+			statsUnsub();
+			statsUnsub = undefined;
+		}
+		if (piecesPollTimer) {
+			clearInterval(piecesPollTimer);
+			piecesPollTimer = undefined;
 		}
 		stopHlsSession();
 		goto(`/${mediaType}/${mediaId}`);

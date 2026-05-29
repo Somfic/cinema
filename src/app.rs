@@ -92,7 +92,7 @@ pub async fn create_storage(config: &Config) -> Result<Storage> {
 
 // ── Event Bus ──
 
-#[derive(Clone, Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 pub struct Event {
     pub topic: String,
     pub payload: serde_json::Value,

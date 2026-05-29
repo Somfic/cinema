@@ -16,6 +16,14 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
 RUN bun install --cwd frontend --trust
+
+# Regenerate the schema (backend `_generated.rs` + frontend `lib/schema/*.ts`)
+# from the Rust traits/types so the frontend build below sees up-to-date
+# bindings. Mirrors the `just schema` recipe.
+RUN cargo run -p cinema-schema-codegen --quiet -- --rust-only
+RUN TS_RS_EXPORT_DIR=/app/target/schema-bindings cargo test --quiet export_bindings
+RUN TS_RS_EXPORT_DIR=/app/target/schema-bindings cargo run -p cinema-schema-codegen --quiet
+
 RUN bun run --cwd frontend build
 RUN cargo build --release
 

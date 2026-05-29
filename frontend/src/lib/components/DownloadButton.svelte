@@ -1,12 +1,9 @@
 <script lang="ts">
 	import {
-		estimateDownload,
-		enqueueDownload,
-		listDownloads,
-		deleteDownload,
+		api,
 		type Download,
 		type ResolutionEstimate,
-	} from "$lib/api.gen";
+	} from "$lib/schema";
 	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
 
 	let {
@@ -32,10 +29,11 @@
 
 	// Check download status on mount
 	$effect(() => {
-		listDownloads()
-			.then((res) => {
+		api.downloads
+			.list()
+			.then((items) => {
 				download =
-					res.data.find(
+					items.find(
 						(d) =>
 							d.media_type === mediaType &&
 							d.tmdb_id === tmdbId &&
@@ -51,10 +49,11 @@
 		if (download?.status !== "downloading" && download?.status !== "queued")
 			return;
 		const interval = setInterval(() => {
-			listDownloads()
-				.then((res) => {
+			api.downloads
+				.list()
+				.then((items) => {
 					download =
-						res.data.find(
+						items.find(
 							(d) =>
 								d.media_type === mediaType &&
 								d.tmdb_id === tmdbId &&
@@ -71,23 +70,32 @@
 	$effect(() => {
 		if (dropdownOpen && !download && estimates.length === 0) {
 			loadingEstimates = true;
-			estimateDownload(mediaType, tmdbId)
-				.then((res) => { estimates = res.data; })
-				.catch(() => { estimates = []; })
-				.finally(() => { loadingEstimates = false; });
+			api.downloads
+				.estimate(mediaType, tmdbId)
+				.then((items) => {
+					estimates = items;
+				})
+				.catch(() => {
+					estimates = [];
+				})
+				.finally(() => {
+					loadingEstimates = false;
+				});
 		}
 	});
 
 	async function pickResolution(resolution: string) {
 		dropdownOpen = false;
-		await enqueueDownload({
+		await api.downloads.enqueue({
 			media_type: mediaType,
 			tmdb_id: tmdbId,
 			title,
-			poster_path: posterPath,
+			poster_path: posterPath ?? null,
 			season,
 			episode,
 			resolution,
+			info_hash: null,
+			file_idx: null,
 		});
 		download = {
 			status: "queued",
@@ -98,7 +106,7 @@
 
 	function handleClick() {
 		if (download) {
-			deleteDownload(download.id);
+			api.downloads.delete(download.id);
 			download = null;
 		}
 	}

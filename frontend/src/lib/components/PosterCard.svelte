@@ -3,7 +3,7 @@
 	import type { Snippet } from "svelte";
 	import { onDestroy } from "svelte";
 	import { imageUrl } from "$lib/utils";
-	import { movieDetails, tvDetails } from "$lib/api.gen";
+	import { api } from "$lib/schema";
 
 	let {
 		posterPath,
@@ -88,9 +88,9 @@
 		try {
 			const res =
 				mediaType === "movie"
-					? await movieDetails(tmdbId)
-					: await tvDetails(tmdbId);
-			const list = res.data.backdrops ?? [];
+					? await api.media.movieDetails(tmdbId)
+					: await api.media.tvDetails(tmdbId);
+			const list = res.backdrops ?? [];
 			backdropCache.set(key, list);
 			return candid(list);
 		} catch {

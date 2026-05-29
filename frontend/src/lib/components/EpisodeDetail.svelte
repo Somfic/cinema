@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Season, Episode, WatchHistoryItem } from "$lib/api.gen";
+	import type { Season, Episode, WatchHistoryItem } from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
 	import { Text } from "glow";
 	import PlayCard from "./PlayCard.svelte";

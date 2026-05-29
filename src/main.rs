@@ -7,17 +7,21 @@ use clap::Parser;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
+mod _generated;
+mod api;
 mod app;
 mod config;
 mod downloads;
 mod hls;
 mod logging;
 mod proxy;
-mod routes;
+mod raw;
+mod rpc;
 mod streams;
 mod subtitles;
 mod tmdb;
 pub(crate) mod torrent;
+mod ws;
 
 use app::{AppContext, Result};
 use config::Config;
@@ -140,20 +144,48 @@ async fn run() -> Result<()> {
         }
     });
 
+    // stream stats
+    {
+        let events = _generated::Events::new(ctx.events.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let engine = torrent::TorrentEngine::get();
+                for hash in engine.active_info_hashes() {
+                    let Ok(stats) = engine.stats(&hash) else {
+                        continue;
+                    };
+                    let (download_speed_mbps, peers) = match &stats.live {
+                        Some(live) => (live.download_speed.mbps, live.snapshot.peer_stats.live),
+                        None => (0.0, 0),
+                    };
+                    events.streams.emit_stats(&api::streams::StreamStatsUpdate {
+                        info_hash: hash,
+                        progress_bytes: stats.progress_bytes,
+                        total_bytes: stats.total_bytes,
+                        download_speed_mbps,
+                        peers,
+                        finished: stats.finished,
+                    });
+                }
+            }
+        });
+    }
+
     // Build router
-    let (api_router, api_spec) = routes::router().split_for_parts();
     let mut router = Router::new();
 
-    // Mount API
-    info!("mounting api at /api");
-    router = router.nest("/api", api_router.with_state(ctx.clone()));
+    // Mount schema-generated RPC routes (JSON one-shots).
+    info!("mounting rpc at /api/rpc");
+    router = router.nest("/api/rpc", _generated::rpc_router().with_state(ctx.clone()));
 
-    // Serve OpenAPI spec
-    let spec_json = serde_json::to_value(&api_spec).unwrap();
-    router = router.route(
-        "/api/openapi.json",
-        axum::routing::get(move || async move { axum::Json(spec_json.clone()) }),
-    );
+    // Mount the WebSocket bridge for server→client events.
+    info!("mounting ws at /api/ws");
+    router = router.nest("/api/ws", ws::router().with_state(ctx.clone()));
+
+    // Mount the raw HTTP endpoints (range video, HLS segments, image proxy).
+    info!("mounting raw routes at /api");
+    router = router.nest("/api", raw::router().with_state(ctx.clone()));
 
     // Frontend: dev proxy or static files
     if cli.dev {
@@ -178,7 +210,14 @@ async fn run() -> Result<()> {
         if frontend_dir.join("package.json").exists() {
             info!("starting vite dev server on port {dev_port}");
             let _child = tokio::process::Command::new("bun")
-                .args(["run", "dev", "--", "--port", &dev_port.to_string(), "--strictPort"])
+                .args([
+                    "run",
+                    "dev",
+                    "--",
+                    "--port",
+                    &dev_port.to_string(),
+                    "--strictPort",
+                ])
                 .current_dir(&frontend_dir)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())
@@ -242,15 +281,4 @@ async fn shutdown_signal() {
     }
 
     info!("shutdown signal received, draining connections...");
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn export_openapi_spec() {
-        let (_, spec) = super::routes::router().split_for_parts();
-        let json = serde_json::to_string_pretty(&spec).unwrap();
-        std::fs::write("frontend/openapi.json", &json).unwrap();
-        println!("Wrote OpenAPI spec to frontend/openapi.json");
-    }
 }

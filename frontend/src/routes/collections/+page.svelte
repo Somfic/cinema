@@ -1,19 +1,10 @@
 <script lang="ts">
 	import {
-		listCollectionDefs,
-		createCollectionDef,
-		deleteCollectionDef,
-		setCollectionVisibility,
-		reorderCollectionDefs,
-		getCollection as fetchCollection,
-		addToCollection,
-		removeFromCollection,
-		reorderCollection,
-		search,
+		api,
 		type CollectionDef,
 		type CollectionItem,
 		type SearchResult,
-	} from "$lib/api.gen";
+	} from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
 	import { Heading, Input, Button, Text, Card, ToggleInput } from "glow";
 	import { sortable } from "glow";
@@ -42,9 +33,10 @@
 	}
 
 	function loadDefs() {
-		listCollectionDefs()
-			.then((res) => {
-				defs = res.data;
+		api.collections
+			.listDefs()
+			.then((list) => {
+				defs = list;
 			})
 			.catch(() => {});
 	}
@@ -58,9 +50,10 @@
 		renameTitle = def.title;
 		query = "";
 		results = [];
-		fetchCollection(def.slug)
-			.then((res) => {
-				items = res.data;
+		api.collections
+			.get(def.slug)
+			.then((list) => {
+				items = list;
 			})
 			.catch(() => {
 				items = [];
@@ -71,11 +64,13 @@
 		const title = newTitle.trim();
 		const slug = slugify(title);
 		if (!title || !slug) return;
-		await createCollectionDef({
-			slug,
-			title,
-			kind: newOrdered ? "ordered" : "manual",
-		}).catch(() => {});
+		await api.collections
+			.createDef({
+				slug,
+				title,
+				kind: newOrdered ? "ordered" : "manual",
+			})
+			.catch(() => {});
 		newTitle = "";
 		loadDefs();
 	}
@@ -84,24 +79,24 @@
 		if (!selected || selected.system) return;
 		const title = renameTitle.trim();
 		if (!title || title === selected.title) return;
-		await createCollectionDef({
-			slug: selected.slug,
-			title,
-			kind: selected.kind,
-		}).catch(() => {});
+		await api.collections
+			.createDef({
+				slug: selected.slug,
+				title,
+				kind: selected.kind,
+			})
+			.catch(() => {});
 		selected = { ...selected, title };
 		loadDefs();
 	}
 
 	async function setVisibility(def: CollectionDef, visible: boolean) {
-		await setCollectionVisibility(def.slug, {
-			hidden: !visible,
-		}).catch(() => {});
+		await api.collections.setVisibility(def.slug, !visible).catch(() => {});
 		loadDefs();
 	}
 
 	async function deleteCollection(def: CollectionDef) {
-		await deleteCollectionDef(def.slug).catch(() => {});
+		await api.collections.deleteDef(def.slug).catch(() => {});
 		if (selected?.slug === def.slug) {
 			selected = null;
 			items = [];
@@ -119,8 +114,7 @@
 		searching = true;
 		searchTimer = setTimeout(async () => {
 			try {
-				const res = await search({ q: query });
-				results = res.data;
+				results = await api.search.search(query);
 			} finally {
 				searching = false;
 			}
@@ -129,24 +123,24 @@
 
 	async function addItem(r: SearchResult) {
 		if (!selected) return;
-		await addToCollection({
-			collection: selected.slug,
-			media_type: r.media_type,
-			tmdb_id: r.id,
-			title: r.title,
-			poster_path: r.poster_path ?? undefined,
-		}).catch(() => {});
-		const res = await fetchCollection(selected.slug).catch(() => null);
-		if (res) items = res.data;
+		await api.collections
+			.add({
+				collection: selected.slug,
+				media_type: r.media_type,
+				tmdb_id: r.id,
+				title: r.title,
+				poster_path: r.poster_path ?? null,
+			})
+			.catch(() => {});
+		const list = await api.collections.get(selected.slug).catch(() => null);
+		if (list) items = list;
 	}
 
 	async function removeItem(item: CollectionItem) {
 		if (!selected) return;
-		await removeFromCollection(
-			selected.slug,
-			item.media_type,
-			item.tmdb_id,
-		).catch(() => {});
+		await api.collections
+			.remove(selected.slug, item.media_type, item.tmdb_id)
+			.catch(() => {});
 		items = items.filter(
 			(i) =>
 				!(
@@ -157,19 +151,20 @@
 	}
 
 	function persistDefOrder() {
-		reorderCollectionDefs({
-			slugs: defs.map((d) => d.slug),
-		}).catch(() => {});
+		api.collections.reorderDefs(defs.map((d) => d.slug)).catch(() => {});
 	}
 
 	function persistOrder() {
 		if (!selected) return;
-		reorderCollection(selected.slug, {
-			items: items.map((i) => ({
-				media_type: i.media_type,
-				tmdb_id: i.tmdb_id,
-			})),
-		}).catch(() => {});
+		api.collections
+			.reorder(
+				selected.slug,
+				items.map((i) => ({
+					media_type: i.media_type,
+					tmdb_id: i.tmdb_id,
+				})),
+			)
+			.catch(() => {});
 	}
 </script>
 

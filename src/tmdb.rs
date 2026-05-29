@@ -1,8 +1,9 @@
-use crate::config::Config;
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use cinema_schema::cinema_type;
+use serde::Deserialize;
 
-#[derive(Serialize, Clone, ToSchema)]
+use crate::config::Config;
+
+#[cinema_type]
 pub struct MediaItem {
     pub id: i64,
     pub imdb_id: Option<String>,
@@ -23,7 +24,7 @@ pub struct MediaItem {
     pub directors: Vec<CrewMember>,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct CastMember {
     pub id: i64,
     pub name: String,
@@ -31,7 +32,7 @@ pub struct CastMember {
     pub profile_path: Option<String>,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct CrewMember {
     pub id: i64,
     pub name: String,
@@ -39,14 +40,15 @@ pub struct CrewMember {
     pub profile_path: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, ToSchema)]
+#[cinema_type]
+#[derive(Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaType {
     Movie,
     Tv,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct SearchResult {
     pub id: i64,
     pub media_type: MediaType,
@@ -57,13 +59,13 @@ pub struct SearchResult {
     pub backdrop_path: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct Genre {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct Video {
     pub key: String,
     pub site: String,
@@ -71,7 +73,7 @@ pub struct Video {
     pub video_type: String,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct Season {
     pub id: i64,
     pub season_number: i64,
@@ -82,7 +84,7 @@ pub struct Season {
     pub episodes: Vec<Episode>,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct Episode {
     pub episode_number: i64,
     pub name: String,
@@ -515,7 +517,8 @@ impl TmdbClient {
             self.client.get(&multi_url).send(),
             self.client.get(&movie_url).send(),
             self.client.get(&tv_url).send(),
-        ).await;
+        )
+        .await;
 
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Season } from "$lib/api.gen";
+	import type { Season } from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
 	import { Card, Text } from "glow";
 
