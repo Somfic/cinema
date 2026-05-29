@@ -1,15 +1,10 @@
 <script lang="ts">
-	import type {
-		MediaItem,
-		Stream,
-		SearchResult,
-		WatchHistoryItem,
-	} from "$lib/api.gen";
 	import {
-		addToCollection,
-		removeFromCollection,
-		isInCollection,
-	} from "$lib/api.gen";
+		api,
+		type MediaItem,
+		type SearchResult,
+		type WatchHistoryItem,
+	} from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
 	import {
 		Button,
@@ -96,19 +91,22 @@
 	let watchedLoading = $state(false);
 
 	$effect(() => {
-		isInCollection("watchlist", item.media_type, item.id)
+		api.collections
+			.contains("watchlist", item.media_type, item.id)
 			.then((res) => {
-				onWatchlist = res.data.in_collection;
+				onWatchlist = res.in_collection;
 			})
 			.catch(() => {});
-		isInCollection("favorites", item.media_type, item.id)
+		api.collections
+			.contains("favorites", item.media_type, item.id)
 			.then((res) => {
-				isFavorite = res.data.in_collection;
+				isFavorite = res.in_collection;
 			})
 			.catch(() => {});
-		isInCollection("watched", item.media_type, item.id)
+		api.collections
+			.contains("watched", item.media_type, item.id)
 			.then((res) => {
-				isWatched = res.data.in_collection;
+				isWatched = res.in_collection;
 			})
 			.catch(() => {});
 	});
@@ -122,15 +120,15 @@
 		setLoading(true);
 		try {
 			if (current) {
-				await removeFromCollection(name, item.media_type, item.id);
+				await api.collections.remove(name, item.media_type, item.id);
 				setState(false);
 			} else {
-				await addToCollection({
+				await api.collections.add({
 					collection: name,
 					media_type: item.media_type,
 					tmdb_id: item.id,
 					title: item.title,
-					poster_path: item.poster_path ?? undefined,
+					poster_path: item.poster_path ?? null,
 				});
 				setState(true);
 			}
@@ -302,7 +300,7 @@
 			mediaType={item.media_type}
 			tmdbId={item.id}
 			title={item.title}
-			posterPath={item.poster_path ?? undefined}
+			posterPath={item.poster_path ?? null}
 		/> -->
 	</div>
 
@@ -600,23 +598,37 @@
 	}
 
 	@media (max-width: 768px) {
+		.genres-overlay {
+			top: 0;
+			bottom: auto;
+			padding: 0 1rem 1rem;
+			flex-direction: column;
+			max-width: none;
+		}
+
 		.sidebar {
 			width: 100%;
 			padding: 1rem;
 			padding-top: 40vh;
-			min-height: auto;
+			min-height: 100%;
+			box-sizing: border-box;
+			gap: 1rem;
 		}
 
 		.title-area {
 			flex: 0;
+			align-items: center;
+			text-align: center;
 		}
 
 		.logo {
-			max-width: 60%;
+			max-width: 100%;
+			width: 100%;
 		}
 
 		.title {
-			font-size: 1.5rem;
+			font-size: 2rem;
+			width: 100%;
 		}
 
 		.actions-row {

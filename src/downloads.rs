@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use cinema_schema::cinema_type;
 use tokio::sync::Semaphore;
-use utoipa::ToSchema;
 
 use crate::app::AppContext;
 use crate::torrent::TorrentEngine;
 
-#[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+#[cinema_type]
+#[derive(sqlx::FromRow)]
 pub struct Download {
     pub id: i64,
     pub media_type: String,

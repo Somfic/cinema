@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Pill } from "glow";
-	import type { Stream } from "$lib/api.gen";
+	import type { Stream } from "$lib/schema";
 
 	let {
 		streams,

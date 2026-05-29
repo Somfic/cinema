@@ -745,31 +745,33 @@
 							<Button variant="ghost" icon="Info" />
 						{/snippet}
 						{#snippet children()}
-							<Data
-								variant="inline"
-								properties={[
-									{
-										label: "Progress",
-										value: `${torrentPercent}%`,
-									},
-									{
-										label: "Downloaded",
-										value: `${formatBytes(streamStats.progress_bytes)} / ${formatBytes(streamStats.total_bytes)}`,
-									},
-									{
-										label: "Speed",
-										value: `${streamStats.download_speed_mbps.toFixed(1)} MB/s`,
-									},
-									{
-										label: "Peers",
-										value: streamStats.peers,
-									},
-									{
-										label: "Status",
-										value: streamStats.finished ? "Complete" : "Downloading",
-									},
-								]}
-							/>
+							<div class="stats-popover">
+								<Data
+									variant="inline"
+									properties={[
+										{
+											label: "Progress",
+											value: `${torrentPercent}%`,
+										},
+										{
+											label: "Downloaded",
+											value: `${formatBytes(streamStats.progress_bytes)} / ${formatBytes(streamStats.total_bytes)}`,
+										},
+										{
+											label: "Speed",
+											value: `${streamStats.download_speed_mbps.toFixed(1)} MB/s`,
+										},
+										{
+											label: "Peers",
+											value: streamStats.peers,
+										},
+										{
+											label: "Status",
+											value: streamStats.finished ? "Complete" : "Downloading",
+										},
+									]}
+								/>
+							</div>
 						{/snippet}
 					</Popover>
 				{/if}
@@ -1315,4 +1317,12 @@
 	}
 
 	/* ── Subtitle popover ── */
+
+	/* Force a width wide enough for "224 MB / 224 MB" to fit on one row
+	   alongside its "Downloaded" label, instead of collapsing to the
+	   Info-button trigger width. */
+	.stats-popover {
+		min-width: 18rem;
+		white-space: nowrap;
+	}
 </style>

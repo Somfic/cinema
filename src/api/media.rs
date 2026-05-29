@@ -1,0 +1,53 @@
+use cinema_schema::cinema_api;
+
+use crate::app::{AppContext, Error};
+use crate::tmdb::{MediaType, TmdbClient};
+
+pub use crate::tmdb::{MediaItem, SearchResult};
+
+#[cinema_api(namespace = "media")]
+pub trait MediaApi {
+    /// Full TMDB details for a movie
+    async fn movie_details(&self, id: i64) -> Result<MediaItem, Error>;
+
+    /// Full TMDB details for a TV show
+    async fn tv_details(&self, id: i64) -> Result<MediaItem, Error>;
+
+    /// Items similar to the given movie/TV id
+    async fn similar(&self, media_type: String, id: i64) -> Result<Vec<SearchResult>, Error>;
+
+    /// Currently-trending movies + TV
+    async fn trending(&self) -> Result<Vec<SearchResult>, Error>;
+}
+
+#[cinema_api]
+impl MediaApi for AppContext {
+    async fn movie_details(&self, id: i64) -> Result<MediaItem, Error> {
+        let tmdb = TmdbClient::new(&self.config, self.http.clone());
+        tmdb.details(MediaType::Movie, id).await
+    }
+
+    async fn tv_details(&self, id: i64) -> Result<MediaItem, Error> {
+        let tmdb = TmdbClient::new(&self.config, self.http.clone());
+        tmdb.details(MediaType::Tv, id).await
+    }
+
+    async fn similar(&self, media_type: String, id: i64) -> Result<Vec<SearchResult>, Error> {
+        let tmdb = TmdbClient::new(&self.config, self.http.clone());
+        let mt = parse_media_type(&media_type)?;
+        tmdb.similar(mt, id).await
+    }
+
+    async fn trending(&self) -> Result<Vec<SearchResult>, Error> {
+        let tmdb = TmdbClient::new(&self.config, self.http.clone());
+        tmdb.trending().await
+    }
+}
+
+pub(crate) fn parse_media_type(s: &str) -> Result<MediaType, Error> {
+    match s {
+        "movie" => Ok(MediaType::Movie),
+        "tv" => Ok(MediaType::Tv),
+        _ => Err(Error::Generic("Invalid media type".into())),
+    }
+}

@@ -1,17 +1,11 @@
 <script lang="ts">
 	import {
-		search,
-		watchHistory as fetchWatchHistory,
-		getCollection as fetchCollection,
-		listCollectionDefs,
-		addToCollection,
-		removeFromCollection,
-		reorderCollection,
+		api,
 		type SearchResult,
 		type WatchHistoryItem,
 		type CollectionItem,
 		type CollectionDef,
-	} from "$lib/api.gen";
+	} from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
 	import { Heading, Input, Text, Icon, Modal, Button } from "glow";
 	import { sortable } from "glow";
@@ -58,21 +52,23 @@
 
 	// Load browse data on mount
 	$effect(() => {
-		fetchWatchHistory()
-			.then((res) => {
-				historyItems = res.data;
+		api.watch
+			.history()
+			.then((items) => {
+				historyItems = items;
 			})
 			.catch(() => {});
-		listCollectionDefs()
-			.then(async (res) => {
-				defs = res.data;
+		api.collections
+			.listDefs()
+			.then(async (list) => {
+				defs = list;
 				const entries = await Promise.all(
-					res.data
+					list
 						.filter((d) => d.slug !== CONTINUE_SLUG)
 						.map(async (d) => {
 							try {
-								const r = await fetchCollection(d.slug);
-								return [d.slug, r.data] as const;
+								const items = await api.collections.get(d.slug);
+								return [d.slug, items] as const;
 							} catch {
 								return [d.slug, [] as CollectionItem[]] as const;
 							}
@@ -104,8 +100,8 @@
 		addResults = [];
 		addItems = collectionItems[def.slug] ?? [];
 		addOpen = true;
-		const res = await fetchCollection(def.slug).catch(() => null);
-		if (res && addTarget?.slug === def.slug) addItems = res.data;
+		const items = await api.collections.get(def.slug).catch(() => null);
+		if (items && addTarget?.slug === def.slug) addItems = items;
 	}
 
 	function onAddSearch(v: string) {
@@ -118,8 +114,7 @@
 		addSearching = true;
 		addTimer = setTimeout(async () => {
 			try {
-				const res = await search({ q: addQuery });
-				addResults = res.data;
+				addResults = await api.search.search(addQuery);
 			} finally {
 				addSearching = false;
 			}
@@ -127,10 +122,10 @@
 	}
 
 	async function refreshTarget(slug: string) {
-		const res = await fetchCollection(slug).catch(() => null);
-		if (res) {
-			collectionItems = { ...collectionItems, [slug]: res.data };
-			if (addTarget?.slug === slug) addItems = res.data;
+		const items = await api.collections.get(slug).catch(() => null);
+		if (items) {
+			collectionItems = { ...collectionItems, [slug]: items };
+			if (addTarget?.slug === slug) addItems = items;
 		}
 	}
 
@@ -138,17 +133,17 @@
 		if (!addTarget) return;
 		const slug = addTarget.slug;
 		if (isAdded(r.media_type, r.id)) {
-			await removeFromCollection(slug, r.media_type, r.id).catch(
-				() => {},
-			);
+			await api.collections.remove(slug, r.media_type, r.id).catch(() => {});
 		} else {
-			await addToCollection({
-				collection: slug,
-				media_type: r.media_type,
-				tmdb_id: r.id,
-				title: r.title,
-				poster_path: r.poster_path ?? undefined,
-			}).catch(() => {});
+			await api.collections
+				.add({
+					collection: slug,
+					media_type: r.media_type,
+					tmdb_id: r.id,
+					title: r.title,
+					poster_path: r.poster_path ?? null,
+				})
+				.catch(() => {});
 		}
 		await refreshTarget(slug);
 	}
@@ -156,11 +151,9 @@
 	async function removeAddedItem(item: CollectionItem) {
 		if (!addTarget) return;
 		const slug = addTarget.slug;
-		await removeFromCollection(
-			slug,
-			item.media_type,
-			item.tmdb_id,
-		).catch(() => {});
+		await api.collections
+			.remove(slug, item.media_type, item.tmdb_id)
+			.catch(() => {});
 		await refreshTarget(slug);
 	}
 
@@ -170,12 +163,15 @@
 		// sortable mutates addItems in place; reflect the new order on the
 		// home rows immediately, then persist.
 		collectionItems = { ...collectionItems, [slug]: [...addItems] };
-		await reorderCollection(slug, {
-			items: addItems.map((i) => ({
-				media_type: i.media_type,
-				tmdb_id: i.tmdb_id,
-			})),
-		}).catch(() => {});
+		await api.collections
+			.reorder(
+				slug,
+				addItems.map((i) => ({
+					media_type: i.media_type,
+					tmdb_id: i.tmdb_id,
+				})),
+			)
+			.catch(() => {});
 	}
 
 	const browsing = $derived(query.length < 2 && results.length === 0);
@@ -201,8 +197,7 @@
 		loading = true;
 		timeout = setTimeout(async () => {
 			try {
-				const res = await search({ q: query });
-				results = res.data;
+				results = await api.search.search(query);
 			} finally {
 				loading = false;
 			}
@@ -212,10 +207,15 @@
 	// Run initial search if q param is present
 	if (browser && query.length >= 2) {
 		loading = true;
-		search({ q: query }).then((res) => {
-			results = res.data;
-			loading = false;
-		}).catch(() => { loading = false; });
+		api.search
+			.search(query)
+			.then((items) => {
+				results = items;
+				loading = false;
+			})
+			.catch(() => {
+				loading = false;
+			});
 	}
 </script>
 

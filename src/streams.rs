@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use cinema_schema::cinema_type;
 use futures::future::join_all;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::warn;
-use utoipa::ToSchema;
 
 // --- Raw Stremio addon response types ---
 
@@ -33,7 +33,7 @@ struct BehaviorHints {
 
 // --- Enriched public types ---
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct Stream {
     pub info_hash: String,
     pub file_idx: i64,

@@ -232,4 +232,10 @@
 	.override {
 		z-index: 1;
 	}
+
+	@media (max-width: 768px) {
+		.layer {
+			transform: none !important;
+		}
+	}
 </style>
