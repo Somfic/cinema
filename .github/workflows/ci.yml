@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  cargo-check:
-    name: backend
+  schema:
+    name: schema
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -16,15 +16,53 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Regenerate `src/_generated.rs` and `frontend/src/lib/schema/*.ts` from
+      # the Rust traits/types so downstream jobs have the up-to-date schema.
+      - name: Generate schema
+        run: |
+          cargo run -p cinema-schema-codegen --quiet -- --rust-only
+          TS_RS_EXPORT_DIR="$PWD/target/schema-bindings" cargo test --quiet export_bindings
+          TS_RS_EXPORT_DIR="$PWD/target/schema-bindings" cargo run -p cinema-schema-codegen --quiet
+
+      - name: Upload generated schema
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema
+          path: |
+            src/_generated.rs
+            frontend/src/lib/schema/*.ts
+
+  cargo-check:
+    name: backend
+    needs: schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: schema
+          path: .
+
       - run: cargo check
 
   frontend-build:
     name: frontend
+    needs: schema
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
       - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: schema
+          path: .
 
       - run: bun install
         working-directory: frontend

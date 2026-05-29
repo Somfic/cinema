@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Season, Episode, WatchHistoryItem } from "$lib/api.gen";
+	import type { Season, Episode, WatchHistoryItem } from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
 	import { Text } from "glow";
 	import PlayCard from "./PlayCard.svelte";
@@ -61,7 +61,9 @@
 					alt=""
 				/>
 				<div class="ep-info">
-					<Text size="xs" variant="muted">Episode {ep.episode_number}</Text>
+					<Text size="xs" variant="muted"
+						>Episode {ep.episode_number}</Text
+					>
 					<Text size="sm" weight="semibold">{ep.name}</Text>
 				</div>
 			</button>
@@ -180,7 +182,7 @@
 		height: 100%;
 		overflow-y: auto;
 		padding: 2rem;
-		padding-top: 15vh;
+		padding-top: 3.7rem;
 		display: flex;
 		flex-direction: column;
 		justify-content: space-between;
@@ -207,6 +209,7 @@
 			max-height: 30vh;
 			padding: 0.5rem;
 			padding-top: 0.5rem;
+			flex: 0 0 auto;
 		}
 
 		.ep-thumb {
@@ -215,9 +218,11 @@
 
 		.sidebar {
 			width: 100%;
-			height: auto;
+			flex: 1 1 auto;
+			min-height: 0;
 			padding: 1rem;
 			padding-top: 1rem;
+			justify-content: flex-end;
 		}
 
 		.ep-title {

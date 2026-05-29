@@ -5,22 +5,15 @@
 	import { fade } from "svelte/transition";
 	import * as topbar from "$lib/topbar.svelte";
 	import {
-		movieStreams,
-		tvStreams,
-		movieSubtitles,
-		tvSubtitles,
-		subtitleCues,
+		api,
 		type MediaItem,
 		type MediaType,
 		type Stream,
 		type SubtitleTrack,
 		type SubtitleCue,
 		type SearchResult,
-		similar as fetchSimilar,
-		recordWatch,
-		watchHistory as fetchWatchHistory,
 		type WatchHistoryItem,
-	} from "$lib/api.gen";
+	} from "$lib/schema";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import { Banner, Button, Spinner, Text } from "glow";
 	import CyclingBackdrop from "$lib/components/CyclingBackdrop.svelte";
@@ -84,7 +77,9 @@
 	}
 	let streamStats = $state<StreamStats | null>(null);
 	let pieceMap = $state<number[]>([]);
-	let statsPollTimer: ReturnType<typeof setInterval> | undefined;
+	// Both stats and the piece bitmap arrive via WS push.
+	let statsUnsub: (() => void) | undefined;
+	let piecesUnsub: (() => void) | undefined;
 
 	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
 	let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
@@ -199,20 +194,22 @@
 		similarItems = [];
 		getDetails(type, id)
 			.then((res) => {
-				item = res.data;
+				item = res;
 				if (selectedSeason !== null && selectedEpisode !== null) {
 					// Episode was selected via URL params — navigate to episode detail
 				}
 				// Fetch similar + watch history in background
-				fetchSimilar(type, id)
-					.then((r) => {
-						similarItems = r.data;
+				api.media
+					.similar(type, id)
+					.then((items) => {
+						similarItems = items;
 					})
 					.catch(() => {});
-				fetchWatchHistory()
-					.then((r) => {
+				api.watch
+					.history()
+					.then((items) => {
 						resumeEntry =
-							r.data.find(
+							items.find(
 								(w) =>
 									w.media_type === type &&
 									w.tmdb_id === id &&
@@ -276,7 +273,7 @@
 		if (!item) return;
 		loadingStreams = true;
 		try {
-			streams = (await movieStreams(item.id)).data;
+			streams = await api.streams.movie(item.id);
 			if (streams.length > 0) play(streams[0]);
 		} catch (e: any) {
 			error = e.message;
@@ -289,7 +286,7 @@
 		if (!item) return;
 		loadingStreams = true;
 		try {
-			streams = (await tvStreams(item.id, season, episode)).data;
+			streams = await api.streams.tv(item.id, season, episode);
 			if (streams.length > 0) play(streams[0]);
 		} catch (e: any) {
 			error = e.message;
@@ -334,11 +331,13 @@
 		// Fetch streams in background so the stream switcher works
 		try {
 			if (item.media_type === "movie") {
-				streams = (await movieStreams(item.id)).data;
+				streams = await api.streams.movie(item.id);
 			} else if (selectedSeason != null && selectedEpisode != null) {
-				streams = (
-					await tvStreams(item.id, selectedSeason, selectedEpisode)
-				).data;
+				streams = await api.streams.tv(
+					item.id,
+					selectedSeason,
+					selectedEpisode,
+				);
 			}
 		} catch {}
 	}
@@ -433,29 +432,35 @@
 	}
 
 	function pollStreamStats(infoHash: string, fileIdx: number) {
-		if (statsPollTimer) clearInterval(statsPollTimer);
+		stopStreamStats();
 		streamStats = null;
 		pieceMap = [];
 
-		const check = async () => {
-			try {
-				const [statsRes, piecesRes] = await Promise.all([
-					fetch(`/api/stream/${infoHash}/stats`),
-					fetch(`/api/stream/${infoHash}/${fileIdx}/pieces`),
-				]);
-				streamStats = await statsRes.json();
-				pieceMap = await piecesRes.json();
-			} catch {}
-		};
+		statsUnsub = api.streamsEvents.onStats((p) => {
+			if (p.info_hash !== infoHash) return;
+			streamStats = {
+				progress_bytes: p.progress_bytes,
+				total_bytes: p.total_bytes,
+				download_speed_mbps: p.download_speed_mbps,
+				peers: p.peers,
+				finished: p.finished,
+			};
+		});
 
-		check();
-		statsPollTimer = setInterval(check, 2000);
+		piecesUnsub = api.streamsEvents.onPieces((p) => {
+			if (p.info_hash !== infoHash || p.file_idx !== fileIdx) return;
+			pieceMap = p.pieces;
+		});
 	}
 
 	function stopStreamStats() {
-		if (statsPollTimer) {
-			clearInterval(statsPollTimer);
-			statsPollTimer = undefined;
+		if (statsUnsub) {
+			statsUnsub();
+			statsUnsub = undefined;
+		}
+		if (piecesUnsub) {
+			piecesUnsub();
+			piecesUnsub = undefined;
 		}
 		streamStats = null;
 		pieceMap = [];
@@ -530,11 +535,13 @@
 		loadingSubtitles = true;
 		try {
 			if (item.media_type === "movie") {
-				subtitleTracks = (await movieSubtitles(item.id)).data;
+				subtitleTracks = await api.subtitles.movie(item.id);
 			} else if (selectedSeason !== null && selectedEpisode !== null) {
-				subtitleTracks = (
-					await tvSubtitles(item.id, selectedSeason, selectedEpisode)
-				).data;
+				subtitleTracks = await api.subtitles.tv(
+					item.id,
+					selectedSeason,
+					selectedEpisode,
+				);
 			}
 			if (subtitleTracks.length > 0)
 				await selectSubtitleTrack(subtitleTracks[0]);
@@ -553,7 +560,7 @@
 				const res = await fetch(track.url);
 				activeCues = await res.json();
 			} else {
-				activeCues = (await subtitleCues({ url: track.url })).data;
+				activeCues = await api.subtitles.cues(track.url);
 			}
 		} catch {
 			activeCues = [];
@@ -588,12 +595,13 @@
 		replaceState(u, {});
 
 		// Refresh resume entry so the Continue button shows updated progress
-		fetchWatchHistory()
-			.then((r) => {
+		api.watch
+			.history()
+			.then((items) => {
 				const type = page.params.type;
 				const id = Number(page.params.id);
 				resumeEntry =
-					r.data.find(
+					items.find(
 						(w) =>
 							w.media_type === type &&
 							w.tmdb_id === id &&
@@ -610,13 +618,13 @@
 		// For TV, don't save without season/episode
 		if (item.media_type === "tv" && (!selectedSeason || !selectedEpisode))
 			return;
-		recordWatch({
+		api.watch.record({
 			media_type: item.media_type,
 			tmdb_id: item.id,
 			title: item.title,
-			poster_path: item.poster_path ?? undefined,
-			season: selectedSeason ?? undefined,
-			episode: selectedEpisode ?? undefined,
+			poster_path: item.poster_path ?? null,
+			season: selectedSeason ?? null,
+			episode: selectedEpisode ?? null,
 			info_hash: selectedStream.info_hash,
 			file_idx: selectedStream.file_idx,
 			progress: playerTime,
@@ -922,7 +930,8 @@
 	}
 
 	@media (max-width: 768px) {
-		.gradient-right {
+		.gradient-right,
+		.gradient-left {
 			background: linear-gradient(
 				to bottom,
 				transparent 0%,

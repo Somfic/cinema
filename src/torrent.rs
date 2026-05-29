@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::OnceLock;
+
+use cinema_schema::cinema_type;
 use std::task::{Context, Poll};
 
 use librqbit::api::TorrentIdOrHash;
@@ -31,7 +33,7 @@ pub struct TorrentHandle {
     pub managed: Arc<ManagedTorrent>,
 }
 
-#[derive(serde::Serialize, Clone, utoipa::ToSchema)]
+#[cinema_type]
 pub struct AudioTrack {
     /// ffmpeg absolute stream index
     pub index: usize,
@@ -42,7 +44,7 @@ pub struct AudioTrack {
     pub codec: String,
 }
 
-#[derive(serde::Serialize, Clone, utoipa::ToSchema)]
+#[cinema_type]
 pub struct EmbeddedSubtitleTrack {
     /// ffmpeg absolute stream index
     pub index: usize,
@@ -659,6 +661,21 @@ impl TorrentEngine {
                 }
             }
         });
+    }
+
+    /// Returns the info hash of every currently-managed torrent. Used by the
+    /// stats broadcaster to fan a periodic `streams_stats` event out to WS
+    /// subscribers.
+    pub fn active_info_hashes(&self) -> Vec<String> {
+        self.session
+            .with_torrents(|iter| iter.map(|(_, h)| h.info_hash().as_string()).collect())
+    }
+
+    /// `(info_hash, file_idx)` for every file currently being streamed via
+    /// `stream()`. Used by the pieces broadcaster to push bitmap updates only
+    /// for files a client is actively watching.
+    pub async fn active_streams(&self) -> Vec<(String, usize)> {
+        self.stream_handles.lock().await.keys().cloned().collect()
     }
 
     /// Get stats for an active torrent by info hash.

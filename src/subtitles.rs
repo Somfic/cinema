@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use cinema_schema::cinema_type;
+use serde::Deserialize;
 use tracing::warn;
-use utoipa::ToSchema;
 
 const OPENSUBTITLES_ADDON: &str = "https://opensubtitles-v3.strem.io";
 
@@ -18,7 +18,7 @@ struct RawSubtitle {
     g: Option<String>,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct SubtitleTrack {
     pub id: String,
     pub language: String,
@@ -27,7 +27,7 @@ pub struct SubtitleTrack {
     pub score: i64,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[cinema_type]
 pub struct SubtitleCue {
     /// Start time in seconds
     pub start: f64,

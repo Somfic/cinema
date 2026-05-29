@@ -156,15 +156,18 @@
 	.action {
 		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 4px;
 		font-size: 0.85rem;
 		font-weight: 600;
 		color: white;
+		text-align: left;
 	}
 
 	.remaining {
 		font-size: 0.7rem;
 		color: rgba(255, 255, 255, 0.5);
+		white-space: nowrap;
 	}
 
 	.progress {
