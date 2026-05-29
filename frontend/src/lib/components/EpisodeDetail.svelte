@@ -209,6 +209,7 @@
 			max-height: 30vh;
 			padding: 0.5rem;
 			padding-top: 0.5rem;
+			flex: 0 0 auto;
 		}
 
 		.ep-thumb {
@@ -217,9 +218,11 @@
 
 		.sidebar {
 			width: 100%;
-			height: auto;
+			flex: 1 1 auto;
+			min-height: 0;
 			padding: 1rem;
 			padding-top: 1rem;
+			justify-content: flex-end;
 		}
 
 		.ep-title {

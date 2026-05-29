@@ -930,7 +930,8 @@
 	}
 
 	@media (max-width: 768px) {
-		.gradient-right {
+		.gradient-right,
+		.gradient-left {
 			background: linear-gradient(
 				to bottom,
 				transparent 0%,
