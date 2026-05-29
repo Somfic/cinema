@@ -598,23 +598,37 @@
 	}
 
 	@media (max-width: 768px) {
+		.genres-overlay {
+			top: 0;
+			bottom: auto;
+			padding: 0 1rem 1rem;
+			flex-direction: column;
+			max-width: none;
+		}
+
 		.sidebar {
 			width: 100%;
 			padding: 1rem;
 			padding-top: 40vh;
-			min-height: auto;
+			min-height: 100%;
+			box-sizing: border-box;
+			gap: 1rem;
 		}
 
 		.title-area {
 			flex: 0;
+			align-items: center;
+			text-align: center;
 		}
 
 		.logo {
-			max-width: 60%;
+			max-width: 100%;
+			width: 100%;
 		}
 
 		.title {
-			font-size: 1.5rem;
+			font-size: 2rem;
+			width: 100%;
 		}
 
 		.actions-row {
