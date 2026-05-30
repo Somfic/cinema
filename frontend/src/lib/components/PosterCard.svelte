@@ -29,11 +29,6 @@
 		bottomRight?: Snippet;
 	} = $props();
 
-	// Fixed row height; idle is the 2:3 poster, hover grows wider (3:2-ish).
-	const ROW_H = 220;
-	const POSTER_W = Math.round((ROW_H * 2) / 3);
-	const HOVER_W = Math.round(ROW_H * 1.5);
-
 	// Cache the raw backdrop list per title so we fetch each one once.
 	const backdropCache = new Map<string, string[]>();
 
@@ -49,9 +44,7 @@
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let hoverToken = 0;
 
-	const posterSrc = $derived(
-		posterPath ? imageUrl(posterPath, "w342") : "",
-	);
+	const posterSrc = $derived(posterPath ? imageUrl(posterPath, "w342") : "");
 
 	// Whenever we're not hovering, the poster is the source of truth.
 	$effect(() => {
@@ -156,9 +149,7 @@
 	bind:this={node}
 	class="poster-card"
 	class:expand
-	style={expand
-		? `height:${ROW_H}px;width:${hovering ? HOVER_W : POSTER_W}px`
-		: undefined}
+	class:hovering={expand && hovering}
 	onmouseenter={onEnter}
 	onmouseleave={stop}
 >
@@ -181,6 +172,26 @@
 	.poster-card.expand {
 		flex: 0 0 auto;
 		position: relative;
+		width: 147px;
+		height: 220px;
 		transition: width 240ms ease;
+	}
+
+	.poster-card.expand.hovering {
+		width: 330px;
+	}
+
+	@media (max-width: 768px) {
+		.poster-card.expand,
+		.poster-card.expand.hovering {
+			width: calc((100vw - 2rem - 1.5rem) / 3.1);
+			height: auto;
+			aspect-ratio: 147 / 220;
+		}
+
+		.poster-card.expand :global(.text) {
+			font-size: 0.65rem;
+			line-height: 1.3;
+		}
 	}
 </style>
