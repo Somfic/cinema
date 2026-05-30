@@ -1,10 +1,10 @@
 <script lang="ts">
 	import {
-		api,
 		type MediaItem,
 		type SearchResult,
 		type WatchHistoryItem,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import {
 		Button,

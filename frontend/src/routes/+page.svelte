@@ -1,11 +1,11 @@
 <script lang="ts">
 	import {
-		api,
 		type SearchResult,
 		type WatchHistoryItem,
 		type CollectionItem,
 		type CollectionDef,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import { Heading, Input, Text, Icon, Modal, Button } from "glow";
 	import { sortable } from "glow";

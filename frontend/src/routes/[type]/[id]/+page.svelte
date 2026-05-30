@@ -5,7 +5,6 @@
 	import { fade } from "svelte/transition";
 	import * as topbar from "$lib/topbar.svelte";
 	import {
-		api,
 		type MediaItem,
 		type MediaType,
 		type Stream,
@@ -14,6 +13,7 @@
 		type SearchResult,
 		type WatchHistoryItem,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import { remote } from "$lib/remote.svelte";
 

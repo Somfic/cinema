@@ -1,4 +1,5 @@
-import { api, type MediaType } from "$lib/schema";
+import type { MediaType } from "$lib/schema";
+import { api } from "$lib/api";
 
 export function imageUrl(path: string, size: string = "original"): string {
 	return `/api/image/${size}${path}`;

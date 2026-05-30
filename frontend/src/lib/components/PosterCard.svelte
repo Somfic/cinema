@@ -3,7 +3,7 @@
 	import type { Snippet } from "svelte";
 	import { onDestroy } from "svelte";
 	import { imageUrl } from "$lib/utils";
-	import { api } from "$lib/schema";
+	import { api } from "$lib/api";
 
 	let {
 		posterPath,

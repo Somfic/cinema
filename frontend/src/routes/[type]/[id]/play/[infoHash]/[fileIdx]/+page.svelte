@@ -3,13 +3,13 @@
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import {
-		api,
 		type MediaItem,
 		type MediaType,
 		type SubtitleTrack,
 		type SubtitleCue,
 		type Stream,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import { remote, type PlayerControls } from "$lib/remote.svelte";
