@@ -1,19 +1,12 @@
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::StatusCode,
-};
-use serde::Serialize;
-use utoipa::ToSchema;
+use cinema_schema::cinema_type;
 
 use crate::{
     app::{AppContext, Error},
     downloads::Download,
     file_system,
-    routes::AppError,
 };
 
-#[derive(Serialize, ToSchema)]
+#[cinema_type]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     Download,
@@ -21,7 +14,7 @@ pub enum EntryKind {
 }
 
 // TODO: replace strings with enums (reuse enums also in downloads.rs)
-#[derive(Serialize, ToSchema)]
+#[cinema_type]
 pub struct CacheEntry {
     /// "download" for tracked downloads, "orphan" for stray torrent dirs.
     kind: EntryKind,
@@ -46,17 +39,14 @@ pub struct CacheEntry {
     created_at: Option<String>,
 }
 
-#[utoipa::path(get, path = "/cache/items", responses((status = 200, body = Vec<CacheEntry>)))]
-pub async fn list_cache_items(
-    State(ctx): State<AppContext>,
-) -> Result<Json<Vec<CacheEntry>>, AppError> {
+pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error> {
     let downloads =
         sqlx::query_as::<_, Download>("SELECT * FROM downloads ORDER BY created_at DESC")
             .fetch_all(&ctx.db)
             .await
             .map_err(|e| Error::Generic(e.to_string()))?;
 
-    let torrents = file_system::torrents_root(&ctx);
+    let torrents = file_system::torrents_root(ctx);
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<CacheEntry> = Vec::with_capacity(downloads.len());
 
@@ -125,24 +115,20 @@ pub async fn list_cache_items(
         }
     }
 
-    Ok(Json(entries))
+    Ok(entries)
 }
 
-#[utoipa::path(delete, path = "/cache/orphan/{info_hash}", responses((status = 204)))]
-pub async fn delete_cache_orphan(
-    State(ctx): State<AppContext>,
-    Path(info_hash): Path<String>,
-) -> Result<StatusCode, AppError> {
+pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<(), Error> {
     // Reject anything that could escape the torrents root.
     if info_hash.is_empty()
         || info_hash.contains('/')
         || info_hash.contains('\\')
         || info_hash.contains("..")
     {
-        return Err(Error::InvalidInput("invalid info_hash".into()).into());
+        return Err(Error::InvalidInput("invalid info_hash".into()));
     }
 
-    let root = file_system::torrents_root(&ctx);
+    let root = file_system::torrents_root(ctx);
     let target = root.join(&info_hash);
 
     // Confirm the resolved path is inside the torrents root.
@@ -151,18 +137,17 @@ pub async fn delete_cache_orphan(
     if let (Some(r), Some(t)) = (canon_root, canon_target)
         && !t.starts_with(&r)
     {
-        return Err(Error::InvalidInput("invalid info_hash".into()).into());
+        return Err(Error::InvalidInput("invalid info_hash".into()));
     }
 
     if target.exists() {
         tokio::fs::remove_dir_all(&target).await?;
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
-#[utoipa::path(post, path = "/cache/clear-app-cache", responses((status = 204)))]
-pub async fn clear_app_cache(State(ctx): State<AppContext>) -> Result<StatusCode, AppError> {
+pub async fn clear_app_cache(ctx: &AppContext) -> Result<(), Error> {
     crate::hls::stop_all().await;
 
     // Wipe every subdirectory of data_dir/fs/ except `torrents/` (downloads).
@@ -185,5 +170,5 @@ pub async fn clear_app_cache(State(ctx): State<AppContext>) -> Result<StatusCode
         }
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }

@@ -1,15 +1,12 @@
-use axum::{Json, extract::State};
-use serde::Serialize;
-use utoipa::ToSchema;
+use cinema_schema::cinema_type;
 
 use crate::{
     app::{AppContext, Error},
     downloads::Download,
     file_system,
-    routes::AppError,
 };
 
-#[derive(Serialize, ToSchema)]
+#[cinema_type]
 pub struct DiskStats {
     /// Total filesystem size containing data_dir.
     total_bytes: u64,
@@ -31,8 +28,7 @@ pub struct DiskStats {
     orphan_bytes: u64,
 }
 
-#[utoipa::path(get, path = "/cache/disk", responses((status = 200, body = DiskStats)))]
-pub async fn get_cache_disk(State(ctx): State<AppContext>) -> Result<Json<DiskStats>, AppError> {
+pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
     let (total_bytes, free_bytes) = file_system::fs_stats(&ctx.config.data_dir)?;
     let used_bytes = total_bytes.saturating_sub(free_bytes);
 
@@ -81,7 +77,7 @@ pub async fn get_cache_disk(State(ctx): State<AppContext>) -> Result<Json<DiskSt
 
     let torrents_bytes = tracked_bytes.saturating_add(orphan_bytes);
 
-    Ok(Json(DiskStats {
+    Ok(DiskStats {
         total_bytes,
         free_bytes,
         used_bytes,
@@ -91,5 +87,5 @@ pub async fn get_cache_disk(State(ctx): State<AppContext>) -> Result<Json<DiskSt
         movies_bytes,
         tv_bytes,
         orphan_bytes,
-    }))
+    })
 }

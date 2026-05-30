@@ -39,5 +39,6 @@ fn error_kind(e: &Error) -> (StatusCode, &'static str) {
         Error::MigrationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Migration"),
         Error::AddressParseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal"),
         Error::JsonError(_) => (StatusCode::BAD_REQUEST, "InvalidJson"),
+        Error::InvalidInput(_) => (StatusCode::BAD_REQUEST, "InvalidInput"),
     }
 }

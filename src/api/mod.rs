@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod collections;
 pub mod downloads;
 pub mod hls;

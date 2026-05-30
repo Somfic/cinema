@@ -1,13 +1,5 @@
 <script lang="ts">
-	import {
-		listCacheItems,
-		getCacheDisk,
-		deleteCacheOrphan,
-		clearAppCache,
-		deleteDownload,
-		type CacheEntry,
-		type DiskStats,
-	} from "$lib/api.gen";
+	import { api, type CacheEntry, type DiskStats } from "$lib/schema";
 	import Spinner from "$lib/components/Spinner.svelte";
 	import { imageUrl, formatBytes } from "$lib/utils";
 	import { Heading, Button, Text, Pill, Modal } from "glow";
@@ -25,14 +17,16 @@
 	let clearOpen = $state(false);
 
 	function refresh() {
-		listCacheItems()
+		api.cache
+			.items()
 			.then((r) => {
-				items = r.data;
+				items = r;
 			})
 			.catch(() => {});
-		getCacheDisk()
+		api.cache
+			.disk()
 			.then((r) => {
-				disk = r.data;
+				disk = r;
 			})
 			.catch(() => {});
 	}
@@ -40,8 +34,8 @@
 	$effect(() => {
 		loading = true;
 		Promise.allSettled([
-			listCacheItems().then((r) => (items = r.data)),
-			getCacheDisk().then((r) => (disk = r.data)),
+			api.cache.items().then((r) => (items = r)),
+			api.cache.disk().then((r) => (disk = r)),
 		]).finally(() => {
 			loading = false;
 		});
@@ -149,9 +143,9 @@
 		if (!target) return;
 		try {
 			if (target.kind === "orphan") {
-				await deleteCacheOrphan(target.info_hash);
+				await api.cache.orphan(target.info_hash);
 			} else if (target.id != null) {
-				await deleteDownload(target.id);
+				await api.downloads.delete(target.id);
 			}
 		} catch {
 			/* ignored — UI just refetches */
@@ -162,7 +156,7 @@
 	async function performClear() {
 		clearOpen = false;
 		try {
-			await clearAppCache();
+			await api.cache.clearAppCache();
 		} catch {
 			/* ignored */
 		}

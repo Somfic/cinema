@@ -3,8 +3,11 @@ use std::path::Path;
 use crate::AppContext;
 use crate::app::Error;
 
-pub mod cache;
-pub mod stats;
+mod cache;
+mod stats;
+
+pub use cache::{CacheEntry, clear_app_cache, delete_cache_orphan, list_cache_items};
+pub use stats::{DiskStats, get_cache_disk};
 
 type SizeInBytes = u64;
 
