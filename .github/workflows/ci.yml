@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  schema:
-    name: schema
+  backend:
+    name: backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -16,43 +16,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Regenerate `src/_generated.rs` and `frontend/src/lib/schema/*.ts` from
-      # the Rust traits/types so downstream jobs have the up-to-date schema.
-      - name: Generate schema
+      # `cargo build` runs `build.rs`, which invokes draad codegen and writes
+      # `_generated.rs` into `OUT_DIR`. The ts-rs per-type bindings come from
+      # `cargo test export_bindings`; then a second build with `CINEMA_EMIT_TS=1`
+      # has draad emit the `frontend/src/lib/schema/*.ts` files for the
+      # frontend job.
+      - name: Generate schema + build
         run: |
-          cargo run --manifest-path ../draad/Cargo.toml -p draad --features codegen --bin draad --quiet -- --rust-only
-          TS_RS_EXPORT_DIR="$PWD/target/draad-bindings" cargo test --quiet export_bindings
-          TS_RS_EXPORT_DIR="$PWD/target/draad-bindings" cargo run --manifest-path ../draad/Cargo.toml -p draad --features codegen --bin draad --quiet
+          cargo test --quiet export_bindings
+          CINEMA_EMIT_TS=1 cargo build
+        env:
+          TS_RS_EXPORT_DIR: ${{ github.workspace }}/target/draad-bindings
 
-      - name: Upload generated schema
+      - name: Upload generated TS schema
         uses: actions/upload-artifact@v4
         with:
-          name: schema
-          path: |
-            src/_generated.rs
-            frontend/src/lib/schema/*.ts
+          name: ts-schema
+          path: frontend/src/lib/schema/*.ts
 
-  cargo-check:
-    name: backend
-    needs: schema
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: schema
-          path: .
-
-      - run: cargo check
-
-  frontend-build:
+  frontend:
     name: frontend
-    needs: schema
+    needs: backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -61,8 +45,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: schema
-          path: .
+          name: ts-schema
+          path: frontend/src/lib/schema
 
       - run: bun install
         working-directory: frontend

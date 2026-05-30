@@ -1,11 +1,9 @@
-use cinema_schema::{cinema_events, cinema_type};
-
 /// One connected WebSocket client, as seen by every other client. The full
 /// roster is broadcast on the `remote_presence` topic whenever it changes, so a
 /// phone can discover TVs to pair with and a TV can detect a remote pairing to
 /// it. There is no auth/user concept on the server — pairing is presence-based
 /// and assumes a trusted local network.
-#[cinema_type]
+#[draad::ty]
 pub struct ClientPresence {
     /// Per-window client id, browser-generated and held in `sessionStorage`
     /// (unique per tab, stable across reloads).
@@ -24,7 +22,7 @@ pub struct ClientPresence {
     pub paired_to: Option<String>,
 }
 
-#[cinema_events(namespace = "remote")]
+#[draad::events(namespace = "remote")]
 pub trait RemoteEvents {
     /// Full roster of connected clients, re-broadcast on every
     /// connect / disconnect / role change. Topic: `remote_presence`.

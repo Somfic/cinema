@@ -18,7 +18,7 @@ build: schema
 # only the ts-rs export and the draad TS pass need an explicit pass.
 schema:
     cargo test --quiet export_bindings || true
-    DRAAD_EMIT_TS=1 cargo build --quiet
+    CINEMA_EMIT_TS=1 cargo build --quiet
 
 check:
     cargo fmt --all -- --check
