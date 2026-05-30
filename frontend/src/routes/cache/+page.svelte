@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { api, type CacheEntry, type DiskStats } from "$lib/schema";
+	import { type CacheEntry, type DiskStats } from "$lib/schema";
+	import { api } from "$lib/api";
 	import Spinner from "$lib/components/Spinner.svelte";
 	import { imageUrl, formatBytes } from "$lib/utils";
 	import { Heading, Button, Text, Pill, Modal } from "glow";

@@ -1,10 +1,8 @@
-use cinema_schema::cinema_api;
-
 use crate::app::{AppContext, Error};
 
 pub(crate) use crate::file_system;
 
-#[cinema_api(namespace = "cache")]
+#[draad::api(namespace = "cache")]
 pub trait CacheApi {
     // GET
     /// List all media entires that are currenly cached
@@ -23,7 +21,7 @@ pub trait CacheApi {
     async fn disk(&self) -> Result<file_system::DiskStats, Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl CacheApi for AppContext {
     async fn items(&self) -> Result<Vec<file_system::CacheEntry>, Error> {
         file_system::list_cache_items(self).await

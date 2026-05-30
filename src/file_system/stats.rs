@@ -1,12 +1,10 @@
-use cinema_schema::cinema_type;
-
 use crate::{
     app::{AppContext, Error},
     downloads::Download,
     file_system,
 };
 
-#[cinema_type]
+#[draad::ty]
 pub struct DiskStats {
     /// Total filesystem size containing data_dir.
     total_bytes: u64,
@@ -33,7 +31,7 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
     let used_bytes = total_bytes.saturating_sub(free_bytes);
 
     let cinema_bytes = file_system::dir_size(&ctx.config.data_dir).await;
-    let hls_bytes = file_system::dir_size(&file_system::hls_root(&ctx)).await;
+    let hls_bytes = file_system::dir_size(&file_system::hls_root(ctx)).await;
 
     // Per-category torrent breakdown matches list_cache_items so the chart and list agree.
     let downloads = sqlx::query_as::<_, Download>("SELECT * FROM downloads")

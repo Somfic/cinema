@@ -1,12 +1,10 @@
-use cinema_schema::cinema_type;
-
 use crate::{
     app::{AppContext, Error},
     downloads::Download,
     file_system,
 };
 
-#[cinema_type]
+#[draad::ty]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     Download,
@@ -14,7 +12,7 @@ pub enum EntryKind {
 }
 
 // TODO: replace strings with enums (reuse enums also in downloads.rs)
-#[cinema_type]
+#[draad::ty]
 pub struct CacheEntry {
     /// "download" for tracked downloads, "orphan" for stray torrent dirs.
     kind: EntryKind,
