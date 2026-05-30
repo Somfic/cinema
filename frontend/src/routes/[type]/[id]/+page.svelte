@@ -5,7 +5,6 @@
 	import { fade } from "svelte/transition";
 	import * as topbar from "$lib/topbar.svelte";
 	import {
-		api,
 		type MediaItem,
 		type MediaType,
 		type Stream,
@@ -14,7 +13,12 @@
 		type SearchResult,
 		type WatchHistoryItem,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
+	import { remote } from "$lib/remote.svelte";
+
+	// This client is a remote-driven TV display.
+	const isTv = $derived(remote.mode === "tv");
 	import { Banner, Button, Spinner, Text } from "glow";
 	import CyclingBackdrop from "$lib/components/CyclingBackdrop.svelte";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
@@ -179,17 +183,29 @@
 	});
 
 	// ── Data loading ──
+	let loadedKey = "";
 	$effect(() => {
 		const type = page.params.type as MediaType;
 		const id = Number(page.params.id);
-		item = null;
-		streams = [];
+
+		// Sync season/episode from the URL on every navigation (this is what lets
+		// a mirrored TV follow the phone's episode selection and show the episode
+		// still as its backdrop).
 		selectedSeason = page.url.searchParams.has("s")
 			? Number(page.url.searchParams.get("s"))
 			: null;
 		selectedEpisode = page.url.searchParams.has("e")
 			? Number(page.url.searchParams.get("e"))
 			: null;
+
+		// Only (re)fetch when the actual title changes — a season/episode change
+		// must not clear `item` and re-fetch (that would flash the loader).
+		const key = `${type}/${id}`;
+		if (key === loadedKey) return;
+		loadedKey = key;
+
+		item = null;
+		streams = [];
 		error = null;
 		similarItems = [];
 		getDetails(type, id)
@@ -345,6 +361,21 @@
 	// ── Player ──
 	async function play(stream: Stream, fromResume = false) {
 		if (!item) return;
+
+		// When acting as a remote, hand playback to the paired TV instead of
+		// playing here. The TV navigates to the play route and starts streaming.
+		if (remote.mode === "remote" && remote.pairedId) {
+			remote.cast({
+				type: item.media_type,
+				id: item.id,
+				infoHash: stream.info_hash,
+				fileIdx: stream.file_idx,
+				season: item.media_type === "tv" ? selectedSeason : null,
+				episode: item.media_type === "tv" ? selectedEpisode : null,
+			});
+			return;
+		}
+
 		if (!fromResume) playerStartTime = 0;
 		selectedStream = stream;
 		streamUrl = null;
@@ -673,27 +704,28 @@
 				: backdropUrls}
 			overlay={slideIndex === 1 || selectedStream !== null}
 			override={selectedStream ? backdropUrls[0] : undefined}
-			position={backdropPosition}
+			position={isTv ? "0%" : backdropPosition}
 			bind:dominantColor={backdropColor}
 			bind:accentColor
 		/>
 	</div>
 	<div
 		class="gradient-right"
-		class:hidden={slideIndex > 0 || selectedStream !== null}
+		class:hidden={slideIndex > 0 || selectedStream !== null || isTv}
 		bind:this={gradientRightEl}
 	></div>
 	<div
 		class="gradient-left"
-		class:hidden={slideIndex !== 2 || selectedStream !== null}
+		class:hidden={slideIndex !== 2 || selectedStream !== null || isTv}
 		bind:this={gradientLeftEl}
 	></div>
 
-	<!-- Slider -->
+	<!-- Slider. In TV mode the screen is a remote-driven display: only the info
+	     hero shows (no episode browsing, no play controls) — the phone drives. -->
 	<div
 		class="slider"
 		class:faded={selectedStream !== null}
-		style="transform: translateX({-slideIndex * 100}vw)"
+		style="transform: translateX({-(isTv ? 0 : slideIndex) * 100}vw)"
 	>
 		<!-- Page 0: Info -->
 		<div class="page page-info">
@@ -702,6 +734,7 @@
 				{loadingStreams}
 				{similarItems}
 				{resumeEntry}
+				tvMode={isTv}
 				onwatch={loadAndPlayMovieStreams}
 				onresume={resume}
 				onselectseason={selectSeason}
@@ -709,35 +742,37 @@
 			/>
 		</div>
 
-		<!-- Page 1: Seasons + Episodes -->
-		<div class="page page-episodes">
-			{#if item.seasons?.length}
-				<SeasonBrowser
-					seasons={item.seasons}
-					onscrollseason={(n) => {
-						selectedSeason = n;
-						updateParams();
-					}}
-					onselectepisode={selectEpisode}
-				/>
-			{/if}
-		</div>
+		{#if !isTv}
+			<!-- Page 1: Seasons + Episodes -->
+			<div class="page page-episodes">
+				{#if item.seasons?.length}
+					<SeasonBrowser
+						seasons={item.seasons}
+						onscrollseason={(n) => {
+							selectedSeason = n;
+							updateParams();
+						}}
+						onselectepisode={selectEpisode}
+					/>
+				{/if}
+			</div>
 
-		<!-- Page 2: Episode Detail -->
-		<div class="page page-episode-detail">
-			{#if activeSeason && activeEpisode}
-				<EpisodeDetail
-					season={activeSeason}
-					episode={activeEpisode}
-					showTitle={item.title}
-					tmdbId={item.id}
-					{resumeEntry}
-					{loadingStreams}
-					onselectepisode={selectEpisode}
-					onplay={playEpisode}
-				/>
-			{/if}
-		</div>
+			<!-- Page 2: Episode Detail -->
+			<div class="page page-episode-detail">
+				{#if activeSeason && activeEpisode}
+					<EpisodeDetail
+						season={activeSeason}
+						episode={activeEpisode}
+						showTitle={item.title}
+						tmdbId={item.id}
+						{resumeEntry}
+						{loadingStreams}
+						onselectepisode={selectEpisode}
+						onplay={playEpisode}
+					/>
+				{/if}
+			</div>
+		{/if}
 	</div>
 
 	<!-- Player overlay -->

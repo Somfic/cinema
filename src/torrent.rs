@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use cinema_schema::cinema_type;
 use std::task::{Context, Poll};
 
 use librqbit::api::TorrentIdOrHash;
@@ -33,7 +32,7 @@ pub struct TorrentHandle {
     pub managed: Arc<ManagedTorrent>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct AudioTrack {
     /// ffmpeg absolute stream index
     pub index: usize,
@@ -44,7 +43,7 @@ pub struct AudioTrack {
     pub codec: String,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct EmbeddedSubtitleTrack {
     /// ffmpeg absolute stream index
     pub index: usize,

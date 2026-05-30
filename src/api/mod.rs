@@ -3,6 +3,7 @@ pub mod collections;
 pub mod downloads;
 pub mod hls;
 pub mod media;
+pub mod remote;
 pub mod search;
 pub mod streams;
 pub mod subtitles;

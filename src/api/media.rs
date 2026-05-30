@@ -1,11 +1,10 @@
-use cinema_schema::cinema_api;
 
 use crate::app::{AppContext, Error};
 use crate::tmdb::{MediaType, TmdbClient};
 
 pub use crate::tmdb::{MediaItem, SearchResult};
 
-#[cinema_api(namespace = "media")]
+#[draad::api(namespace = "media")]
 pub trait MediaApi {
     /// Full TMDB details for a movie
     async fn movie_details(&self, id: i64) -> Result<MediaItem, Error>;
@@ -20,7 +19,7 @@ pub trait MediaApi {
     async fn trending(&self) -> Result<Vec<SearchResult>, Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl MediaApi for AppContext {
     async fn movie_details(&self, id: i64) -> Result<MediaItem, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());

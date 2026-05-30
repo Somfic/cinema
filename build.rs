@@ -1,16 +1,20 @@
-use std::path::Path;
-
 fn main() {
-    // Regenerate `src/_generated.rs` from the schema in `src/` before this
-    // crate compiles, so a schema edit can never leave a stale generated file
-    // that breaks the build. `CARGO_MANIFEST_DIR` is the cinema repo root.
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let root = Path::new(&manifest);
-    cinema_schema_codegen::generate(root, true);
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let emit_ts = std::env::var("CINEMA_EMIT_TS").is_ok();
 
-    // Rerun when any backend source changes. Codegen only rewrites
-    // `_generated.rs` when its content actually differs, so re-touching it
-    // here does not cause a rebuild loop.
+    let mut cfg = draad::codegen::Config::new()
+        .root(&manifest_dir)
+        .generated_rs(format!("{out_dir}/_generated.rs"))
+        .skip_file("ws");
+
+    if !emit_ts {
+        cfg = cfg.rust_only();
+    }
+
+    cfg.generate().expect("draad codegen failed");
+
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CINEMA_EMIT_TS");
 }

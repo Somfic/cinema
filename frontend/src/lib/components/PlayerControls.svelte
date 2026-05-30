@@ -1,0 +1,566 @@
+<script lang="ts">
+	import type { Snippet } from "svelte";
+	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
+
+	interface AudioTrack {
+		id: number;
+		name: string;
+		lang?: string;
+	}
+	interface SubtitleTrack {
+		id: string;
+		language: string;
+		url: string;
+	}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	type StreamOption = any;
+
+	let {
+		currentTime,
+		duration,
+		buffered = 0,
+		paused,
+		loading = false,
+		volume,
+		muted,
+		streams = [],
+		activeStreamHash,
+		audioTracks = [],
+		activeAudioTrack = 0,
+		subtitleTracks = [],
+		subtitlesActive = false,
+		activeTrackUrl,
+		transcoding = { enabled: false, onlyAudio: false },
+		streamStats = null,
+		pieceMap = [],
+		loadingSubtitles = false,
+		accent,
+		volumeAlwaysOpen = false,
+		isFullscreen = false,
+		onTogglePlay,
+		onSeek,
+		onScrub,
+		onSetVolume,
+		onToggleMute,
+		onToggleFullscreen,
+		onStreamSelect,
+		onAudioSelect,
+		onSubtitleSelect,
+		onSubtitleOff,
+		onTranscodingChange,
+		subtitleOffsetControl,
+		rightExtra,
+	}: {
+		currentTime: number;
+		duration: number;
+		buffered?: number;
+		paused: boolean;
+		loading?: boolean;
+		volume: number;
+		muted: boolean;
+		streams?: StreamOption[];
+		activeStreamHash?: string;
+		audioTracks?: AudioTrack[];
+		activeAudioTrack?: number;
+		subtitleTracks?: SubtitleTrack[];
+		subtitlesActive?: boolean;
+		activeTrackUrl?: string;
+		transcoding?: { enabled: boolean; onlyAudio: boolean };
+		streamStats?: { total_bytes: number; finished: boolean } | null;
+		pieceMap?: number[];
+		loadingSubtitles?: boolean;
+		accent?: string;
+		volumeAlwaysOpen?: boolean;
+		isFullscreen?: boolean;
+		onTogglePlay: () => void;
+		onSeek: (time: number) => void;
+		onScrub?: (time: number) => void;
+		onSetVolume: (value: number) => void;
+		onToggleMute: () => void;
+		onToggleFullscreen?: () => void;
+		onStreamSelect?: (stream: StreamOption) => void;
+		onAudioSelect?: (track: AudioTrack) => void;
+		onSubtitleSelect?: (track: SubtitleTrack) => void;
+		onSubtitleOff?: () => void;
+		onTranscodingChange?: (enabled: boolean, onlyAudio: boolean) => void;
+		subtitleOffsetControl?: Snippet;
+		rightExtra?: Snippet;
+	} = $props();
+
+	let trackEl = $state<HTMLDivElement | undefined>(undefined);
+	let scrubbing = $state(false);
+	let scrubValue = $state(0);
+
+	const displayTime = $derived(scrubbing ? scrubValue : currentTime);
+	const progressPercent = $derived(
+		duration > 0 ? (displayTime / duration) * 100 : 0,
+	);
+	const bufferedPercent = $derived(
+		duration > 0 ? (buffered / duration) * 100 : 0,
+	);
+
+	function formatTime(seconds: number): string {
+		if (!isFinite(seconds) || seconds < 0) return "0:00";
+		const h = Math.floor(seconds / 3600);
+		const m = Math.floor((seconds % 3600) / 60);
+		const s = Math.floor(seconds % 60);
+		if (h > 0)
+			return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+		return `${m}:${s.toString().padStart(2, "0")}`;
+	}
+
+	function posFromEvent(clientX: number): number | null {
+		if (!trackEl || !duration) return null;
+		const rect = trackEl.getBoundingClientRect();
+		const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+		return pct * duration;
+	}
+	function onPointerDown(e: PointerEvent & { currentTarget: HTMLDivElement }) {
+		const t = posFromEvent(e.clientX);
+		if (t == null) return;
+		scrubbing = true;
+		scrubValue = t;
+		onScrub?.(t);
+		e.currentTarget.setPointerCapture(e.pointerId);
+	}
+	function onPointerMove(e: PointerEvent) {
+		if (!scrubbing) return;
+		const t = posFromEvent(e.clientX);
+		if (t == null) return;
+		scrubValue = t;
+		onScrub?.(t);
+	}
+	function onPointerUp(e: PointerEvent) {
+		if (!scrubbing) return;
+		const t = posFromEvent(e.clientX) ?? scrubValue;
+		scrubbing = false;
+		onSeek(t);
+	}
+
+	const activeResolution = $derived(
+		streams.find((s: StreamOption) => s.info_hash === activeStreamHash)
+			?.resolution ?? null,
+	);
+
+	const resolutions = $derived.by(() => {
+		const seen = new Set<string>();
+		const result: string[] = [];
+		for (const s of streams) {
+			const res = s.resolution;
+			if (res && !seen.has(res)) {
+				seen.add(res);
+				result.push(res);
+			}
+		}
+		const order: Record<string, number> = {
+			"4K": 4,
+			"2160p": 4,
+			"1080p": 3,
+			"720p": 2,
+			"480p": 1,
+		};
+		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
+	});
+
+	const streamMenuItems = $derived<PopoverMenuEntry[]>([
+		...(resolutions.length > 1
+			? [
+					{ kind: "header" as const, label: "Quality" },
+					...resolutions.map((res) => ({
+						kind: "item" as const,
+						label: res,
+						selected: res === activeResolution,
+						onclick: () => {
+							const best = streams.find(
+								(s: StreamOption) => s.resolution === res,
+							);
+							if (best) onStreamSelect?.(best);
+						},
+					})),
+				]
+			: []),
+		{ kind: "header" as const, label: "Sources" },
+		...(activeResolution
+			? streams.filter((s: StreamOption) => s.resolution === activeResolution)
+			: streams
+		)
+			.slice(0, 8)
+			.map((stream: StreamOption) => ({
+				kind: "item" as const,
+				label: `${stream.source}`,
+				description: [stream.codec, stream.audio, stream.source_type]
+					.filter(Boolean)
+					.join(" · "),
+				shortcut: stream.size_display ?? undefined,
+				selected: stream.info_hash === activeStreamHash,
+				onclick: () => onStreamSelect?.(stream),
+			})),
+		...(onTranscodingChange
+			? [
+					"divider" as const,
+					{
+						kind: "toggle" as const,
+						label: "Transcoding",
+						description: "Re-encode stream for compatibility",
+						checked: transcoding.enabled,
+						onChange: (value: boolean) => {
+							transcoding.enabled = value;
+							onTranscodingChange?.(value, transcoding.onlyAudio);
+						},
+					},
+					{
+						kind: "toggle" as const,
+						label: "Only audio",
+						description: "Only re-encode audio",
+						disabled: !transcoding.enabled,
+						checked: transcoding.onlyAudio,
+						onChange: (value: boolean) => {
+							transcoding.onlyAudio = value;
+							onTranscodingChange?.(transcoding.enabled, value);
+						},
+					},
+				]
+			: []),
+	]);
+
+	const audioSubtitleMenuItems = $derived<PopoverMenuEntry[]>([
+		...(audioTracks.length > 1
+			? [
+					{ kind: "header" as const, label: "Audio" },
+					...audioTracks.map((track) => ({
+						kind: "item" as const,
+						label: track.name,
+						description: track.lang ?? undefined,
+						selected: track.id === activeAudioTrack,
+						onclick: () => onAudioSelect?.(track),
+					})),
+					"divider" as const,
+				]
+			: []),
+		...(subtitleTracks.length > 0
+			? [
+					{ kind: "header" as const, label: "Subtitles" },
+					{
+						kind: "item" as const,
+						label: "Off",
+						selected: !subtitlesActive,
+						onclick: () => onSubtitleOff?.(),
+					},
+					...subtitleTracks.map((track) => {
+						const isEmbedded = track.id.startsWith("embedded:");
+						const dupes = subtitleTracks.filter(
+							(t) =>
+								t.language === track.language &&
+								t.id.startsWith("embedded:") === isEmbedded,
+						);
+						const suffix =
+							dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
+						return {
+							kind: "item" as const,
+							label: `${track.language}${suffix}`,
+							description: isEmbedded ? "Embedded" : undefined,
+							selected: track.url === activeTrackUrl,
+							onclick: () => onSubtitleSelect?.(track),
+						};
+					}),
+					...(subtitlesActive && subtitleOffsetControl
+						? [
+								"divider" as const,
+								{ kind: "custom" as const, render: subtitleOffsetControl },
+							]
+						: []),
+				]
+			: []),
+	]);
+</script>
+
+<div
+	class="pc"
+	style:--accent={accent ? `rgb(${accent})` : "#e4e4e7"}
+	style:--accent-dim={accent ? `rgba(${accent}, 0.5)` : "rgba(228, 228, 231, 0.4)"}
+>
+	<div class="gradient"></div>
+
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="progress-container"
+		bind:this={trackEl}
+		onpointerdown={onPointerDown}
+		onpointermove={onPointerMove}
+		onpointerup={onPointerUp}
+		role="slider"
+		aria-valuenow={currentTime}
+		aria-valuemin={0}
+		aria-valuemax={duration}
+		tabindex="-1"
+	>
+		<div class="progress-track">
+			{#if pieceMap.length > 0 && streamStats && !streamStats.finished}
+				<div class="progress-pieces">
+					{#each pieceMap as value}
+						<div class="piece" style="opacity: {value / 255}"></div>
+					{/each}
+				</div>
+			{/if}
+			<div class="progress-buffered" style="width: {bufferedPercent}%"></div>
+			<div class="progress-fill" style="width: {progressPercent}%">
+				<div class="progress-thumb"></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="controls-bar">
+		<div class="controls-left">
+			<Button
+				variant="ghost"
+				icon={paused ? "Play" : "Pause"}
+				{loading}
+				onclick={onTogglePlay}
+			/>
+
+			<div class="volume-group">
+				<Button
+					variant="ghost"
+					icon={muted || volume === 0
+						? "VolumeX"
+						: volume < 0.5
+							? "Volume1"
+							: "Volume2"}
+					onclick={onToggleMute}
+				/>
+				<input
+					type="range"
+					min="0"
+					max="1"
+					step="0.01"
+					value={muted ? 0 : volume}
+					oninput={(e) => onSetVolume(parseFloat(e.currentTarget.value))}
+					class="volume-slider"
+					class:open={volumeAlwaysOpen}
+				/>
+			</div>
+
+			<span class="time">
+				{formatTime(displayTime)} / {formatTime(duration)}
+			</span>
+		</div>
+
+		<div class="controls-right">
+			{#if streams.length > 0 && onStreamSelect}
+				<PopoverMenu items={streamMenuItems} align="right">
+					{#snippet trigger()}
+						<Button variant="ghost" icon="Settings2" />
+					{/snippet}
+				</PopoverMenu>
+			{/if}
+
+			{#if audioTracks.length > 1 || subtitleTracks.length > 0}
+				<PopoverMenu items={audioSubtitleMenuItems} align="right">
+					{#snippet trigger()}
+						<Button
+							variant="ghost"
+							icon="ClosedCaption"
+							loading={loadingSubtitles}
+						/>
+					{/snippet}
+				</PopoverMenu>
+			{/if}
+
+			{#if onToggleFullscreen}
+				<Button
+					variant="ghost"
+					icon={isFullscreen ? "Minimize" : "Maximize"}
+					onclick={onToggleFullscreen}
+				/>
+			{/if}
+
+			{@render rightExtra?.()}
+		</div>
+	</div>
+</div>
+
+<style>
+	.pc {
+		position: relative;
+		width: 100%;
+	}
+
+	.gradient {
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		height: 140px;
+		background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+		pointer-events: none;
+	}
+
+	/* ── Progress ── */
+	.progress-container {
+		position: relative;
+		height: 20px;
+		padding: 7px 0;
+		cursor: pointer;
+		margin: 0 12px;
+		z-index: 1;
+		outline: none;
+		touch-action: none;
+	}
+
+	.progress-track {
+		position: relative;
+		height: 4px;
+		background: rgba(255, 255, 255, 0.15);
+		border-radius: 2px;
+		overflow: visible;
+		transition: height 0.15s ease;
+	}
+
+	.progress-container:hover .progress-track {
+		height: 6px;
+	}
+
+	.progress-pieces {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		display: flex;
+		border-radius: 2px;
+		overflow: hidden;
+	}
+
+	.progress-pieces .piece {
+		flex: 1;
+		background: rgba(255, 255, 255, 0.25);
+		transition: opacity 2s ease;
+	}
+
+	.progress-buffered {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 100%;
+		background: rgba(255, 255, 255, 0.2);
+		border-radius: 2px;
+		transition: width 0.1s linear;
+	}
+
+	.progress-fill {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 100%;
+		background: var(--accent);
+		border-radius: 2px;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		transition: width 0.05s linear;
+	}
+
+	.progress-thumb {
+		width: 14px;
+		height: 14px;
+		background: var(--accent);
+		border-radius: 50%;
+		transform: translateX(50%) scale(0);
+		transition: transform 0.15s ease;
+		flex-shrink: 0;
+		box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+	}
+
+	.progress-container:hover .progress-thumb {
+		transform: translateX(50%) scale(1);
+	}
+
+	/* ── Controls bar ── */
+	.controls-bar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 4px 12px 10px;
+		position: relative;
+		z-index: 1;
+	}
+
+	.controls-left,
+	.controls-right {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	/* ── Volume ── */
+	.volume-group {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+
+	.volume-slider {
+		width: 0;
+		opacity: 0;
+		transition:
+			width 0.2s ease,
+			opacity 0.2s ease;
+		accent-color: var(--accent);
+		height: 4px;
+		cursor: pointer;
+		appearance: none;
+		-webkit-appearance: none;
+		background: transparent;
+	}
+
+	.volume-group:hover .volume-slider,
+	.volume-slider:focus,
+	.volume-slider.open {
+		width: 70px;
+		opacity: 1;
+	}
+
+	.volume-slider::-webkit-slider-runnable-track {
+		height: 4px;
+		background: rgba(255, 255, 255, 0.2);
+		border-radius: 2px;
+	}
+
+	.volume-slider::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		appearance: none;
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: var(--accent);
+		margin-top: -4px;
+		cursor: pointer;
+	}
+
+	.volume-slider::-moz-range-track {
+		height: 4px;
+		background: rgba(255, 255, 255, 0.2);
+		border-radius: 2px;
+		border: none;
+	}
+
+	.volume-slider::-moz-range-thumb {
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: var(--accent);
+		border: none;
+		cursor: pointer;
+	}
+
+	/* ── Time ── */
+	.time {
+		font-family: "JetBrains Mono", monospace;
+		font-size: 0.75rem;
+		font-weight: 400;
+		color: var(--accent-dim);
+		letter-spacing: 0.02em;
+		margin-left: 8px;
+		white-space: nowrap;
+	}
+</style>

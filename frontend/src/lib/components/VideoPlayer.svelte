@@ -2,17 +2,11 @@
 	import { onDestroy } from "svelte";
 	import { fade } from "svelte/transition";
 	import Hls from "hls.js";
-	import {
-		Button,
-		Data,
-		PopoverMenu,
-		Icon,
-		Popover,
-		type PopoverMenuEntry,
-	} from "glow";
+	import { Button, Icon } from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
-	import { formatBytes } from "$lib/utils";
+	import PlayerControls from "./PlayerControls.svelte";
+	import StreamStatsPopover from "./StreamStatsPopover.svelte";
 
 	interface SubtitleCue {
 		start: number;
@@ -66,6 +60,11 @@
 		currentTime = $bindable(0),
 		duration = $bindable(0),
 		paused = $bindable(true),
+		volume = $bindable(1),
+		buffered = $bindable(0),
+		subtitleOffset = $bindable(-0.25),
+		loading = $bindable(true),
+		tvMode = false,
 	}: {
 		src: string;
 		subtitles?: SubtitleCue[];
@@ -105,6 +104,13 @@
 		};
 		onTranscodingChange?: (enabled: boolean, onlyAudio: boolean) => void;
 		paused?: boolean;
+		volume?: number;
+		buffered?: number;
+		subtitleOffset?: number;
+		loading?: boolean;
+		/** Remote-driven TV display: hide all on-screen controls and input;
+		 *  the paired phone drives playback. */
+		tvMode?: boolean;
 	} = $props();
 
 	let containerEl = $state<HTMLDivElement | undefined>(undefined);
@@ -113,161 +119,27 @@
 
 	const defaultOffset = -0.25;
 
-	let buffered = $state(0);
-	let volume = $state(1);
 	let muted = $state(false);
-	let loading = $state(true);
 	let streamError = $state<string | null>(null);
 	let controlsVisible = $state(true);
-	let seeking = $state(false);
 	let isFullscreen = $state(false);
 
-	const activeResolution = $derived(
-		streams.find((s: StreamOption) => s.info_hash === activeStreamHash)
-			?.resolution ?? null,
-	);
-
-	const resolutions = $derived.by(() => {
-		const seen = new Set<string>();
-		const result: string[] = [];
-		for (const s of streams) {
-			const res = s.resolution;
-			if (res && !seen.has(res)) {
-				seen.add(res);
-				result.push(res);
+	// Audio selection: defer to the parent callback, else fall back to the
+	// native <video> audio tracks. Mirrors the previous inline menu behaviour.
+	function handleAudioSelect(track: AudioTrack) {
+		if (onAudioSelect) {
+			onAudioSelect(track);
+		} else if (videoEl) {
+			const native = (videoEl as any).audioTracks;
+			if (native) {
+				for (let i = 0; i < native.length; i++) {
+					native[i].enabled = i === track.id;
+				}
 			}
 		}
-		const order: Record<string, number> = {
-			"4K": 4,
-			"2160p": 4,
-			"1080p": 3,
-			"720p": 2,
-			"480p": 1,
-		};
-		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
-	});
+		activeAudioTrack = track.id;
+	}
 
-	const streamMenuItems = $derived<PopoverMenuEntry[]>([
-		...(resolutions.length > 1
-			? [
-					{ kind: "header" as const, label: "Quality" },
-					...resolutions.map((res) => ({
-						kind: "item" as const,
-						label: res,
-						selected: res === activeResolution,
-						onclick: () => {
-							const best = streams.find(
-								(s: StreamOption) => s.resolution === res,
-							);
-							if (best) onStreamSelect?.(best);
-						},
-					})),
-				]
-			: []),
-		{ kind: "header" as const, label: "Sources" },
-		...streams
-			.filter((s: StreamOption) => s.resolution === activeResolution)
-			.slice(0, 8)
-			.map((stream: StreamOption) => ({
-				kind: "item" as const,
-				label: `${stream.source}`,
-				description: [stream.codec, stream.audio, stream.source_type]
-					.filter(Boolean)
-					.join(" · "),
-				shortcut: stream.size_display ?? undefined,
-				selected: stream.info_hash === activeStreamHash,
-				onclick: () => onStreamSelect?.(stream),
-			})),
-		"divider" as const,
-		{
-			kind: "toggle" as const,
-			label: "Transcoding",
-			description: "Re-encode stream for compatibility",
-			checked: transcoding.enabled,
-			onChange: (value: boolean) => {
-				transcoding.enabled = value;
-				onTranscodingChange?.(value, transcoding.onlyAudio);
-			},
-		},
-		{
-			kind: "toggle" as const,
-			label: "Only audio",
-			description: "Only re-encode audio",
-			disabled: !transcoding.enabled,
-			checked: transcoding.onlyAudio,
-			onChange: (value: boolean) => {
-				transcoding.onlyAudio = value;
-				onTranscodingChange?.(transcoding.enabled, value);
-			},
-		},
-	]);
-
-	const audioSubtitleMenuItems = $derived<PopoverMenuEntry[]>([
-		...(audioTracks.length > 1
-			? [
-					{ kind: "header" as const, label: "Audio" },
-					...audioTracks.map((track) => ({
-						kind: "item" as const,
-						label: track.name,
-						description: track.lang ?? undefined,
-						selected: track.id === activeAudioTrack,
-						onclick: () => {
-							if (onAudioSelect) {
-								onAudioSelect(track);
-							} else if (videoEl) {
-								const native = (videoEl as any).audioTracks;
-								if (native) {
-									for (let i = 0; i < native.length; i++) {
-										native[i].enabled = i === track.id;
-									}
-								}
-							}
-							activeAudioTrack = track.id;
-						},
-					})),
-					"divider" as const,
-				]
-			: []),
-		...(subtitleTracks.length > 0
-			? [
-					{ kind: "header" as const, label: "Subtitles" },
-					{
-						kind: "item" as const,
-						label: "Off",
-						selected: subtitles.length === 0,
-						onclick: () => onSubtitleOff?.(),
-					},
-					...subtitleTracks.map((track) => {
-						const isEmbedded = track.id.startsWith("embedded:");
-						const dupes = subtitleTracks.filter(
-							(t) =>
-								t.language === track.language &&
-								t.id.startsWith("embedded:") === isEmbedded,
-						);
-						const suffix =
-							dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
-						return {
-							kind: "item" as const,
-							label: `${track.language}${suffix}`,
-							description: isEmbedded ? "Embedded" : undefined,
-							selected: track.url === activeTrackUrl,
-							onclick: () => onSubtitleSelect?.(track),
-						};
-					}),
-					...(subtitles.length > 0
-						? [
-								"divider" as const,
-								{
-									kind: "custom" as const,
-									render: subtitleOffsetControls,
-								},
-							]
-						: []),
-				]
-			: []),
-	]);
-
-	let subtitleOffset = $state(defaultOffset);
 	let cursorHidden = $state(false);
 	let pausedIdle = $state(false);
 	let pauseIdleTimeout: ReturnType<typeof setTimeout>;
@@ -322,7 +194,7 @@
 		return `${m}:${s.toString().padStart(2, "0")}`;
 	}
 
-	function togglePlay() {
+	export function togglePlay() {
 		if (!videoEl) return;
 		if (videoEl.paused) {
 			videoEl.play().catch(() => {});
@@ -331,52 +203,38 @@
 		}
 	}
 
-	function seekTo(time: number) {
+	// Imperative controls exposed via `bind:this` so a paired remote (TV mode)
+	// can drive playback through the remote store. Thin wrappers over the same
+	// internals the on-screen controls use.
+	export function play() {
+		videoEl?.play().catch(() => {});
+	}
+
+	export function pause() {
+		videoEl?.pause();
+	}
+
+	export function seekBy(delta: number) {
+		const max = duration > 0 ? duration : currentTime + delta;
+		seekTo(Math.max(0, Math.min(max, currentTime + delta)));
+	}
+
+	export function setVolumeValue(value: number) {
+		volume = Math.max(0, Math.min(1, value));
+		if (videoEl) {
+			videoEl.volume = volume;
+			videoEl.muted = false;
+		}
+		muted = volume === 0;
+	}
+
+	export function seekTo(time: number) {
 		if (videoEl) {
 			videoEl.currentTime = time;
 		}
 	}
 
-	function seek(e: MouseEvent & { currentTarget: HTMLDivElement }) {
-		if (!videoEl || !duration) return;
-		const rect = e.currentTarget.getBoundingClientRect();
-		const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-		seekTo(pct * duration);
-	}
-
-	function handleProgressDown(
-		e: MouseEvent & { currentTarget: HTMLDivElement },
-	) {
-		seeking = true;
-		seek(e);
-
-		const onMove = (ev: MouseEvent) => {
-			if (!videoEl || !duration) return;
-			const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-			const pct = Math.max(
-				0,
-				Math.min(1, (ev.clientX - rect.left) / rect.width),
-			);
-			seekTo(pct * duration);
-		};
-
-		const onUp = () => {
-			seeking = false;
-			window.removeEventListener("mousemove", onMove);
-			window.removeEventListener("mouseup", onUp);
-		};
-
-		window.addEventListener("mousemove", onMove);
-		window.addEventListener("mouseup", onUp);
-	}
-
-	function setVolume(e: Event & { currentTarget: HTMLInputElement }) {
-		volume = parseFloat(e.currentTarget.value);
-		if (videoEl) videoEl.volume = volume;
-		muted = volume === 0;
-	}
-
-	function toggleMute() {
+	export function toggleMute() {
 		if (muted) {
 			volume = volumeBeforeMute || 0.5;
 			muted = false;
@@ -391,7 +249,7 @@
 		}
 	}
 
-	function toggleFullscreen() {
+	export function toggleFullscreen() {
 		if (document.fullscreenElement) {
 			document.exitFullscreen();
 		} else {
@@ -414,7 +272,7 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
-		if (!videoEl) return;
+		if (!videoEl || tvMode) return;
 		switch (e.key) {
 			case " ":
 			case "k":
@@ -528,7 +386,7 @@
 	}
 
 	function handleTimeUpdate() {
-		if (!videoEl || seeking) return;
+		if (!videoEl) return;
 		currentTime = videoEl.currentTime;
 		if (videoEl.buffered.length > 0) {
 			buffered = videoEl.buffered.end(videoEl.buffered.length - 1);
@@ -627,10 +485,12 @@
 		style:transition="opacity 0.5s"
 		playsinline
 		onclick={() => {
+			if (tvMode) return;
 			clearTimeout(clickTimeout);
 			clickTimeout = setTimeout(togglePlay, 200);
 		}}
 		ondblclick={() => {
+			if (tvMode) return;
 			clearTimeout(clickTimeout);
 			toggleFullscreen();
 		}}
@@ -723,7 +583,7 @@
 	</div>
 
 	<!-- Top bar: title + back -->
-	{#if title || onClose}
+	{#if (title || onClose) && !tvMode}
 		<div class="top-bar" class:visible={controlsVisible || paused}>
 			<div class="top-gradient"></div>
 			<div class="top-content">
@@ -739,149 +599,58 @@
 					{/if}
 				</div>
 				<div class="top-spacer"></div>
-				{#if streamStats}
-					<Popover align="right" bind:open={statsOpen}>
-						{#snippet trigger()}
-							<Button variant="ghost" icon="Info" />
-						{/snippet}
-						{#snippet children()}
-							<div class="stats-popover">
-								<Data
-									variant="inline"
-									properties={[
-										{
-											label: "Progress",
-											value: `${torrentPercent}%`,
-										},
-										{
-											label: "Downloaded",
-											value: `${formatBytes(streamStats.progress_bytes)} / ${formatBytes(streamStats.total_bytes)}`,
-										},
-										{
-											label: "Speed",
-											value: `${streamStats.download_speed_mbps.toFixed(1)} MB/s`,
-										},
-										{
-											label: "Peers",
-											value: streamStats.peers,
-										},
-										{
-											label: "Status",
-											value: streamStats.finished ? "Complete" : "Downloading",
-										},
-									]}
-								/>
-							</div>
-						{/snippet}
-					</Popover>
-				{/if}
+				<StreamStatsPopover {streamStats} />
 			</div>
 		</div>
 	{/if}
 
 	<!-- Bottom controls -->
-	<div
-		class="controls"
-		class:visible={controlsVisible || paused}
-		class:has-subtitle={!!activeSubtitle}
-	>
-		<div class="gradient"></div>
-
-		<div
-			class="progress-container"
-			onmousedown={handleProgressDown}
-			role="slider"
-			aria-valuenow={currentTime}
-			aria-valuemin={0}
-			aria-valuemax={duration}
-			tabindex="-1"
-		>
-			<div class="progress-track">
-				{#if pieceMap.length > 0 && streamStats && !streamStats.finished}
-					<div class="progress-pieces">
-						{#each pieceMap as value}
-							<div class="piece" style="opacity: {value / 255}"></div>
-						{/each}
-					</div>
-				{/if}
-				<div class="progress-buffered" style="width: {bufferedPercent}%"></div>
-				<div class="progress-fill" style="width: {progressPercent}%">
-					<div class="progress-thumb"></div>
-				</div>
-			</div>
+	{#if !tvMode}
+		<div class="controls" class:visible={controlsVisible || paused}>
+			<PlayerControls
+				{currentTime}
+				{duration}
+				{buffered}
+				{paused}
+				{loading}
+				{volume}
+				{muted}
+				{streams}
+				{activeStreamHash}
+				{audioTracks}
+				{activeAudioTrack}
+				{subtitleTracks}
+				subtitlesActive={subtitles.length > 0}
+				{activeTrackUrl}
+				{transcoding}
+				{streamStats}
+				{pieceMap}
+				{loadingSubtitles}
+				{accent}
+				{isFullscreen}
+				onTogglePlay={togglePlay}
+				onSeek={seekTo}
+				onScrub={seekTo}
+				onSetVolume={setVolumeValue}
+				onToggleMute={toggleMute}
+				onToggleFullscreen={toggleFullscreen}
+				{onStreamSelect}
+				onAudioSelect={handleAudioSelect}
+				onSubtitleSelect={(t) => onSubtitleSelect?.(t as SubtitleTrack)}
+				{onSubtitleOff}
+				{onTranscodingChange}
+				subtitleOffsetControl={subtitleOffsetControls}
+			/>
 		</div>
 
-		<div class="controls-bar">
-			<div class="controls-left">
-				<Button
-					variant="ghost"
-					icon={paused ? "Play" : "Pause"}
-					{loading}
-					onclick={togglePlay}
-				/>
-
-				<div class="volume-group">
-					<Button
-						variant="ghost"
-						icon={muted || volume === 0
-							? "VolumeX"
-							: volume < 0.5
-								? "Volume1"
-								: "Volume2"}
-						onclick={toggleMute}
-					/>
-					<input
-						type="range"
-						min="0"
-						max="1"
-						step="0.01"
-						value={muted ? 0 : volume}
-						oninput={setVolume}
-						class="volume-slider"
-					/>
-				</div>
-
-				<span class="time">
-					{formatTime(currentTime)} / {formatTime(duration)}
-				</span>
-			</div>
-
-			<div class="controls-right">
-				{#if streams.length > 0 && onStreamSelect}
-					<PopoverMenu items={streamMenuItems} align="right">
-						{#snippet trigger()}
-							<Button variant="ghost" icon="Settings2" />
-						{/snippet}
-					</PopoverMenu>
-				{/if}
-
-				{#if audioTracks.length > 1 || subtitleTracks.length > 0}
-					<PopoverMenu items={audioSubtitleMenuItems} align="right">
-						{#snippet trigger()}
-							<Button
-								variant="ghost"
-								icon="ClosedCaption"
-								loading={loadingSubtitles}
-							/>
-						{/snippet}
-					</PopoverMenu>
-				{/if}
-				<Button
-					variant="ghost"
-					icon={isFullscreen ? "Minimize" : "Maximize"}
-					onclick={toggleFullscreen}
-				/>
-			</div>
-		</div>
-	</div>
-
-	{#if paused && !loading && duration > 0}
-		<button
-			class="big-play"
-			onclick={togglePlay}
-			aria-label="Play"
-			transition:fade={{ duration: 150 }}
-		></button>
+		{#if paused && !loading && duration > 0}
+			<button
+				class="big-play"
+				onclick={togglePlay}
+				aria-label="Play"
+				transition:fade={{ duration: 150 }}
+			></button>
+		{/if}
 	{/if}
 </div>
 
@@ -1137,192 +906,5 @@
 	.controls.visible {
 		opacity: 1;
 		pointer-events: auto;
-	}
-
-	.gradient {
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		height: 140px;
-		background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
-		pointer-events: none;
-	}
-
-	/* ── Progress ── */
-	.progress-container {
-		position: relative;
-		height: 20px;
-		padding: 7px 0;
-		cursor: pointer;
-		margin: 0 12px;
-		z-index: 1;
-		outline: none;
-	}
-
-	.progress-track {
-		position: relative;
-		height: 4px;
-		background: rgba(255, 255, 255, 0.15);
-		border-radius: 2px;
-		overflow: visible;
-		transition: height 0.15s ease;
-	}
-
-	.progress-container:hover .progress-track {
-		height: 6px;
-	}
-
-	.progress-pieces {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 100%;
-		height: 100%;
-		display: flex;
-		border-radius: 2px;
-		overflow: hidden;
-	}
-
-	.progress-pieces .piece {
-		flex: 1;
-		background: rgba(255, 255, 255, 0.25);
-		transition: opacity 2s ease;
-	}
-
-	.progress-buffered {
-		position: absolute;
-		top: 0;
-		left: 0;
-		height: 100%;
-		background: rgba(255, 255, 255, 0.2);
-		border-radius: 2px;
-		transition: width 0.1s linear;
-	}
-
-	.progress-fill {
-		position: absolute;
-		top: 0;
-		left: 0;
-		height: 100%;
-		background: var(--accent);
-		border-radius: 2px;
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		transition: width 0.05s linear;
-	}
-
-	.progress-thumb {
-		width: 14px;
-		height: 14px;
-		background: var(--accent);
-		border-radius: 50%;
-		transform: translateX(50%) scale(0);
-		transition: transform 0.15s ease;
-		flex-shrink: 0;
-		box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
-	}
-
-	.progress-container:hover .progress-thumb {
-		transform: translateX(50%) scale(1);
-	}
-
-	/* ── Controls bar ── */
-	.controls-bar {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 4px 12px 10px;
-		position: relative;
-		z-index: 1;
-	}
-
-	.controls-left,
-	.controls-right {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-	}
-
-	/* ── Volume ── */
-	.volume-group {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-	}
-
-	.volume-slider {
-		width: 0;
-		opacity: 0;
-		transition:
-			width 0.2s ease,
-			opacity 0.2s ease;
-		accent-color: var(--accent);
-		height: 4px;
-		cursor: pointer;
-		appearance: none;
-		-webkit-appearance: none;
-		background: transparent;
-	}
-
-	.volume-group:hover .volume-slider,
-	.volume-slider:focus {
-		width: 70px;
-		opacity: 1;
-	}
-
-	.volume-slider::-webkit-slider-runnable-track {
-		height: 4px;
-		background: rgba(255, 255, 255, 0.2);
-		border-radius: 2px;
-	}
-
-	.volume-slider::-webkit-slider-thumb {
-		-webkit-appearance: none;
-		appearance: none;
-		width: 12px;
-		height: 12px;
-		border-radius: 50%;
-		background: var(--accent);
-		margin-top: -4px;
-		cursor: pointer;
-	}
-
-	.volume-slider::-moz-range-track {
-		height: 4px;
-		background: rgba(255, 255, 255, 0.2);
-		border-radius: 2px;
-		border: none;
-	}
-
-	.volume-slider::-moz-range-thumb {
-		width: 12px;
-		height: 12px;
-		border-radius: 50%;
-		background: var(--accent);
-		border: none;
-		cursor: pointer;
-	}
-
-	/* ── Time ── */
-	.time {
-		font-family: "JetBrains Mono", monospace;
-		font-size: 0.75rem;
-		font-weight: 400;
-		color: var(--accent-dim);
-		letter-spacing: 0.02em;
-		margin-left: 8px;
-		white-space: nowrap;
-	}
-
-	/* ── Subtitle popover ── */
-
-	/* Force a width wide enough for "224 MB / 224 MB" to fit on one row
-	   alongside its "Downloaded" label, instead of collapsing to the
-	   Info-button trigger width. */
-	.stats-popover {
-		min-width: 18rem;
-		white-space: nowrap;
 	}
 </style>

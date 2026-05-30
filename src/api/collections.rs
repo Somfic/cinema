@@ -1,8 +1,7 @@
-use cinema_schema::{cinema_api, cinema_type};
 
 use crate::app::{AppContext, Error};
 
-#[cinema_type]
+#[draad::ty]
 pub struct CollectionRequest {
     pub collection: String,
     pub media_type: String,
@@ -11,7 +10,7 @@ pub struct CollectionRequest {
     pub poster_path: Option<String>,
 }
 
-#[cinema_type]
+#[draad::ty]
 #[derive(sqlx::FromRow)]
 pub struct CollectionItem {
     pub collection: String,
@@ -23,12 +22,12 @@ pub struct CollectionItem {
     pub position: i64,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct CollectionStatus {
     pub in_collection: bool,
 }
 
-#[cinema_type]
+#[draad::ty]
 #[derive(sqlx::FromRow)]
 pub struct CollectionDef {
     pub slug: String,
@@ -40,20 +39,20 @@ pub struct CollectionDef {
     pub hidden: i64,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct CreateCollection {
     pub slug: String,
     pub title: String,
     pub kind: String,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct ReorderItem {
     pub media_type: String,
     pub tmdb_id: i64,
 }
 
-#[cinema_api(namespace = "collections")]
+#[draad::api(namespace = "collections")]
 pub trait CollectionsApi {
     /// Adds an item to a named collection
     async fn add(&self, item: CollectionRequest) -> Result<(), Error>;
@@ -92,7 +91,7 @@ pub trait CollectionsApi {
     async fn reorder(&self, collection: String, items: Vec<ReorderItem>) -> Result<(), Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl CollectionsApi for AppContext {
     async fn add(&self, item: CollectionRequest) -> Result<(), Error> {
         sqlx::query(

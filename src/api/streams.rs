@@ -3,15 +3,14 @@ pub use crate::streams::Stream;
 use crate::tmdb::{MediaType, TmdbClient};
 use crate::torrent::TorrentEngine;
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
-use cinema_schema::{cinema_api, cinema_events, cinema_type};
 
-#[cinema_type]
+#[draad::ty]
 pub struct StartStream {
     pub url: String,
     pub local: bool,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct StreamStats {
     pub progress_bytes: u64,
     pub total_bytes: u64,
@@ -23,7 +22,7 @@ pub struct StreamStats {
 /// Periodic per-torrent stats broadcast over WebSocket. Carries the
 /// `info_hash` so subscribers can filter to the stream they care about
 /// (a single topic fans out updates for every active torrent)
-#[cinema_type]
+#[draad::ty]
 pub struct StreamStatsUpdate {
     pub info_hash: String,
     pub progress_bytes: u64,
@@ -33,7 +32,7 @@ pub struct StreamStatsUpdate {
     pub finished: bool,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct AudioTracks {
     pub tracks: Vec<crate::torrent::AudioTrack>,
     pub subtitles: Vec<crate::torrent::EmbeddedSubtitleTrack>,
@@ -42,14 +41,14 @@ pub struct AudioTracks {
 
 /// Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
 /// 0..=255 each. Emitted only for files currently being streamed.
-#[cinema_type]
+#[draad::ty]
 pub struct PiecesUpdate {
     pub info_hash: String,
     pub file_idx: i64,
     pub pieces: Vec<u8>,
 }
 
-#[cinema_api(namespace = "streams")]
+#[draad::api(namespace = "streams")]
 pub trait StreamsApi {
     /// Aggregates available torrent streams for a movie.
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error>;
@@ -78,7 +77,7 @@ pub trait StreamsApi {
     ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl StreamsApi for AppContext {
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
@@ -172,7 +171,7 @@ impl StreamsApi for AppContext {
     }
 }
 
-#[cinema_events(namespace = "streams")]
+#[draad::events(namespace = "streams")]
 pub trait StreamsEvents {
     /// Per-torrent download stats, emitted every ~2s for each active torrent.
     /// Topic: `streams_stats`. Subscribers filter by `info_hash`.

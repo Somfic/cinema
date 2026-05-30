@@ -1,10 +1,10 @@
 <script lang="ts">
 	import {
-		api,
 		type CollectionDef,
 		type CollectionItem,
 		type SearchResult,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import { Heading, Input, Button, Text, Card, ToggleInput } from "glow";
 	import { sortable } from "glow";

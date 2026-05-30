@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use cinema_schema::cinema_type;
 use tokio::sync::Semaphore;
 
 use crate::app::AppContext;
 use crate::torrent::TorrentEngine;
 
-#[cinema_type]
+#[draad::ty]
 #[derive(sqlx::FromRow)]
 pub struct Download {
     pub id: i64,

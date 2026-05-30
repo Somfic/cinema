@@ -2,11 +2,10 @@ use crate::app::{AppContext, Error};
 pub use crate::downloads::Download;
 use crate::streams as streams_mod;
 use crate::tmdb::TmdbClient;
-use cinema_schema::{cinema_api, cinema_events, cinema_type};
 
 /// Streaming progress for an active download. Emitted periodically by the
 /// download worker; subscribers should treat updates as best-effort.
-#[cinema_type]
+#[draad::ty]
 pub struct DownloadProgress {
     pub id: i64,
     pub downloaded_bytes: i64,
@@ -14,7 +13,7 @@ pub struct DownloadProgress {
     pub status: String,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct EnqueueDownload {
     pub media_type: String,
     pub tmdb_id: i64,
@@ -29,7 +28,7 @@ pub struct EnqueueDownload {
     pub file_idx: Option<i64>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct ResolutionEstimate {
     pub resolution: String,
     pub size_bytes: Option<u64>,
@@ -37,7 +36,7 @@ pub struct ResolutionEstimate {
     pub streams_count: i64,
 }
 
-#[cinema_api(namespace = "downloads")]
+#[draad::api(namespace = "downloads")]
 pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
     async fn list(&self) -> Result<Vec<Download>, Error>;
@@ -57,7 +56,7 @@ pub trait DownloadsApi {
     ) -> Result<Vec<ResolutionEstimate>, Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl DownloadsApi for AppContext {
     async fn list(&self) -> Result<Vec<Download>, Error> {
         let items =
@@ -214,7 +213,7 @@ impl DownloadsApi for AppContext {
     }
 }
 
-#[cinema_events(namespace = "downloads")]
+#[draad::events(namespace = "downloads")]
 pub trait DownloadsEvents {
     /// Per-download bandwidth/status tick. Topic: `downloads_progress`.
     fn progress(payload: DownloadProgress);
