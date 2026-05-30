@@ -20,9 +20,9 @@ jobs:
       # the Rust traits/types so downstream jobs have the up-to-date schema.
       - name: Generate schema
         run: |
-          cargo run -p cinema-schema-codegen --quiet -- --rust-only
-          TS_RS_EXPORT_DIR="$PWD/target/schema-bindings" cargo test --quiet export_bindings
-          TS_RS_EXPORT_DIR="$PWD/target/schema-bindings" cargo run -p cinema-schema-codegen --quiet
+          cargo run --manifest-path ../draad/Cargo.toml -p draad --features codegen --bin draad --quiet -- --rust-only
+          TS_RS_EXPORT_DIR="$PWD/target/draad-bindings" cargo test --quiet export_bindings
+          TS_RS_EXPORT_DIR="$PWD/target/draad-bindings" cargo run --manifest-path ../draad/Cargo.toml -p draad --features codegen --bin draad --quiet
 
       - name: Upload generated schema
         uses: actions/upload-artifact@v4

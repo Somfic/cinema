@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use cinema_schema::cinema_type;
 use futures::future::join_all;
 use serde::Deserialize;
 use tracing::warn;
@@ -33,7 +32,7 @@ struct BehaviorHints {
 
 // --- Enriched public types ---
 
-#[cinema_type]
+#[draad::ty]
 pub struct Stream {
     pub info_hash: String,
     pub file_idx: i64,

@@ -1,8 +1,7 @@
-use cinema_schema::{cinema_api, cinema_type};
 
 use crate::app::{AppContext, Error};
 
-#[cinema_type]
+#[draad::ty]
 pub struct RecordWatch {
     pub media_type: String,
     pub tmdb_id: i64,
@@ -16,7 +15,7 @@ pub struct RecordWatch {
     pub duration: Option<f64>,
 }
 
-#[cinema_type]
+#[draad::ty]
 #[derive(sqlx::FromRow)]
 pub struct WatchHistoryItem {
     pub media_type: String,
@@ -32,7 +31,7 @@ pub struct WatchHistoryItem {
     pub last_watched: String,
 }
 
-#[cinema_api(namespace = "watch")]
+#[draad::api(namespace = "watch")]
 pub trait WatchApi {
     /// Inserts the current playback position for a piece of media
     async fn record(&self, watch: RecordWatch) -> Result<(), Error>;
@@ -41,7 +40,7 @@ pub trait WatchApi {
     async fn history(&self) -> Result<Vec<WatchHistoryItem>, Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl WatchApi for AppContext {
     async fn record(&self, watch: RecordWatch) -> Result<(), Error> {
         sqlx::query(

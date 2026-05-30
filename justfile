@@ -1,8 +1,8 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # ts-rs per-type intermediates land here (under target/, never in src/).
-# Read by `cinema-schema-codegen` via the same env var.
-export TS_RS_EXPORT_DIR := justfile_directory() / "target" / "schema-bindings"
+# Read by `draad-codegen` via the same env var.
+export TS_RS_EXPORT_DIR := justfile_directory() / "target" / "draad-bindings"
 
 default:
     just dev
@@ -13,14 +13,12 @@ dev: schema
 build: schema
     cargo build --release
 
-# Regenerate every schema artifact: backend `_generated.rs` then the
-# `frontend/src/lib/schema/*.ts` files. Run this after editing any trait under
-# `src/api/` or any `#[cinema_type]` body.
+# Regenerate the TypeScript schema artifacts. The Rust `_generated.rs` is
+# produced by `build.rs` on every `cargo build` and lands in `OUT_DIR`, so
+# only the ts-rs export and the draad TS pass need an explicit pass.
 schema:
-    cargo run -p cinema-schema-codegen --quiet -- --rust-only
     cargo test --quiet export_bindings || true
-    cargo run -p cinema-schema-codegen --quiet
-    cargo fmt -p cinema
+    DRAAD_EMIT_TS=1 cargo build --quiet
 
 check:
     cargo fmt --all -- --check
@@ -29,6 +27,6 @@ check:
 
 clean-schema:
     rm -f src/_generated.rs
-    rm -rf target/schema-bindings
+    rm -rf target/draad-bindings
     find frontend/src/lib/schema -maxdepth 1 -name '*.ts' \
         ! -name 'rpc.ts' ! -name 'error.ts' -delete

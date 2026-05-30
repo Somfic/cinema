@@ -7,7 +7,6 @@ use clap::Parser;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
-mod _generated;
 mod api;
 mod app;
 mod config;
@@ -16,15 +15,16 @@ mod hls;
 mod logging;
 mod proxy;
 mod raw;
-mod rpc;
 mod streams;
 mod subtitles;
 mod tmdb;
 pub(crate) mod torrent;
 mod ws;
 
-use app::{AppContext, Result};
+use app::{AppContext, EventBus, Result};
 use config::Config;
+
+draad::include_generated!(crate::AppContext, crate::EventBus);
 
 #[derive(Parser)]
 #[command(name = "cinema", about = "Cinema media server")]
@@ -147,7 +147,7 @@ async fn run() -> Result<()> {
 
     // stream stats
     {
-        let events = _generated::Events::new(ctx.events.clone());
+        let events = Events::new(ctx.events.clone());
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(333)).await;
@@ -191,7 +191,7 @@ async fn run() -> Result<()> {
 
     // Mount schema-generated RPC routes (JSON one-shots).
     info!("mounting rpc at /api/rpc");
-    router = router.nest("/api/rpc", _generated::rpc_router().with_state(ctx.clone()));
+    router = router.nest("/api/rpc", rpc_router().with_state(ctx.clone()));
 
     // Mount the WebSocket bridge for server→client events.
     info!("mounting ws at /api/ws");
