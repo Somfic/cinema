@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from "svelte";
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import {
@@ -7,9 +8,11 @@
 		type MediaType,
 		type SubtitleTrack,
 		type SubtitleCue,
+		type Stream,
 	} from "$lib/schema";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
+	import { remote, type PlayerControls } from "$lib/remote.svelte";
 
 	interface AudioTrackInfo {
 		index: number;
@@ -51,10 +54,27 @@
 	let statsUnsub: (() => void) | undefined;
 	let piecesUnsub: (() => void) | undefined;
 	let transcoding = $state({ enabled: false, onlyAudio: false });
+	// Alternative streams/sources for this title, so a paired remote can offer
+	// the same source menu the inline player has.
+	let streams = $state<Stream[]>([]);
+	// Resume position (seconds) applied once on first load.
+	let startTime = $state(0);
 
 	const backdropUrls = $derived(
 		item?.backdrops?.map((b) => imageUrl(b, "original")) ?? [],
 	);
+
+	// Backdrop shown behind the player while it loads — the episode still for a
+	// TV episode, otherwise the movie/show backdrop.
+	const playerBackdrop = $derived.by(() => {
+		if (mediaType === "tv" && season !== null && episode !== null) {
+			const still = item?.seasons
+				?.find((s) => s.season_number === season)
+				?.episodes?.find((e) => e.episode_number === episode)?.stills?.[0];
+			if (still) return imageUrl(still, "original");
+		}
+		return backdropUrls[0];
+	});
 
 	const mediaType = $derived(page.params.type as MediaType);
 	const mediaId = $derived(Number(page.params.id));
@@ -141,6 +161,90 @@
 		});
 	});
 
+	// Fetch the alternative streams for this title (for the remote's source menu).
+	$effect(() => {
+		(async () => {
+			try {
+				if (mediaType === "movie") {
+					streams = await api.streams.movie(mediaId);
+				} else if (season !== null && episode !== null) {
+					streams = await api.streams.tv(mediaId, season, episode);
+				}
+			} catch {
+				streams = [];
+			}
+		})();
+	});
+
+	// ── Resume + progress ──
+	// Resume from the last watched position for this title/episode.
+	$effect(() => {
+		const type = mediaType;
+		const id = mediaId;
+		const s = season;
+		const e = episode;
+		api.watch
+			.history()
+			.then((items) => {
+				const entry = items.find(
+					(w) =>
+						w.media_type === type &&
+						w.tmdb_id === id &&
+						(type === "movie" || (w.season === s && w.episode === e)) &&
+						w.progress > 0,
+				);
+				if (entry && entry.duration > 0 && entry.progress < entry.duration - 30) {
+					startTime = entry.progress;
+				}
+			})
+			.catch(() => {});
+	});
+
+	// Once playback reaches the resume point, stop re-applying it so a later
+	// transcode/source switch resumes from the live position instead.
+	$effect(() => {
+		if (startTime > 0 && playerTime >= startTime - 0.5) startTime = 0;
+	});
+
+	function saveProgress() {
+		if (!item || playerTime <= 0) return;
+		if (mediaType === "tv" && (season === null || episode === null)) return;
+		api.watch
+			.record({
+				media_type: mediaType,
+				tmdb_id: mediaId,
+				title: item.title,
+				poster_path: item.poster_path ?? null,
+				season: season ?? null,
+				episode: episode ?? null,
+				info_hash: infoHash as string,
+				file_idx: fileIdx,
+				progress: playerTime,
+				duration: playerDuration,
+			})
+			.catch(() => {});
+	}
+
+	// Save periodically while playing.
+	$effect(() => {
+		if (!streamUrl) return;
+		const interval = setInterval(saveProgress, 30_000);
+		return () => clearInterval(interval);
+	});
+
+	// Switch source/quality by re-navigating the play route to the new stream.
+	function selectStream(hash: string) {
+		const stream = streams.find((s) => s.info_hash === hash);
+		if (!stream) return;
+		const qs = new URLSearchParams();
+		if (season !== null) qs.set("s", String(season));
+		if (episode !== null) qs.set("e", String(episode));
+		const q = qs.toString();
+		goto(
+			`/${mediaType}/${mediaId}/play/${stream.info_hash}/${stream.file_idx}${q ? `?${q}` : ""}`,
+		);
+	}
+
 	async function loadSubtitleTracks() {
 		if (!item) return;
 		loadingSubtitles = true;
@@ -211,6 +315,125 @@
 	}
 
 	let playerTime = $state(0);
+	let playerPaused = $state(true);
+	let playerVolume = $state(1);
+	let playerDuration = $state(0);
+	let playerBuffered = $state(0);
+	let playerSubtitleOffset = $state(-0.25);
+	let playerLoading = $state(true);
+	// Loose type: the bound instance exposes the VideoPlayer's `export function`s.
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	let playerRef = $state<any>(undefined);
+
+	// Integer-second tick: throttles the TV→remote state feed to ~1 Hz instead
+	// of firing on every `timeupdate`.
+	const tvSecond = $derived(Math.floor(playerTime));
+
+	// TV mode: register the player so a paired remote can drive it, and stream
+	// now-playing state back to the remote.
+	$effect(() => {
+		if (remote.mode !== "tv" || !playerRef) return;
+		const controls: PlayerControls = {
+			play: () => playerRef.play(),
+			pause: () => playerRef.pause(),
+			togglePlay: () => playerRef.togglePlay(),
+			seekTo: (t) => playerRef.seekTo(t),
+			seekBy: (d) => playerRef.seekBy(d),
+			setVolume: (v) => playerRef.setVolumeValue(v),
+			toggleMute: () => playerRef.toggleMute(),
+			toggleFullscreen: () => playerRef.toggleFullscreen(),
+			selectStream: (hash) => selectStream(hash),
+			selectAudio: (id) => switchAudio(id),
+			selectSubtitle: (url) => {
+				const track = subtitleTracks.find((t) => t.url === url);
+				if (track) selectSubtitleTrack(track);
+			},
+			subtitleOff: () => disableSubtitles(),
+			setSubtitleOffset: (delta) => {
+				playerSubtitleOffset += delta;
+			},
+			setTranscoding: (enabled, onlyAudio) => {
+				// Update the state the player binds to (the inline menu does this
+				// via binding; the command path must do it explicitly) so the
+				// published TvState reflects the toggle and the remote doesn't
+				// snap back.
+				transcoding.enabled = enabled;
+				transcoding.onlyAudio = onlyAudio;
+				toggleTranscoding(enabled, onlyAudio);
+			},
+			exit: () => close(),
+		};
+		remote.registerPlayer(controls);
+		return () => remote.clearPlayer();
+	});
+
+	$effect(() => {
+		if (remote.mode !== "tv") return;
+		remote.publishState({
+			title: playerTitle ?? undefined,
+			titleImage: item?.logo_path
+				? imageUrl(item.logo_path, "original")
+				: undefined,
+			topline: playerTopline ?? undefined,
+			poster: backdropUrls[0],
+			currentTime: tvSecond,
+			duration: playerDuration,
+			buffered: playerBuffered,
+			loading: playerLoading,
+			paused: playerPaused,
+			volume: playerVolume,
+			muted: playerVolume === 0,
+			playing: !!streamUrl,
+			streams: streams.map((s) => ({
+				info_hash: s.info_hash,
+				resolution: s.resolution,
+				source: s.source,
+				codec: s.codec,
+				audio: s.audio,
+				source_type: s.source_type,
+				size_display: s.size_display,
+			})),
+			activeStreamHash: infoHash,
+			audioTracks: fileAudioTracks.map((t) => ({
+				id: t.stream_index,
+				name: t.name,
+				lang: t.language ?? undefined,
+			})),
+			activeAudioTrack: activeAudioIdx,
+			subtitleTracks: subtitleTracks.map((t) => ({
+				id: t.id,
+				language: t.language,
+				url: t.url,
+			})),
+			activeTrackUrl,
+			subtitlesActive: activeCues.length > 0,
+			subtitleOffset: playerSubtitleOffset,
+			transcoding: {
+				enabled: transcoding.enabled,
+				onlyAudio: transcoding.onlyAudio,
+			},
+			streamStats,
+			pieceMap,
+		});
+	});
+
+	// Leaving playback: tell the paired remote the TV is idle again so it
+	// resumes mirroring the phone's browsing (a stale playing:true would
+	// otherwise keep navigation suppressed).
+	onDestroy(() => {
+		saveProgress();
+		if (remote.mode === "tv") {
+			remote.publishState({
+				currentTime: 0,
+				duration: 0,
+				paused: true,
+				volume: playerVolume,
+				muted: false,
+				playing: false,
+			});
+		}
+		remote.clearPlayer();
+	});
 
 	async function switchAudio(idx: number) {
 		activeAudioIdx = idx;
@@ -321,7 +544,17 @@
 			onClose={close}
 			onSubtitleSelect={selectSubtitleTrack}
 			onSubtitleOff={disableSubtitles}
+			backdrop={playerBackdrop}
+			{startTime}
+			bind:this={playerRef}
 			bind:currentTime={playerTime}
+			bind:paused={playerPaused}
+			bind:volume={playerVolume}
+			bind:duration={playerDuration}
+			bind:buffered={playerBuffered}
+			bind:subtitleOffset={playerSubtitleOffset}
+			bind:loading={playerLoading}
+			tvMode={remote.mode === "tv"}
 			autoplay
 		/>
 	{:else}
@@ -332,6 +565,8 @@
 			titleImage={item?.logo_path
 				? imageUrl(item.logo_path, "original")
 				: undefined}
+			backdrop={playerBackdrop}
+			tvMode={remote.mode === "tv"}
 			onClose={close}
 		/>
 	{/if}

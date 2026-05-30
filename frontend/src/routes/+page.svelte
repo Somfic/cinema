@@ -10,6 +10,8 @@
 	import { Heading, Input, Text, Icon, Modal, Button } from "glow";
 	import { sortable } from "glow";
 	import PosterCard from "$lib/components/PosterCard.svelte";
+	import TvHome from "$lib/components/TvHome.svelte";
+	import { remote } from "$lib/remote.svelte";
 	import { page } from "$app/state";
 	import { replaceState } from "$app/navigation";
 	import { setFocusSearch } from "$lib/topbar.svelte";
@@ -228,6 +230,9 @@
 	<title>Cinema</title>
 </svelte:head>
 
+{#if remote.mode === "tv"}
+	<TvHome />
+{:else}
 <div class="content">
 	<Input
 		type="text"
@@ -336,6 +341,7 @@
 		</div>
 	{/if}
 </div>
+{/if}
 
 <Modal
 	bind:open={addOpen}

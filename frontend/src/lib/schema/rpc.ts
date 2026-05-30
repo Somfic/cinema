@@ -46,6 +46,18 @@ let socketReady: Promise<WebSocket> | null = null;
 let reconnectAttempt = 0;
 const handlers = new Map<string, Set<Handler>>();
 const topicCounts = new Map<string, number>();
+const openHandlers = new Set<() => void>();
+
+/**
+ * Run `handler` every time the socket (re)connects, after topic subscriptions
+ * are restored. Used by the remote layer to re-announce presence on reconnect,
+ * since a fresh connection starts with an empty server-side roster entry.
+ */
+export function onOpen(handler: () => void): UnlistenFn {
+	openHandlers.add(handler);
+	if (socket && socket.readyState === WebSocket.OPEN) handler();
+	return () => openHandlers.delete(handler);
+}
 
 function wsUrl(): string {
 	const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -61,6 +73,13 @@ function connect(): Promise<WebSocket> {
 			reconnectAttempt = 0;
 			for (const topic of topicCounts.keys()) {
 				ws.send(JSON.stringify({ type: "subscribe", topic }));
+			}
+			for (const h of openHandlers) {
+				try {
+					h();
+				} catch (err) {
+					console.error("onOpen handler threw", err);
+				}
 			}
 			resolve(ws);
 		};
@@ -144,6 +163,31 @@ export function listen<T>(
 			topicCounts.set(topic, count);
 		}
 	};
+}
+
+/**
+ * Re-broadcast `payload` onto `topic` for every other client subscribed to it
+ * — the client→client proxy that powers the TV remote. The server only accepts
+ * `remote_*` topics. Connects the socket on demand if it isn't open yet.
+ */
+export function publish(topic: string, payload: unknown): void {
+	connect()
+		.then((ws) => ws.send(JSON.stringify({ type: "publish", topic, payload })))
+		.catch(() => {});
+}
+
+/**
+ * Announce or refresh this client's presence in the server-side roster. `type`
+ * is `register` on first connect and `update` on later role changes; the server
+ * treats them identically but the split keeps intent legible on the wire.
+ */
+export function announce(
+	presence: unknown,
+	kind: "register" | "update" = "update",
+): void {
+	connect()
+		.then((ws) => ws.send(JSON.stringify({ type: kind, presence })))
+		.catch(() => {});
 }
 
 function isErrorPayload(value: unknown): value is RpcErrorPayload {

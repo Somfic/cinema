@@ -126,6 +126,7 @@ async fn run() -> Result<()> {
         storage,
         config: config.clone(),
         events,
+        presence: app::Presence::default(),
         http,
     };
 
@@ -149,7 +150,7 @@ async fn run() -> Result<()> {
         let events = _generated::Events::new(ctx.events.clone());
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(333)).await;
                 let engine = torrent::TorrentEngine::get();
                 for hash in engine.active_info_hashes() {
                     let Ok(stats) = engine.stats(&hash) else {
