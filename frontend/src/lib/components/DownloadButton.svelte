@@ -1,9 +1,9 @@
 <script lang="ts">
 	import {
-		api,
 		type Download,
 		type ResolutionEstimate,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
 
 	let {

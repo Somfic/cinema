@@ -413,9 +413,8 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
- "cinema-schema",
- "cinema-schema-codegen",
  "clap",
+ "draad",
  "futures",
  "hex 0.4.3",
  "libc",
@@ -435,24 +434,6 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "urlencoding",
-]
-
-[[package]]
-name = "cinema-schema"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "cinema-schema-codegen"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -800,6 +781,33 @@ name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
+name = "draad"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eca22f1bb9535131d8e261a1cd63f5ead47da74f48989392528d975325a08d14"
+dependencies = [
+ "axum",
+ "draad-macros",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn",
+ "tokio",
+]
+
+[[package]]
+name = "draad-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f2d78618faede05be6d7467b152b93270471411255815398bd0e27657a329a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "dunce"

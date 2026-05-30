@@ -1,9 +1,8 @@
-use cinema_schema::cinema_type;
 use serde::Deserialize;
 
 use crate::config::Config;
 
-#[cinema_type]
+#[draad::ty]
 pub struct MediaItem {
     pub id: i64,
     pub imdb_id: Option<String>,
@@ -24,7 +23,7 @@ pub struct MediaItem {
     pub directors: Vec<CrewMember>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct CastMember {
     pub id: i64,
     pub name: String,
@@ -32,7 +31,7 @@ pub struct CastMember {
     pub profile_path: Option<String>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct CrewMember {
     pub id: i64,
     pub name: String,
@@ -40,7 +39,7 @@ pub struct CrewMember {
     pub profile_path: Option<String>,
 }
 
-#[cinema_type]
+#[draad::ty]
 #[derive(Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaType {
@@ -48,7 +47,7 @@ pub enum MediaType {
     Tv,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct SearchResult {
     pub id: i64,
     pub media_type: MediaType,
@@ -59,13 +58,13 @@ pub struct SearchResult {
     pub backdrop_path: Option<String>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct Genre {
     pub id: i64,
     pub name: String,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct Video {
     pub key: String,
     pub site: String,
@@ -73,7 +72,7 @@ pub struct Video {
     pub video_type: String,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct Season {
     pub id: i64,
     pub season_number: i64,
@@ -84,7 +83,7 @@ pub struct Season {
     pub episodes: Vec<Episode>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct Episode {
     pub episode_number: i64,
     pub name: String,

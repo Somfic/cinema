@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reqwest::Client;
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 
+use crate::api::remote::ClientPresence;
 use crate::config::Config;
 
 // ── Error ──
@@ -120,6 +122,43 @@ impl EventBus {
     }
 }
 
+// ── Presence Registry ──
+
+/// Tracks every connected WebSocket client so the server can tell clients about
+/// each other (the basis for phone↔TV pairing). Keyed by the client's stable
+/// id; each entry also remembers the `conn` sequence of the connection that
+/// wrote it, so a stale disconnect can't evict a fresh reconnect that reused the
+/// same id (e.g. a page reload).
+#[derive(Clone, Default)]
+pub struct Presence(Arc<Mutex<HashMap<String, (u64, ClientPresence)>>>);
+
+impl Presence {
+    pub async fn upsert(&self, conn: u64, client: ClientPresence) {
+        self.0
+            .lock()
+            .await
+            .insert(client.id.clone(), (conn, client));
+    }
+
+    /// Removes the client only if `conn` still owns the entry, so a late
+    /// disconnect from an old connection doesn't drop a reconnected client.
+    pub async fn remove(&self, id: &str, conn: u64) {
+        let mut map = self.0.lock().await;
+        if map.get(id).is_some_and(|(c, _)| *c == conn) {
+            map.remove(id);
+        }
+    }
+
+    pub async fn snapshot(&self) -> Vec<ClientPresence> {
+        self.0
+            .lock()
+            .await
+            .values()
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+}
+
 // ── App Context ──
 
 #[derive(Clone)]
@@ -128,5 +167,6 @@ pub struct AppContext {
     pub storage: Storage,
     pub config: Arc<Config>,
     pub events: EventBus,
+    pub presence: Presence,
     pub http: Client,
 }

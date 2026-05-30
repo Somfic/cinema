@@ -17,15 +17,15 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN bun install --cwd frontend --trust
 
-# Regenerate the schema (backend `_generated.rs` + frontend `lib/schema/*.ts`)
-# from the Rust traits/types so the frontend build below sees up-to-date
-# bindings. Mirrors the `just schema` recipe.
-RUN cargo run -p cinema-schema-codegen --quiet -- --rust-only
-RUN TS_RS_EXPORT_DIR=/app/target/schema-bindings cargo test --quiet export_bindings
-RUN TS_RS_EXPORT_DIR=/app/target/schema-bindings cargo run -p cinema-schema-codegen --quiet
+# `cargo build` runs `build.rs` which writes `_generated.rs` into OUT_DIR.
+# `cargo test export_bindings` produces ts-rs per-type bindings; then a build
+# with `CINEMA_EMIT_TS=1` has draad emit the `frontend/src/lib/schema/*.ts`
+# files the frontend build below depends on.
+ENV TS_RS_EXPORT_DIR=/app/target/draad-bindings
+RUN cargo test --quiet export_bindings
+RUN CINEMA_EMIT_TS=1 cargo build --release
 
 RUN bun run --cwd frontend build
-RUN cargo build --release
 
 FROM debian:bookworm-slim
 

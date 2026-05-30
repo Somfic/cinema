@@ -1,15 +1,17 @@
 <script lang="ts">
 	import {
-		api,
 		type SearchResult,
 		type WatchHistoryItem,
 		type CollectionItem,
 		type CollectionDef,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import { Heading, Input, Text, Icon, Modal, Button } from "glow";
 	import { sortable } from "glow";
 	import PosterCard from "$lib/components/PosterCard.svelte";
+	import TvHome from "$lib/components/TvHome.svelte";
+	import { remote } from "$lib/remote.svelte";
 	import { page } from "$app/state";
 	import { replaceState } from "$app/navigation";
 	import { setFocusSearch } from "$lib/topbar.svelte";
@@ -70,7 +72,10 @@
 								const items = await api.collections.get(d.slug);
 								return [d.slug, items] as const;
 							} catch {
-								return [d.slug, [] as CollectionItem[]] as const;
+								return [
+									d.slug,
+									[] as CollectionItem[],
+								] as const;
 							}
 						}),
 				);
@@ -133,7 +138,9 @@
 		if (!addTarget) return;
 		const slug = addTarget.slug;
 		if (isAdded(r.media_type, r.id)) {
-			await api.collections.remove(slug, r.media_type, r.id).catch(() => {});
+			await api.collections
+				.remove(slug, r.media_type, r.id)
+				.catch(() => {});
 		} else {
 			await api.collections
 				.add({
@@ -223,6 +230,9 @@
 	<title>Cinema</title>
 </svelte:head>
 
+{#if remote.mode === "tv"}
+	<TvHome />
+{:else}
 <div class="content">
 	<Input
 		type="text"
@@ -244,58 +254,60 @@
 				<div class="row">
 					{#if r.kind === "history"}
 						{#each historyItems as item (item.media_type + item.tmdb_id)}
-						{@const minLeft = Math.max(0, Math.ceil(
-							(item.duration - item.progress) / 60,
-						))}
-						{@const pct =
-							item.duration > 0
-								? item.progress / item.duration
-								: 0}
-						<PosterCard
-							expand
-							posterPath={item.poster_path}
-							mediaType={item.media_type}
-							tmdbId={item.tmdb_id}
-							progress={pct}
-							onclick={() =>
-								(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
-						>
-							{#snippet bottomLeft()}
-								<Text size="xs" variant="muted">
-									{item.media_type === "tv" && item.season > 0
-										? `S${item.season} E${item.episode} · ${minLeft} min left`
-										: `${minLeft} min left`}
-								</Text>
-							{/snippet}
-						</PosterCard>
-					{/each}
+							{@const minLeft = Math.max(
+								0,
+								Math.ceil((item.duration - item.progress) / 60),
+							)}
+							{@const pct =
+								item.duration > 0
+									? item.progress / item.duration
+									: 0}
+							<PosterCard
+								expand
+								posterPath={item.poster_path}
+								mediaType={item.media_type}
+								tmdbId={item.tmdb_id}
+								progress={pct}
+								onclick={() =>
+									(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+							>
+								{#snippet bottomLeft()}
+									<Text size="xs" variant="muted">
+										{item.media_type === "tv" &&
+										item.season > 0
+											? `S${item.season} E${item.episode} · ${minLeft} min left`
+											: `${minLeft} min left`}
+									</Text>
+								{/snippet}
+							</PosterCard>
+						{/each}
 					{:else}
 						{#each collectionItems[r.def.slug] ?? [] as item (item.media_type + item.tmdb_id)}
-						<PosterCard
-							expand
-							posterPath={item.poster_path}
-							mediaType={item.media_type}
-							tmdbId={item.tmdb_id}
-							onclick={() =>
-								(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
-						>
-							{#snippet bottomLeft()}
-								<Text size="xs" variant="muted"
-									>{item.title}</Text
-								>
-							{/snippet}
-						</PosterCard>
-					{/each}
-					<div class="poster">
-						<button
-							type="button"
-							class="add-tile"
-							aria-label={`Add to ${r.def.title}`}
-							onclick={() => openAdd(r.def)}
-						>
-							<Icon name="Plus" />
-						</button>
-					</div>
+							<PosterCard
+								expand
+								posterPath={item.poster_path}
+								mediaType={item.media_type}
+								tmdbId={item.tmdb_id}
+								onclick={() =>
+									(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+							>
+								{#snippet bottomLeft()}
+									<Text size="xs" variant="muted"
+										>{item.title}</Text
+									>
+								{/snippet}
+							</PosterCard>
+						{/each}
+						<div class="poster">
+							<button
+								type="button"
+								class="add-tile"
+								aria-label={`Add to ${r.def.title}`}
+								onclick={() => openAdd(r.def)}
+							>
+								<Icon name="Plus" />
+							</button>
+						</div>
 					{/if}
 				</div>
 			</section>
@@ -304,31 +316,32 @@
 		<div class="grid">
 			{#each results as item (item.id + item.media_type)}
 				<div transition:fade={{ duration: 150 }}>
-				<PosterCard
-					posterPath={item.poster_path}
-					mediaType={item.media_type}
-					tmdbId={item.id}
-					onclick={() =>
-						(window.location.href = `/${item.media_type}/${item.id}`)}
-				>
-					{#snippet bottomLeft()}
-						<Text size="xs" variant="muted">{item.title}</Text>
-					{/snippet}
-					{#snippet bottomRight()}
-						<Text size="xs" variant="muted">
-							{item.release_date
-								? `${item.release_date.slice(0, 4)} · ${item.media_type === "movie" ? "Movie" : "TV"}`
-								: item.media_type === "movie"
-									? "Movie"
-									: "TV"}
-						</Text>
-					{/snippet}
-				</PosterCard>
+					<PosterCard
+						posterPath={item.poster_path}
+						mediaType={item.media_type}
+						tmdbId={item.id}
+						onclick={() =>
+							(window.location.href = `/${item.media_type}/${item.id}`)}
+					>
+						{#snippet bottomLeft()}
+							<Text size="xs" variant="muted">{item.title}</Text>
+						{/snippet}
+						{#snippet bottomRight()}
+							<Text size="xs" variant="muted">
+								{item.release_date
+									? `${item.release_date.slice(0, 4)} · ${item.media_type === "movie" ? "Movie" : "TV"}`
+									: item.media_type === "movie"
+										? "Movie"
+										: "TV"}
+							</Text>
+						{/snippet}
+					</PosterCard>
 				</div>
 			{/each}
 		</div>
 	{/if}
 </div>
+{/if}
 
 <Modal
 	bind:open={addOpen}
@@ -362,7 +375,9 @@
 							{/snippet}
 							{#snippet bottomRight()}
 								{#if added}
-									<Text size="xs" variant="muted">✓ Added</Text>
+									<Text size="xs" variant="muted"
+										>✓ Added</Text
+									>
 								{/if}
 							{/snippet}
 						</PosterCard>
@@ -439,6 +454,22 @@
 		gap: 0.75rem;
 		overflow-x: auto;
 		padding-bottom: 0.25rem;
+		margin-inline: -2rem;
+		padding-inline: 2rem;
+		-webkit-mask-image: linear-gradient(
+			to right,
+			transparent 0,
+			#000 2rem,
+			#000 calc(100% - 2rem),
+			transparent 100%
+		);
+		mask-image: linear-gradient(
+			to right,
+			transparent 0,
+			#000 2rem,
+			#000 calc(100% - 2rem),
+			transparent 100%
+		);
 	}
 
 	.row > .poster {
@@ -447,14 +478,54 @@
 		flex-shrink: 0;
 	}
 
+	@media (max-width: 768px) {
+		.content {
+			padding: 1rem;
+		}
+
+		.grid {
+			grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+			gap: 0.5rem;
+		}
+
+		.row {
+			gap: 0.5rem;
+			margin-inline: -1rem;
+			padding-inline: 1rem;
+			-webkit-mask-image: linear-gradient(
+				to right,
+				transparent 0,
+				#000 1rem,
+				#000 calc(100% - 1rem),
+				transparent 100%
+			);
+			mask-image: linear-gradient(
+				to right,
+				transparent 0,
+				#000 1rem,
+				#000 calc(100% - 1rem),
+				transparent 100%
+			);
+		}
+
+		.row > .poster {
+			width: calc((100vw - 2rem - 1.5rem) / 3.1);
+			height: auto;
+			aspect-ratio: 147 / 220;
+		}
+
+		section :global(.glow-heading) {
+			font-size: 1.1rem;
+		}
+	}
+
 	.add-tile {
 		width: 100%;
 		height: 100%;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border: 2px dashed
-			var(--glow-border-color, rgba(255, 255, 255, 0.25));
+		border: 2px dashed var(--glow-border-color, rgba(255, 255, 255, 0.25));
 		border-radius: 12px;
 		background: transparent;
 		color: inherit;

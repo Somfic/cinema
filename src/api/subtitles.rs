@@ -1,4 +1,3 @@
-use cinema_schema::cinema_api;
 
 use crate::app::{AppContext, Error};
 use crate::subtitles as subtitles_mod;
@@ -6,7 +5,7 @@ use crate::tmdb::{MediaType, TmdbClient};
 
 pub use crate::subtitles::{SubtitleCue, SubtitleTrack};
 
-#[cinema_api(namespace = "subtitles")]
+#[draad::api(namespace = "subtitles")]
 pub trait SubtitlesApi {
     /// External subtitle tracks (OpenSubtitles etc.) for a movie
     async fn movie(&self, id: i64) -> Result<Vec<SubtitleTrack>, Error>;
@@ -18,7 +17,7 @@ pub trait SubtitlesApi {
     async fn cues(&self, url: String) -> Result<Vec<SubtitleCue>, Error>;
 }
 
-#[cinema_api]
+#[draad::api]
 impl SubtitlesApi for AppContext {
     async fn movie(&self, id: i64) -> Result<Vec<SubtitleTrack>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());

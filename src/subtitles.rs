@@ -1,4 +1,3 @@
-use cinema_schema::cinema_type;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -18,7 +17,7 @@ struct RawSubtitle {
     g: Option<String>,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct SubtitleTrack {
     pub id: String,
     pub language: String,
@@ -27,7 +26,7 @@ pub struct SubtitleTrack {
     pub score: i64,
 }
 
-#[cinema_type]
+#[draad::ty]
 pub struct SubtitleCue {
     /// Start time in seconds
     pub start: f64,

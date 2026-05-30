@@ -1,10 +1,10 @@
 <script lang="ts">
 	import {
-		api,
 		type MediaItem,
 		type SearchResult,
 		type WatchHistoryItem,
 	} from "$lib/schema";
+	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import {
 		Button,
@@ -63,6 +63,7 @@
 		similarItems = [],
 		resumeEntry,
 		onresume,
+		tvMode = false,
 	}: {
 		item: MediaItem;
 		loadingStreams?: boolean;
@@ -72,6 +73,8 @@
 		similarItems?: SearchResult[];
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
+		/** When true this is a TV display: show the hero/meta only, no controls. */
+		tvMode?: boolean;
 	} = $props();
 
 	const infoModal = useModal();
@@ -216,7 +219,7 @@
 	);
 </script>
 
-<div class="sidebar">
+<div class="sidebar" class:tv={tvMode}>
 	<div class="title-area">
 		{#if item.logo_path}
 			<img
@@ -229,7 +232,7 @@
 		{/if}
 	</div>
 
-	<div class="actions-row">
+	<div class="actions-row" class:tv={tvMode}>
 		<div class="meta">
 			{#if item.release_date}
 				<Text as="span" variant="secondary" size="sm"
@@ -256,45 +259,54 @@
 				>
 			{/if}
 		</div>
-		<Button
-			variant="ghost"
-			icon={isFavorite ? { name: "Heart", fill: true } : "Heart"}
-			tooltip={isFavorite ? "Remove from favorites" : "Add to favorites"}
-			loading={favoriteLoading}
-			onclick={() =>
-				toggleCollection(
-					"favorites",
-					isFavorite,
-					(v) => (favoriteLoading = v),
-					(v) => (isFavorite = v),
-				)}
-		/>
-		<Button
-			variant="ghost"
-			icon={onWatchlist ? { name: "Bookmark", fill: true } : "Bookmark"}
-			tooltip={onWatchlist ? "Remove from watchlist" : "Add to watchlist"}
-			loading={watchlistLoading}
-			onclick={() =>
-				toggleCollection(
-					"watchlist",
-					onWatchlist,
-					(v) => (watchlistLoading = v),
-					(v) => (onWatchlist = v),
-				)}
-		/>
-		<Button
-			variant="ghost"
-			icon="Info"
-			tooltip="More information"
-			onclick={infoModal.show}
-		/>
-		{#if onselectseason && item.seasons?.length}
+		{#if !tvMode}
 			<Button
 				variant="ghost"
-				icon="LayoutGrid"
-				tooltip="Browse episodes"
-				onclick={() => onselectseason(item.seasons![0].season_number)}
+				icon={isFavorite ? { name: "Heart", fill: true } : "Heart"}
+				tooltip={isFavorite
+					? "Remove from favorites"
+					: "Add to favorites"}
+				loading={favoriteLoading}
+				onclick={() =>
+					toggleCollection(
+						"favorites",
+						isFavorite,
+						(v) => (favoriteLoading = v),
+						(v) => (isFavorite = v),
+					)}
 			/>
+			<Button
+				variant="ghost"
+				icon={onWatchlist
+					? { name: "Bookmark", fill: true }
+					: "Bookmark"}
+				tooltip={onWatchlist
+					? "Remove from watchlist"
+					: "Add to watchlist"}
+				loading={watchlistLoading}
+				onclick={() =>
+					toggleCollection(
+						"watchlist",
+						onWatchlist,
+						(v) => (watchlistLoading = v),
+						(v) => (onWatchlist = v),
+					)}
+			/>
+			<Button
+				variant="ghost"
+				icon="Info"
+				tooltip="More information"
+				onclick={infoModal.show}
+			/>
+			{#if onselectseason && item.seasons?.length}
+				<Button
+					variant="ghost"
+					icon="LayoutGrid"
+					tooltip="Browse episodes"
+					onclick={() =>
+						onselectseason(item.seasons![0].season_number)}
+				/>
+			{/if}
 		{/if}
 		<!-- <DownloadButton
 			mediaType={item.media_type}
@@ -304,7 +316,7 @@
 		/> -->
 	</div>
 
-	{#if item.media_type === "movie" && (movieResume ? onresume : onwatch)}
+	{#if !tvMode && item.media_type === "movie" && (movieResume ? onresume : onwatch)}
 		<PlayCard
 			image={movieBackdrop}
 			label={item.title}
@@ -320,7 +332,7 @@
 		/>
 	{/if}
 
-	{#if item.seasons?.length && tvOnclick}
+	{#if !tvMode && item.seasons?.length && tvOnclick}
 		<PlayCard
 			image={tvImage}
 			label={tvLabel}
@@ -521,6 +533,7 @@
 	.logo {
 		object-fit: contain;
 		max-width: 100%;
+		max-height: 30vh;
 		filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.6));
 	}
 
@@ -537,6 +550,31 @@
 		gap: 0.75rem;
 		align-items: center;
 		margin-right: auto;
+	}
+
+	/* TV mode: no action buttons, so right-align the meta. */
+	.actions-row.tv .meta {
+		margin-right: 0;
+		margin-left: auto;
+	}
+
+	/* TV mode: group the logo directly above the meta at the bottom of the
+	   hero, both right-aligned (no centered logo, no big gap). */
+	.sidebar.tv {
+		justify-content: flex-end;
+	}
+
+	.sidebar.tv .title-area {
+		flex: none;
+		align-items: flex-end;
+	}
+
+	.sidebar.tv .logo {
+		margin-left: auto;
+	}
+
+	.sidebar.tv .actions-row {
+		margin-top: 0;
 	}
 
 	.actions-row {
