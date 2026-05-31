@@ -2,12 +2,12 @@
 //! bytes, HLS segment files, image/asset proxies. These mount as plain Axum
 //! routes alongside `rpc_router()`.
 
-use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
+use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::app::{AppContext, Error};
@@ -17,6 +17,10 @@ use crate::torrent::TorrentEngine;
 pub fn router() -> Router<AppContext> {
     Router::new()
         .route("/stream/{info_hash}/{file_idx}", get(stream_file))
+        .route(
+            "/stream/{info_hash}/{file_idx}/audio",
+            get(stream_audio_tracks),
+        )
         .route(
             "/stream/{info_hash}/{file_idx}/remux",
             post(stream_remux_hls),
@@ -71,10 +75,10 @@ async fn image_proxy(
         .to_string();
     let bytes = res.bytes().await.map_err(Error::from)?;
 
-    if let Some(parent) = cache_path.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            tracing::warn!("failed to create image cache dir {}: {e}", parent.display());
-        }
+    if let Some(parent) = cache_path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        tracing::warn!("failed to create image cache dir {}: {e}", parent.display());
     }
     if let Err(e) = tokio::fs::write(&cache_path, &bytes).await {
         tracing::warn!("failed to write image cache {}: {e}", cache_path.display());
@@ -107,6 +111,44 @@ async fn stream_file(
         .map(|s| s.to_string());
 
     serve_range_response(reader, total_size, range_header.as_deref(), "video/mp4")
+}
+
+async fn stream_audio_tracks(
+    State(ctx): State<AppContext>,
+    Path((info_hash, file_idx)): Path<(String, usize)>,
+) -> Result<Json<serde_json::Value>, RawError> {
+    let engine = TorrentEngine::get();
+    let path = engine.file_path(&info_hash, file_idx)?;
+    let (tracks, subtitles, duration) = tokio::join!(
+        TorrentEngine::audio_tracks(&path),
+        TorrentEngine::subtitle_tracks(&path),
+        TorrentEngine::probe_duration(&path),
+    );
+
+    // Filter embedded subtitle tracks by configured languages
+    let subtitles = {
+        let allowed: Vec<&str> = ctx
+            .config
+            .subtitle_languages
+            .iter()
+            .map(|l| crate::subtitles::to_iso639_2(l))
+            .collect();
+        subtitles
+            .into_iter()
+            .filter(|s| {
+                s.language
+                    .as_deref()
+                    .map(|l| allowed.contains(&l))
+                    .unwrap_or(true) // keep tracks with unknown language
+            })
+            .collect::<Vec<_>>()
+    };
+
+    Ok(Json(serde_json::json!({
+        "tracks": tracks,
+        "subtitles": subtitles,
+        "duration": duration,
+    })))
 }
 
 #[derive(Deserialize)]
