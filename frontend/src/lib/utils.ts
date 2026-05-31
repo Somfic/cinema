@@ -1,5 +1,5 @@
-import type { MediaType } from "$lib/schema";
 import { api } from "$lib/api";
+import type { MediaType } from "./schema/tmdb";
 
 export function imageUrl(path: string, size: string = "original"): string {
 	return `/api/image/${size}${path}`;

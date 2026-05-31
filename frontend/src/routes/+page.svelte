@@ -15,7 +15,7 @@
 	import { page } from "$app/state";
 	import { replaceState } from "$app/navigation";
 	import { setFocusSearch } from "$lib/topbar.svelte";
-	import { onDestroy } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import { browser } from "$app/environment";
 	import { fade } from "svelte/transition";
 
@@ -72,10 +72,7 @@
 								const items = await api.collections.get(d.slug);
 								return [d.slug, items] as const;
 							} catch {
-								return [
-									d.slug,
-									[] as CollectionItem[],
-								] as const;
+								return [d.slug, [] as CollectionItem[]] as const;
 							}
 						}),
 				);
@@ -138,9 +135,7 @@
 		if (!addTarget) return;
 		const slug = addTarget.slug;
 		if (isAdded(r.media_type, r.id)) {
-			await api.collections
-				.remove(slug, r.media_type, r.id)
-				.catch(() => {});
+			await api.collections.remove(slug, r.media_type, r.id).catch(() => {});
 		} else {
 			await api.collections
 				.add({
@@ -212,18 +207,19 @@
 	}
 
 	// Run initial search if q param is present
-	if (browser && query.length >= 2) {
+	onMount(() => {
+		if (query.length < 2) return;
+
 		loading = true;
 		api.search
 			.search(query)
 			.then((items) => {
 				results = items;
-				loading = false;
 			})
-			.catch(() => {
+			.finally(() => {
 				loading = false;
 			});
-	}
+	});
 </script>
 
 <svelte:head>
@@ -233,114 +229,109 @@
 {#if remote.mode === "tv"}
 	<TvHome />
 {:else}
-<div class="content">
-	<Input
-		type="text"
-		placeholder="Search movies and TV shows..."
-		value={query}
-		icon={"Search"}
-		{loading}
-		inputRef={(el) => (searchInput = el)}
-		onChange={(v) => {
-			query = v;
-			onInput();
-		}}
-	/>
+	<div class="content">
+		<Input
+			type="text"
+			placeholder="Search movies and TV shows..."
+			value={query}
+			icon={"Search"}
+			{loading}
+			inputRef={(el) => (searchInput = el)}
+			onChange={(v) => {
+				query = v;
+				onInput();
+			}}
+		/>
 
-	{#if browsing}
-		{#each rows as r (r.def.slug)}
-			<section>
-				<Heading level={2}>{r.def.title}</Heading>
-				<div class="row">
-					{#if r.kind === "history"}
-						{#each historyItems as item (item.media_type + item.tmdb_id)}
-							{@const minLeft = Math.max(
-								0,
-								Math.ceil((item.duration - item.progress) / 60),
-							)}
-							{@const pct =
-								item.duration > 0
-									? item.progress / item.duration
-									: 0}
-							<PosterCard
-								expand
-								posterPath={item.poster_path}
-								mediaType={item.media_type}
-								tmdbId={item.tmdb_id}
-								progress={pct}
-								onclick={() =>
-									(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
-							>
-								{#snippet bottomLeft()}
-									<Text size="xs" variant="muted">
-										{item.media_type === "tv" &&
-										item.season > 0
-											? `S${item.season} E${item.episode} · ${minLeft} min left`
-											: `${minLeft} min left`}
-									</Text>
-								{/snippet}
-							</PosterCard>
-						{/each}
-					{:else}
-						{#each collectionItems[r.def.slug] ?? [] as item (item.media_type + item.tmdb_id)}
-							<PosterCard
-								expand
-								posterPath={item.poster_path}
-								mediaType={item.media_type}
-								tmdbId={item.tmdb_id}
-								onclick={() =>
-									(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
-							>
-								{#snippet bottomLeft()}
-									<Text size="xs" variant="muted"
-										>{item.title}</Text
-									>
-								{/snippet}
-							</PosterCard>
-						{/each}
-						<div class="poster">
-							<button
-								type="button"
-								class="add-tile"
-								aria-label={`Add to ${r.def.title}`}
-								onclick={() => openAdd(r.def)}
-							>
-								<Icon name="Plus" />
-							</button>
-						</div>
-					{/if}
-				</div>
-			</section>
-		{/each}
-	{:else if results.length > 0}
-		<div class="grid">
-			{#each results as item (item.id + item.media_type)}
-				<div transition:fade={{ duration: 150 }}>
-					<PosterCard
-						posterPath={item.poster_path}
-						mediaType={item.media_type}
-						tmdbId={item.id}
-						onclick={() =>
-							(window.location.href = `/${item.media_type}/${item.id}`)}
-					>
-						{#snippet bottomLeft()}
-							<Text size="xs" variant="muted">{item.title}</Text>
-						{/snippet}
-						{#snippet bottomRight()}
-							<Text size="xs" variant="muted">
-								{item.release_date
-									? `${item.release_date.slice(0, 4)} · ${item.media_type === "movie" ? "Movie" : "TV"}`
-									: item.media_type === "movie"
-										? "Movie"
-										: "TV"}
-							</Text>
-						{/snippet}
-					</PosterCard>
-				</div>
+		{#if browsing}
+			{#each rows as r (r.def.slug)}
+				<section>
+					<Heading level={2}>{r.def.title}</Heading>
+					<div class="row">
+						{#if r.kind === "history"}
+							{#each historyItems as item (item.media_type + item.tmdb_id)}
+								{@const minLeft = Math.max(
+									0,
+									Math.ceil((item.duration - item.progress) / 60),
+								)}
+								{@const pct =
+									item.duration > 0 ? item.progress / item.duration : 0}
+								<PosterCard
+									expand
+									posterPath={item.poster_path}
+									mediaType={item.media_type}
+									tmdbId={item.tmdb_id}
+									progress={pct}
+									onclick={() =>
+										(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+								>
+									{#snippet bottomLeft()}
+										<Text size="xs" variant="muted">
+											{item.media_type === "tv" && item.season > 0
+												? `S${item.season} E${item.episode} · ${minLeft} min left`
+												: `${minLeft} min left`}
+										</Text>
+									{/snippet}
+								</PosterCard>
+							{/each}
+						{:else}
+							{#each collectionItems[r.def.slug] ?? [] as item (item.media_type + item.tmdb_id)}
+								<PosterCard
+									expand
+									posterPath={item.poster_path}
+									mediaType={item.media_type}
+									tmdbId={item.tmdb_id}
+									onclick={() =>
+										(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+								>
+									{#snippet bottomLeft()}
+										<Text size="xs" variant="muted">{item.title}</Text>
+									{/snippet}
+								</PosterCard>
+							{/each}
+							<div class="poster">
+								<button
+									type="button"
+									class="add-tile"
+									aria-label={`Add to ${r.def.title}`}
+									onclick={() => openAdd(r.def)}
+								>
+									<Icon name="Plus" />
+								</button>
+							</div>
+						{/if}
+					</div>
+				</section>
 			{/each}
-		</div>
-	{/if}
-</div>
+		{:else if results.length > 0}
+			<div class="grid">
+				{#each results as item (item.id + item.media_type)}
+					<div transition:fade={{ duration: 150 }}>
+						<PosterCard
+							posterPath={item.poster_path}
+							mediaType={item.media_type}
+							tmdbId={item.id}
+							onclick={() =>
+								(window.location.href = `/${item.media_type}/${item.id}`)}
+						>
+							{#snippet bottomLeft()}
+								<Text size="xs" variant="muted">{item.title}</Text>
+							{/snippet}
+							{#snippet bottomRight()}
+								<Text size="xs" variant="muted">
+									{item.release_date
+										? `${item.release_date.slice(0, 4)} · ${item.media_type === "movie" ? "Movie" : "TV"}`
+										: item.media_type === "movie"
+											? "Movie"
+											: "TV"}
+								</Text>
+							{/snippet}
+						</PosterCard>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</div>
 {/if}
 
 <Modal
@@ -375,9 +366,7 @@
 							{/snippet}
 							{#snippet bottomRight()}
 								{#if added}
-									<Text size="xs" variant="muted"
-										>✓ Added</Text
-									>
+									<Text size="xs" variant="muted">✓ Added</Text>
 								{/if}
 							{/snippet}
 						</PosterCard>
@@ -409,9 +398,7 @@
 							{/if}
 							<img
 								class="thumb"
-								src={item.poster_path
-									? imageUrl(item.poster_path, "w92")
-									: ""}
+								src={item.poster_path ? imageUrl(item.poster_path, "w92") : ""}
 								alt=""
 							/>
 							<Text size="sm">{item.title}</Text>

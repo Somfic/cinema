@@ -6,7 +6,6 @@
 	import * as topbar from "$lib/topbar.svelte";
 	import {
 		type MediaItem,
-		type MediaType,
 		type Stream,
 		type SubtitleTrack,
 		type SubtitleCue,
@@ -19,12 +18,13 @@
 
 	// This client is a remote-driven TV display.
 	const isTv = $derived(remote.mode === "tv");
-	import { Banner, Button, Spinner, Text } from "glow";
+	import { Banner, Spinner } from "glow";
 	import CyclingBackdrop from "$lib/components/CyclingBackdrop.svelte";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import MediaInfo from "$lib/components/MediaInfo.svelte";
 	import SeasonBrowser from "$lib/components/SeasonBrowser.svelte";
 	import EpisodeDetail from "$lib/components/EpisodeDetail.svelte";
+	import type { MediaType } from "$lib/schema/tmdb";
 
 	type EmbeddedSubtitleTrack = {
 		stream_index: number;
@@ -65,13 +65,7 @@
 		codec: string;
 	}
 
-	const BROWSER_SAFE_AUDIO = new Set([
-		"aac",
-		"mp3",
-		"opus",
-		"vorbis",
-		"flac",
-	]);
+	const BROWSER_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "vorbis", "flac"]);
 	interface StreamStats {
 		progress_bytes: number;
 		total_bytes: number;
@@ -108,9 +102,8 @@
 	);
 
 	const activeEpisode = $derived(
-		activeSeason?.episodes?.find(
-			(e) => e.episode_number === selectedEpisode,
-		) ?? null,
+		activeSeason?.episodes?.find((e) => e.episode_number === selectedEpisode) ??
+			null,
 	);
 
 	const playerTitle = $derived(
@@ -393,8 +386,7 @@
 				fileAudioTracks = [];
 				activeAudioIdx = 0;
 				pollAudioTracks(stream.info_hash, stream.file_idx);
-				if (!result.local)
-					pollStreamStats(stream.info_hash, stream.file_idx);
+				if (!result.local) pollStreamStats(stream.info_hash, stream.file_idx);
 			})
 			.catch((e) => {
 				error = e.message;
@@ -411,9 +403,7 @@
 
 		const check = async () => {
 			try {
-				const res = await fetch(
-					`/api/stream/${infoHash}/${fileIdx}/audio`,
-				);
+				const res = await fetch(`/api/stream/${infoHash}/${fileIdx}/audio`);
 				const data = await res.json();
 				const tracks: AudioTrackInfo[] = data.tracks ?? [];
 				const subs: EmbeddedSubtitleTrack[] = data.subtitles ?? [];
@@ -428,12 +418,7 @@
 					) {
 						fileAudioTracks = tracks;
 						transcoding.enabled = true;
-						startHlsRemux(
-							infoHash,
-							fileIdx,
-							0,
-							transcoding.onlyAudio,
-						);
+						startHlsRemux(infoHash, fileIdx, 0, transcoding.onlyAudio);
 					}
 				}
 				if (subs.length > 0 && embeddedSubtitleTracks.length === 0) {
@@ -554,9 +539,7 @@
 
 	function stopHlsSession() {
 		if (hlsSessionId) {
-			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(
-				() => {},
-			);
+			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(() => {});
 			hlsSessionId = null;
 		}
 	}
@@ -686,8 +669,8 @@
 </svelte:head>
 
 {#if error}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div onclick={() => (error = "")}>
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<div role="button" tabindex="0" onclick={() => (error = "")}>
 		<Banner variant="error" label={error} />
 	</div>
 {/if}

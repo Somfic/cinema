@@ -4,7 +4,6 @@
 	import { goto } from "$app/navigation";
 	import {
 		type MediaItem,
-		type MediaType,
 		type SubtitleTrack,
 		type SubtitleCue,
 		type Stream,
@@ -13,6 +12,7 @@
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import { remote, type PlayerControls } from "$lib/remote.svelte";
+	import type { MediaType } from "$lib/schema/tmdb";
 
 	interface AudioTrackInfo {
 		index: number;
@@ -22,13 +22,7 @@
 		codec: string;
 	}
 
-	const BROWSER_SAFE_AUDIO = new Set([
-		"aac",
-		"mp3",
-		"opus",
-		"vorbis",
-		"flac",
-	]);
+	const BROWSER_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "vorbis", "flac"]);
 
 	let item = $state<MediaItem | null>(null);
 	let streamUrl = $state<string | null>(null);
@@ -97,9 +91,7 @@
 		if (!item || mediaType !== "tv" || season === null || episode === null)
 			return null;
 		const s = item.seasons?.find((s) => s.season_number === season);
-		return (
-			s?.episodes?.find((e) => e.episode_number === episode)?.name ?? null
-		);
+		return s?.episodes?.find((e) => e.episode_number === episode)?.name ?? null;
 	});
 
 	const playerTitle = $derived(
@@ -193,7 +185,11 @@
 						(type === "movie" || (w.season === s && w.episode === e)) &&
 						w.progress > 0,
 				);
-				if (entry && entry.duration > 0 && entry.progress < entry.duration - 30) {
+				if (
+					entry &&
+					entry.duration > 0 &&
+					entry.progress < entry.duration - 30
+				) {
 					startTime = entry.progress;
 				}
 			})
@@ -457,10 +453,7 @@
 			);
 		} else {
 			stopHlsSession();
-			const result = await playStream(
-				infoHash as string,
-				fileIdx as number,
-			);
+			const result = await playStream(infoHash as string, fileIdx as number);
 			streamUrl = result.url;
 		}
 	}
@@ -490,9 +483,7 @@
 
 	function stopHlsSession() {
 		if (hlsSessionId) {
-			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(
-				() => {},
-			);
+			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(() => {});
 			hlsSessionId = null;
 		}
 	}
