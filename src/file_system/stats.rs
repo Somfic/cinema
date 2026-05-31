@@ -39,7 +39,7 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
         .await
         .map_err(|e| Error::Generic(e.to_string()))?;
 
-    let torrents = file_system::torrents_root(&ctx);
+    let torrents = file_system::torrents_root(ctx);
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut movies_bytes: u64 = 0;
     let mut tv_bytes: u64 = 0;

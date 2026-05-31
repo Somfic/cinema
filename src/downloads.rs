@@ -47,13 +47,13 @@ impl DownloadManager {
             sqlx::query("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
                 .execute(&self.ctx.db)
                 .await;
-        if let Ok(r) = &reset {
-            if r.rows_affected() > 0 {
-                tracing::info!(
-                    count = r.rows_affected(),
-                    "Reset interrupted downloads to queued"
-                );
-            }
+        if let Ok(r) = &reset
+            && r.rows_affected() > 0
+        {
+            tracing::info!(
+                count = r.rows_affected(),
+                "Reset interrupted downloads to queued"
+            );
         }
         tracing::info!("Download manager started");
 
@@ -83,10 +83,8 @@ impl DownloadManager {
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
                 msg = rx.recv() => {
-                    if let Ok(event) = msg {
-                        if event.topic == "download:enqueue" {
+                    if let Ok(event) = msg && event.topic == "download:enqueue" {
                             continue;
-                        }
                     }
                 }
             }

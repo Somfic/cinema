@@ -703,7 +703,7 @@ impl TorrentEngine {
         // Get the file's piece range from torrent metadata
         let handle = self
             .session
-            .get(id.clone())
+            .get(id)
             .ok_or_else(|| crate::app::Error::Generic("Torrent not found".into()))?;
 
         let piece_range = handle
@@ -753,12 +753,11 @@ impl TorrentEngine {
             let s = i * total / buckets;
             let e = (i + 1) * total / buckets;
             let count = e - s;
-            if count == 0 {
-                result.push(0);
-            } else {
+            let value = std::num::NonZeroUsize::new(count).map_or(0, |count| {
                 let have = pieces[s..e].iter().filter(|&&b| b).count();
-                result.push((have * 255 / count) as u8);
-            }
+                (have.saturating_mul(255) / count) as u8
+            });
+            result.push(value);
         }
 
         Ok(result)
@@ -768,7 +767,7 @@ impl TorrentEngine {
     pub async fn stop(&self, info_hash: &str) {
         self.drop_stream_handles(info_hash).await;
         if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
-            let name = self.session.get(id.clone()).and_then(|h| h.name());
+            let name = self.session.get(id).and_then(|h| h.name());
             let _ = self.session.delete(id, false).await;
             self.span
                 .in_scope(|| tracing::info!(info_hash, name, "Torrent stopped (files kept)"));
@@ -785,7 +784,7 @@ impl TorrentEngine {
     pub async fn stop_and_delete(&self, info_hash: &str) {
         self.drop_stream_handles(info_hash).await;
         if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
-            let name = self.session.get(id.clone()).and_then(|h| h.name());
+            let name = self.session.get(id).and_then(|h| h.name());
             let _ = self.session.delete(id, true).await;
             self.span
                 .in_scope(|| tracing::info!(info_hash, name, "Torrent stopped and files deleted"));

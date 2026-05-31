@@ -204,19 +204,19 @@ fn parse_size(title: &str) -> (Option<u64>, Option<String>) {
         if let Some(pos) = line.find('💾') {
             let after = &line[pos + '💾'.len_utf8()..].trim_start();
             let parts: Vec<&str> = after.splitn(3, ' ').collect();
-            if parts.len() >= 2 {
-                if let Ok(num) = parts[0].parse::<f64>() {
-                    let unit = parts[1].to_uppercase();
-                    let display = format!("{} {}", parts[0], parts[1]);
-                    let bytes = match unit.as_str() {
-                        "TB" => Some((num * 1_099_511_627_776.0) as u64),
-                        "GB" => Some((num * 1_073_741_824.0) as u64),
-                        "MB" => Some((num * 1_048_576.0) as u64),
-                        "KB" => Some((num * 1_024.0) as u64),
-                        _ => None,
-                    };
-                    return (bytes, Some(display));
-                }
+            if parts.len() >= 2
+                && let Ok(num) = parts[0].parse::<f64>()
+            {
+                let unit = parts[1].to_uppercase();
+                let display = format!("{} {}", parts[0], parts[1]);
+                let bytes = match unit.as_str() {
+                    "TB" => Some((num * 1_099_511_627_776.0) as u64),
+                    "GB" => Some((num * 1_073_741_824.0) as u64),
+                    "MB" => Some((num * 1_048_576.0) as u64),
+                    "KB" => Some((num * 1_024.0) as u64),
+                    _ => None,
+                };
+                return (bytes, Some(display));
             }
         }
     }

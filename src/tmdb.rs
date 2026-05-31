@@ -253,7 +253,8 @@ struct TmdbImages {
 struct TmdbImage {
     file_path: String,
     width: i64,
-    height: i64,
+    #[serde(alias = "height")]
+    _height: i64,
     iso_639_1: Option<String>,
     vote_average: f64,
 }
@@ -373,10 +374,10 @@ fn pick_backdrops(images: &Option<TmdbImages>, fallback: Option<&str>) -> Vec<St
         paths.extend(candidates.iter().map(|b| b.file_path.clone()));
     }
     // If images had no backdrops, use the main backdrop_path as fallback
-    if paths.is_empty() {
-        if let Some(p) = fallback {
-            paths.push(p.to_string());
-        }
+    if paths.is_empty()
+        && let Some(p) = fallback
+    {
+        paths.push(p.to_string());
     }
     paths
 }
@@ -397,7 +398,7 @@ fn pick_logo(images: &Option<TmdbImages>) -> Option<String> {
     if logos.is_empty() {
         return None;
     }
-    logos.sort_by(|a, b| b.width.cmp(&a.width));
+    logos.sort_by_key(|b| std::cmp::Reverse(b.width));
     logos
         .iter()
         .find(|l| l.iso_639_1.as_deref() == Some("en"))
@@ -523,45 +524,42 @@ impl TmdbClient {
         let mut results = Vec::new();
 
         // Multi-search results first (primary)
-        if let Ok(res) = multi {
-            if let Ok(body) = res.text().await {
-                if let Ok(data) = serde_json::from_str::<TmdbMultiSearchResults>(&body) {
-                    for r in data.results {
-                        if let Some(sr) = r.into_search_result(None) {
-                            seen.insert((sr.media_type.clone(), sr.id));
-                            results.push(sr);
-                        }
-                    }
+        if let Ok(res) = multi
+            && let Ok(body) = res.text().await
+            && let Ok(data) = serde_json::from_str::<TmdbMultiSearchResults>(&body)
+        {
+            for r in data.results {
+                if let Some(sr) = r.into_search_result(None) {
+                    seen.insert((sr.media_type, sr.id));
+                    results.push(sr);
                 }
             }
         }
 
         // Movie-specific results (catches things multi-search misses)
-        if let Ok(res) = movies {
-            if let Ok(body) = res.text().await {
-                if let Ok(data) = serde_json::from_str::<TmdbMultiSearchResults>(&body) {
-                    for r in data.results {
-                        if let Some(sr) = r.into_search_result(Some(MediaType::Movie)) {
-                            if seen.insert((sr.media_type.clone(), sr.id)) {
-                                results.push(sr);
-                            }
-                        }
-                    }
+        if let Ok(res) = movies
+            && let Ok(body) = res.text().await
+            && let Ok(data) = serde_json::from_str::<TmdbMultiSearchResults>(&body)
+        {
+            for r in data.results {
+                if let Some(sr) = r.into_search_result(Some(MediaType::Movie))
+                    && seen.insert((sr.media_type, sr.id))
+                {
+                    results.push(sr);
                 }
             }
         }
 
         // TV-specific results
-        if let Ok(res) = tv {
-            if let Ok(body) = res.text().await {
-                if let Ok(data) = serde_json::from_str::<TmdbMultiSearchResults>(&body) {
-                    for r in data.results {
-                        if let Some(sr) = r.into_search_result(Some(MediaType::Tv)) {
-                            if seen.insert((sr.media_type.clone(), sr.id)) {
-                                results.push(sr);
-                            }
-                        }
-                    }
+        if let Ok(res) = tv
+            && let Ok(body) = res.text().await
+            && let Ok(data) = serde_json::from_str::<TmdbMultiSearchResults>(&body)
+        {
+            for r in data.results {
+                if let Some(sr) = r.into_search_result(Some(MediaType::Tv))
+                    && seen.insert((sr.media_type, sr.id))
+                {
+                    results.push(sr);
                 }
             }
         }
@@ -587,16 +585,16 @@ impl TmdbClient {
         };
 
         // Fetch episode details for each season in parallel
-        if media_type == MediaType::Tv {
-            if let Some(ref mut seasons) = item.seasons {
-                let futs: Vec<_> = seasons
-                    .iter()
-                    .map(|s| self.fetch_season_episodes(id, s.season_number))
-                    .collect();
-                let results = futures::future::join_all(futs).await;
-                for (season, episodes) in seasons.iter_mut().zip(results) {
-                    season.episodes = episodes.unwrap_or_default();
-                }
+        if media_type == MediaType::Tv
+            && let Some(ref mut seasons) = item.seasons
+        {
+            let futs: Vec<_> = seasons
+                .iter()
+                .map(|s| self.fetch_season_episodes(id, s.season_number))
+                .collect();
+            let results = futures::future::join_all(futs).await;
+            for (season, episodes) in seasons.iter_mut().zip(results) {
+                season.episodes = episodes.unwrap_or_default();
             }
         }
 
@@ -631,10 +629,10 @@ impl TmdbClient {
             .map(|(e, stills)| {
                 let mut stills = stills.unwrap_or_default();
                 // Use the default still_path as fallback if images endpoint returned nothing
-                if stills.is_empty() {
-                    if let Some(ref path) = e.still_path {
-                        stills.push(path.clone());
-                    }
+                if stills.is_empty()
+                    && let Some(ref path) = e.still_path
+                {
+                    stills.push(path.clone());
                 }
                 Episode {
                     episode_number: e.episode_number,

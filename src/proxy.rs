@@ -49,13 +49,11 @@ pub async fn dev_proxy_handler(State(proxy): State<DevProxy>, req: Request) -> i
                     response = response.header(k, v);
                 }
             }
-            response
-                .body(Body::from(body))
-                .unwrap_or(Response::default())
+            response.body(Body::from(body)).unwrap_or_default()
         }
         Err(_) => Response::builder()
             .status(502)
             .body(Body::from("Dev server not running"))
-            .unwrap_or(Response::default()),
+            .unwrap_or_default(),
     }
 }
