@@ -18,7 +18,7 @@ struct RawStream {
     #[serde(rename = "infoHash")]
     info_hash: Option<String>,
     #[serde(rename = "fileIdx")]
-    file_idx: Option<i64>,
+    file_idx: Option<i32>,
     #[serde(rename = "behaviorHints")]
     behavior_hints: Option<BehaviorHints>,
 }
@@ -35,7 +35,7 @@ struct BehaviorHints {
 #[draad::ty]
 pub struct Stream {
     pub info_hash: String,
-    pub file_idx: i64,
+    pub file_idx: i32,
     pub name: String,
     pub title: String,
     pub source: String,

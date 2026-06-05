@@ -40,8 +40,9 @@ pub struct CrewMember {
 }
 
 #[draad::ty]
-#[derive(Copy, PartialEq, Eq, Hash)]
+#[derive(Copy, PartialEq, Eq, Hash, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "media_type", rename_all = "lowercase")]
 pub enum MediaType {
     Movie,
     Tv,

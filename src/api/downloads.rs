@@ -1,7 +1,8 @@
 use crate::app::{AppContext, Error};
 pub use crate::downloads::Download;
-use crate::streams as streams_mod;
+use crate::downloads::DownloadStatus;
 use crate::tmdb::TmdbClient;
+use crate::{streams as streams_mod, tmdb};
 
 /// Streaming progress for an active download. Emitted periodically by the
 /// download worker; subscribers should treat updates as best-effort.
@@ -15,17 +16,17 @@ pub struct DownloadProgress {
 
 #[draad::ty]
 pub struct EnqueueDownload {
-    pub media_type: String,
+    pub media_type: tmdb::MediaType,
     pub tmdb_id: i64,
     pub title: String,
     pub poster_path: Option<String>,
     #[serde(default)]
-    pub season: i64,
+    pub season: i32,
     #[serde(default)]
-    pub episode: i64,
+    pub episode: i32,
     pub resolution: String,
     pub info_hash: Option<String>,
-    pub file_idx: Option<i64>,
+    pub file_idx: Option<i32>,
 }
 
 #[draad::ty]
@@ -42,7 +43,7 @@ pub trait DownloadsApi {
     async fn list(&self) -> Result<Vec<Download>, Error>;
 
     /// Cancels an in-progress download and removes its row + files from disk
-    async fn delete(&self, id: i64) -> Result<(), Error>;
+    async fn delete(&self, id: i32) -> Result<(), Error>;
 
     /// Queues a download. If `info_hash`/`file_idx` are omitted, picks the
     /// best stream matching the requested resolution
@@ -59,37 +60,29 @@ pub trait DownloadsApi {
 #[draad::api]
 impl DownloadsApi for AppContext {
     async fn list(&self) -> Result<Vec<Download>, Error> {
-        let items =
-            sqlx::query_as::<_, Download>("SELECT * FROM downloads ORDER BY created_at DESC")
-                .fetch_all(&self.db)
-                .await
-                .map_err(|e| Error::Generic(e.to_string()))?;
-        Ok(items)
+        crate::downloads::find_all_downloads(&self.db).await
     }
 
-    async fn delete(&self, id: i64) -> Result<(), Error> {
-        let dl: Option<Download> = sqlx::query_as("SELECT * FROM downloads WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.db)
-            .await
-            .map_err(|e| Error::Generic(e.to_string()))?;
+    async fn delete(&self, id: i32) -> Result<(), Error> {
+        let download = crate::downloads::find_download_by_id(id, &self.db).await?;
 
-        if let Some(dl) = dl {
-            if dl.status == "downloading" {
-                sqlx::query("UPDATE downloads SET status = 'cancelled' WHERE id = ?")
-                    .bind(id)
-                    .execute(&self.db)
-                    .await
-                    .map_err(|e| Error::Generic(e.to_string()))?;
-            }
-            crate::torrent::TorrentEngine::get()
-                .stop_and_delete(&dl.info_hash)
-                .await;
-            sqlx::query("DELETE FROM downloads WHERE id = ?")
-                .bind(id)
+        if let Some(download) = download {
+            if download.status == DownloadStatus::Downloading {
+                sqlx::query!(
+                    "UPDATE downloads SET status = 'cancelled' WHERE id = $1",
+                    id
+                )
                 .execute(&self.db)
                 .await
-                .map_err(|e| Error::Generic(e.to_string()))?;
+                .map_err(Error::DatabaseError)?;
+            }
+            crate::torrent::TorrentEngine::get()
+                .stop_and_delete(&download.info_hash)
+                .await;
+            sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
+                .execute(&self.db)
+                .await
+                .map_err(Error::DatabaseError)?;
         }
         Ok(())
     }
@@ -100,12 +93,11 @@ impl DownloadsApi for AppContext {
                 (hash.clone(), idx)
             } else {
                 let tmdb = TmdbClient::new(&self.config, self.http.clone());
-                let mt = crate::api::media::parse_media_type(&body.media_type)?;
-                let item = tmdb.details(mt, body.tmdb_id).await?;
+                let item = tmdb.details(body.media_type, body.tmdb_id).await?;
                 let imdb_id = item
                     .imdb_id
                     .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-                let path = if body.media_type == "tv" {
+                let path = if body.media_type == tmdb::MediaType::Tv {
                     format!("series/{imdb_id}:{}:{}", body.season, body.episode)
                 } else {
                     format!("movie/{imdb_id}")
@@ -120,33 +112,39 @@ impl DownloadsApi for AppContext {
                 (stream.info_hash.clone(), stream.file_idx)
             };
 
-        let file_path = if body.media_type == "tv" {
+        let file_path = if body.media_type == tmdb::MediaType::Tv {
             format!("tv/{}/s{}e{}.mp4", body.tmdb_id, body.season, body.episode)
         } else {
             format!("movies/{}.mp4", body.tmdb_id)
         };
 
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO downloads (media_type, tmdb_id, title, poster_path, season, episode, resolution, info_hash, file_idx, file_path)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT(media_type, tmdb_id, season, episode) DO UPDATE SET
-               info_hash = excluded.info_hash, file_idx = excluded.file_idx, resolution = excluded.resolution,
-               file_path = excluded.file_path, status = 'queued', error = NULL,
-               downloaded_bytes = 0, total_bytes = NULL, completed_at = NULL"
+                info_hash = excluded.info_hash,
+                file_idx = excluded.file_idx,
+                resolution = excluded.resolution,
+                file_path = excluded.file_path,
+                status = 'queued',
+                error = NULL,
+                downloaded_bytes = 0,
+                total_bytes = NULL,
+                completed_at = NULL",
+                body.media_type as tmdb::MediaType,
+                body.tmdb_id,
+                body.title,
+                body.poster_path,
+                body.season,
+                body.episode,
+                body.resolution,
+                info_hash,
+                file_idx,
+                file_path,
         )
-        .bind(&body.media_type)
-        .bind(body.tmdb_id)
-        .bind(&body.title)
-        .bind(&body.poster_path)
-        .bind(body.season)
-        .bind(body.episode)
-        .bind(&body.resolution)
-        .bind(&info_hash)
-        .bind(file_idx)
-        .bind(&file_path)
         .execute(&self.db)
         .await
-        .map_err(|e| Error::Generic(e.to_string()))?;
+        .map_err(Error::DatabaseError)?;
 
         self.events
             .publish("download:enqueue", serde_json::json!({}));

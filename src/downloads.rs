@@ -3,13 +3,26 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::app::AppContext;
+use crate::tmdb;
 use crate::torrent::TorrentEngine;
+
+#[draad::ty]
+#[derive(sqlx::Type, PartialEq)]
+#[sqlx(type_name = "download_status", rename_all = "lowercase")]
+pub enum DownloadStatus {
+    Queued,
+    Downloading,
+    Paused,
+    Completed,
+    Cancelled,
+    Failed,
+}
 
 #[draad::ty]
 #[derive(sqlx::FromRow)]
 pub struct Download {
-    pub id: i64,
-    pub media_type: String,
+    pub id: i32,
+    pub media_type: tmdb::MediaType,
     pub tmdb_id: i64,
     pub title: String,
     pub poster_path: Option<String>,
@@ -21,10 +34,10 @@ pub struct Download {
     pub file_path: String,
     pub total_bytes: Option<i64>,
     pub downloaded_bytes: i64,
-    pub status: String,
+    pub status: DownloadStatus,
     pub error: Option<String>,
-    pub created_at: String,
-    pub completed_at: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub struct DownloadManager {
@@ -44,16 +57,21 @@ impl DownloadManager {
     pub async fn run(self) {
         // Reset interrupted downloads on startup
         let reset =
-            sqlx::query("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
+            sqlx::query!("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
                 .execute(&self.ctx.db)
                 .await;
-        if let Ok(r) = &reset
-            && r.rows_affected() > 0
-        {
-            tracing::info!(
-                count = r.rows_affected(),
-                "Reset interrupted downloads to queued"
-            );
+        match reset {
+            Ok(res) => {
+                if res.rows_affected() > 0 {
+                    tracing::info!(
+                        count = res.rows_affected(),
+                        "Reset interrupted downloads to queued"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::error!(?err, "Error while resetting interrupted downloads");
+            }
         }
         tracing::info!("Download manager started");
 
@@ -61,21 +79,60 @@ impl DownloadManager {
 
         loop {
             // Fetch next queued download
-            let queued = sqlx::query_as::<_, Download>(
-                "SELECT * FROM downloads WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
+            let queued = sqlx::query_as!(
+                Download,
+                r#"
+                SELECT
+                    id,
+                    media_type as "media_type: tmdb::MediaType",
+                    tmdb_id,
+                    title,
+                    poster_path,
+                    season,
+                    episode,
+                    resolution,
+                    info_hash,
+                    file_idx,
+                    file_path,
+                    total_bytes,
+                    downloaded_bytes,
+                    status as "status: DownloadStatus",
+                    error,
+                    created_at,
+                    completed_at
+                FROM downloads
+                WHERE status = 'queued'
+                ORDER BY created_at ASC
+                LIMIT 1
+                "#,
             )
             .fetch_optional(&self.ctx.db)
             .await;
 
-            if let Ok(Some(download)) = queued {
-                let permit = self.semaphore.clone().acquire_owned().await;
-                if let Ok(permit) = permit {
-                    let ctx = self.ctx.clone();
-                    tokio::spawn(async move {
-                        download_file(ctx, download).await;
-                        drop(permit);
-                    });
-                    continue;
+            match queued {
+                Ok(Some(download)) => {
+                    let permit = self.semaphore.clone().acquire_owned().await;
+                    match permit {
+                        Ok(permit) => {
+                            let ctx = self.ctx.clone();
+                            tokio::spawn(async move {
+                                download_file(ctx, download).await;
+                                drop(permit);
+                            });
+                            continue;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                ?err,
+                                ?download,
+                                "Could not acquire the permit to start downloading, skipping"
+                            );
+                        }
+                    }
+                }
+                Ok(_) => (),
+                Err(err) => {
+                    tracing::error!(?err, "Error while fetching the next queued download");
                 }
             }
 
@@ -101,28 +158,54 @@ async fn download_file(ctx: AppContext, download: Download) {
         "Starting download"
     );
 
-    let _ = sqlx::query("UPDATE downloads SET status = 'downloading' WHERE id = ?")
-        .bind(id)
-        .execute(&ctx.db)
-        .await;
+    if let Err(err) = sqlx::query!(
+        "UPDATE downloads SET status = 'downloading' WHERE id = $1",
+        id
+    )
+    .execute(&ctx.db)
+    .await
+    {
+        tracing::error!(
+            ?err,
+            ?download,
+            "Error setting the status to \"downloading\", aborting"
+        );
+        return;
+    }
 
     match do_download(&ctx, &download).await {
         Ok(()) => {
             tracing::info!(id, title = download.title, "Download completed");
-            let _ = sqlx::query(
-                "UPDATE downloads SET status = 'completed', completed_at = datetime('now') WHERE id = ?",
+            if let Err(err) = sqlx::query!(
+                "UPDATE downloads SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = $1",
+                id
             )
-            .bind(id)
             .execute(&ctx.db)
-            .await;
+                .await
+            {
+                tracing::error!(
+                    ?err,
+                    ?download,
+                    "Error setting the status to \"completed\", the database is now probably out of sync!"
+                );
+            }
         }
         Err(e) => {
             tracing::error!(id, title = download.title, error = %e, "Download failed");
-            let _ = sqlx::query("UPDATE downloads SET status = 'failed', error = ? WHERE id = ?")
-                .bind(e.to_string())
-                .bind(id)
-                .execute(&ctx.db)
-                .await;
+            if let Err(err) = sqlx::query!(
+                "UPDATE downloads SET status = 'failed', error = $1 WHERE id = $2",
+                e.to_string(),
+                id
+            )
+            .execute(&ctx.db)
+            .await
+            {
+                tracing::error!(
+                    ?err,
+                    ?download,
+                    "Error setting the status to \"failed\", the database is now probably out of sync!"
+                );
+            }
         }
     }
 }
@@ -137,26 +220,41 @@ async fn do_download(ctx: &AppContext, download: &Download) -> crate::app::Resul
     loop {
         let (downloaded, total) = handle.progress();
 
-        let _ =
-            sqlx::query("UPDATE downloads SET downloaded_bytes = ?, total_bytes = ? WHERE id = ?")
-                .bind(downloaded as i64)
-                .bind(total as i64)
-                .bind(download.id)
-                .execute(&ctx.db)
-                .await;
+        if let Err(err) = sqlx::query!(
+            "UPDATE downloads SET downloaded_bytes = $1, total_bytes = $2 WHERE id = $3",
+            downloaded as i64,
+            total as i64,
+            download.id
+        )
+        .execute(&ctx.db)
+        .await
+        {
+            tracing::error!(?err, ?download, "Error updating download stats, continuing");
+            continue;
+        }
 
         // Check cancellation
-        let status: Option<(String,)> = sqlx::query_as("SELECT status FROM downloads WHERE id = ?")
-            .bind(download.id)
-            .fetch_optional(&ctx.db)
-            .await
-            .unwrap_or(None);
-
-        if let Some((s,)) = status
-            && s == "cancelled"
-        {
-            engine.stop(&download.info_hash).await;
-            return Err(crate::app::Error::Generic("Download cancelled".into()));
+        let check = sqlx::query!(
+            "SELECT 1 as one FROM downloads WHERE id = $1 AND status = 'cancelled'",
+            download.id
+        )
+        .fetch_optional(&ctx.db)
+        .await;
+        match check {
+            Ok(res) => {
+                if res.is_some() {
+                    // The query returned a result, so the status must be cancelled
+                    engine.stop(&download.info_hash).await;
+                    return Err(crate::app::Error::Generic("Download cancelled".into()));
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    ?download,
+                    "Error checking for cancelled status for download, continuing"
+                );
+            }
         }
 
         let stats = handle.managed.stats();
@@ -168,4 +266,70 @@ async fn do_download(ctx: &AppContext, download: &Download) -> crate::app::Resul
     }
 
     Ok(())
+}
+
+pub async fn find_all_downloads(db: &crate::app::Pool) -> crate::app::Result<Vec<Download>> {
+    sqlx::query_as!(
+        Download,
+        r#"
+            SELECT
+                id,
+                media_type as "media_type: tmdb::MediaType",
+                tmdb_id,
+                title,
+                poster_path,
+                season,
+                episode,
+                resolution,
+                info_hash,
+                file_idx,
+                file_path,
+                total_bytes,
+                downloaded_bytes,
+                status as "status: DownloadStatus",
+                error,
+                created_at,
+                completed_at
+            FROM downloads
+            ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(db)
+    .await
+    .map_err(crate::app::Error::DatabaseError)
+}
+
+pub async fn find_download_by_id(
+    id: i32,
+    db: &crate::app::Pool,
+) -> crate::app::Result<Option<Download>> {
+    sqlx::query_as!(
+        Download,
+        r#"
+            SELECT
+                id,
+                media_type as "media_type: tmdb::MediaType",
+                tmdb_id,
+                title,
+                poster_path,
+                season,
+                episode,
+                resolution,
+                info_hash,
+                file_idx,
+                file_path,
+                total_bytes,
+                downloaded_bytes,
+                status as "status: DownloadStatus",
+                error,
+                created_at,
+                completed_at
+            FROM downloads
+            WHERE id = $1
+        "#,
+        id,
+    )
+    .fetch_optional(db)
+    .await
+    .map_err(crate::app::Error::DatabaseError)
 }

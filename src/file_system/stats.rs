@@ -1,6 +1,5 @@
 use crate::{
     app::{AppContext, Error},
-    downloads::Download,
     file_system,
 };
 
@@ -34,10 +33,7 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
     let hls_bytes = file_system::dir_size(&file_system::hls_root(ctx)).await;
 
     // Per-category torrent breakdown matches list_cache_items so the chart and list agree.
-    let downloads = sqlx::query_as::<_, Download>("SELECT * FROM downloads")
-        .fetch_all(&ctx.db)
-        .await
-        .map_err(|e| Error::Generic(e.to_string()))?;
+    let downloads = crate::downloads::find_all_downloads(&ctx.db).await?;
 
     let torrents = file_system::torrents_root(ctx);
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -49,10 +45,9 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
         let size = file_system::dir_size(&torrents.join(&dl.info_hash)).await;
         seen_hashes.insert(dl.info_hash.to_lowercase());
         tracked_bytes = tracked_bytes.saturating_add(size);
-        match dl.media_type.as_str() {
-            "movie" => movies_bytes = movies_bytes.saturating_add(size),
-            "tv" => tv_bytes = tv_bytes.saturating_add(size),
-            _ => {}
+        match dl.media_type {
+            crate::tmdb::MediaType::Movie => movies_bytes = movies_bytes.saturating_add(size),
+            crate::tmdb::MediaType::Tv => tv_bytes = tv_bytes.saturating_add(size),
         }
     }
 

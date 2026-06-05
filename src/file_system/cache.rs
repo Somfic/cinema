@@ -1,7 +1,7 @@
 use crate::{
     app::{AppContext, Error},
-    downloads::Download,
-    file_system,
+    downloads::DownloadStatus,
+    file_system, tmdb,
 };
 
 #[draad::ty]
@@ -17,32 +17,28 @@ pub struct CacheEntry {
     /// "download" for tracked downloads, "orphan" for stray torrent dirs.
     kind: EntryKind,
     /// downloads.id; null for orphans.
-    id: Option<i64>,
+    id: Option<i32>,
     info_hash: String,
     title: Option<String>,
     poster_path: Option<String>,
     /// "movie" | "tv" for tracked downloads.
-    media_type: Option<String>,
+    media_type: Option<tmdb::MediaType>,
     /// "movies" | "tv" | "orphan" — used by the UI for grouping/filtering.
     category: String,
     season: Option<i64>,
     episode: Option<i64>,
     resolution: Option<String>,
     /// queued | downloading | completed | failed | cancelled for tracked items.
-    status: Option<String>,
+    status: Option<DownloadStatus>,
     /// Actual on-disk size of the torrent directory.
     disk_bytes: u64,
     total_bytes: Option<i64>,
     downloaded_bytes: Option<i64>,
-    created_at: Option<String>,
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error> {
-    let downloads =
-        sqlx::query_as::<_, Download>("SELECT * FROM downloads ORDER BY created_at DESC")
-            .fetch_all(&ctx.db)
-            .await
-            .map_err(|e| Error::Generic(e.to_string()))?;
+    let downloads = crate::downloads::find_all_downloads(&ctx.db).await?;
 
     let torrents = file_system::torrents_root(ctx);
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -53,10 +49,9 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
         let disk_bytes = file_system::dir_size(&dir).await;
         seen_hashes.insert(dl.info_hash.to_lowercase());
 
-        let category = match dl.media_type.as_str() {
-            "movie" => "movies",
-            "tv" => "tv",
-            _ => "other",
+        let category = match dl.media_type {
+            tmdb::MediaType::Movie => "movies",
+            tmdb::MediaType::Tv => "tv",
         }
         .to_string();
 

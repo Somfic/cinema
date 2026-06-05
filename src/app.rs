@@ -44,11 +44,9 @@ pub enum Error {
 
 // ── Database ──
 
-pub type Pool = sqlx::AnyPool;
+pub type Pool = sqlx::PgPool;
 
-pub async fn create_pool(config: &Config) -> Result<Pool> {
-    sqlx::any::install_default_drivers();
-
+pub async fn create_pool(config: &Config) -> Result<sqlx::PgPool> {
     let url = if let Some(ref database_url) = config.database_url {
         database_url.clone()
     } else if let Ok(database_url) =
@@ -56,15 +54,14 @@ pub async fn create_pool(config: &Config) -> Result<Pool> {
     {
         database_url
     } else {
-        let dir = config.data_dir.join("db");
-        tokio::fs::create_dir_all(&dir).await?;
-        let db_path = dir.join("data.db");
-        format!("sqlite:{}?mode=rwc", db_path.display())
+        panic!(
+            "Database url not provided. Please set the `CINEMA_DATABASE_URL` environmental variable!"
+        );
     };
 
     tracing::info!("connecting to database at {url}");
 
-    let pool = sqlx::any::AnyPoolOptions::new()
+    let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect(&url)
         .await?;
