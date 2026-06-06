@@ -118,33 +118,55 @@ impl DownloadsApi for AppContext {
             format!("movies/{}.mp4", body.tmdb_id)
         };
 
-        sqlx::query!(
-            "INSERT INTO downloads (media_type, tmdb_id, title, poster_path, season, episode, resolution, info_hash, file_idx, file_path)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             ON CONFLICT(media_type, tmdb_id, season, episode) DO UPDATE SET
-                info_hash = excluded.info_hash,
-                file_idx = excluded.file_idx,
-                resolution = excluded.resolution,
-                file_path = excluded.file_path,
-                status = 'queued',
-                error = NULL,
-                downloaded_bytes = 0,
-                total_bytes = NULL,
-                completed_at = NULL",
-                body.media_type as tmdb::MediaType,
-                body.tmdb_id,
-                body.title,
-                body.poster_path,
-                body.season,
-                body.episode,
-                body.resolution,
-                info_hash,
-                file_idx,
-                file_path,
+        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+
+        let media_id: i32 = sqlx::query_scalar!(
+            r#"
+                INSERT INTO media_items (media_type, tmdb_id, title, poster_path)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    poster_path = EXCLUDED.poster_path,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            "#,
+            body.media_type as tmdb::MediaType,
+            body.tmdb_id,
+            body.title,
+            body.poster_path,
         )
-        .execute(&self.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(Error::DatabaseError)?;
+
+        sqlx::query!(
+            "
+                INSERT INTO downloads (media_id, season, episode, resolution, info_hash, file_idx, file_path)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT(media_id, season, episode) DO UPDATE SET
+                    info_hash = excluded.info_hash,
+                    file_idx = excluded.file_idx,
+                    resolution = excluded.resolution,
+                    file_path = excluded.file_path,
+                    status = 'queued',
+                    error = NULL,
+                    downloaded_bytes = 0,
+                    total_bytes = NULL,
+                    completed_at = NULL
+            ",
+            media_id,
+            body.season,
+            body.episode,
+            body.resolution,
+            info_hash,
+            file_idx,
+            file_path,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(Error::DatabaseError)?;
+
+        tx.commit().await.map_err(Error::DatabaseError)?;
 
         self.events
             .publish("download:enqueue", serde_json::json!({}));

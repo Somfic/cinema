@@ -106,20 +106,41 @@ pub trait CollectionsApi {
 #[draad::api]
 impl CollectionsApi for AppContext {
     async fn add(&self, item: CollectionRequest) -> Result<(), Error> {
-        sqlx::query!(
-            "INSERT INTO collections (collection, media_type, tmdb_id, title, poster_path)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT(collection, media_type, tmdb_id) DO UPDATE SET title = excluded.title, poster_path = excluded.poster_path",
-            item.collection,
+        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+
+        let media_id: i32 = sqlx::query_scalar!(
+            r#"
+                INSERT INTO media_items (media_type, tmdb_id, title, poster_path)
+                VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        poster_path = EXCLUDED.poster_path,
+                        updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            "#,
             item.media_type as tmdb::MediaType,
             item.tmdb_id,
             item.title,
             item.poster_path,
         )
-        .execute(&self.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(Error::DatabaseError)?;
 
+        sqlx::query!(
+            "
+                INSERT INTO collections (collection_slug, media_id)
+                VALUES ($1, $2)
+                ON CONFLICT (collection_slug, media_id) DO NOTHING
+            ",
+            item.collection,
+            media_id,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(Error::DatabaseError)?;
+
+        tx.commit().await.map_err(Error::DatabaseError)?;
         Ok(())
     }
 
@@ -130,7 +151,10 @@ impl CollectionsApi for AppContext {
         id: i64,
     ) -> Result<(), Error> {
         sqlx::query!(
-            "DELETE FROM collections WHERE collection = $1 AND media_type = $2 AND tmdb_id = $3",
+            "
+                DELETE FROM collections
+                WHERE collection_slug = $1
+                AND media_id = (SELECT id FROM media_items WHERE media_type = $2 AND tmdb_id = $3)",
             collection,
             media_type as tmdb::MediaType,
             id,
@@ -146,16 +170,17 @@ impl CollectionsApi for AppContext {
         let items = sqlx::query_as!(
             CollectionItem,
             r#"SELECT
-                collection,
-                media_type as "media_type: tmdb::MediaType",
-                tmdb_id,
-                title,
-                poster_path,
-                added_at,
-                position
-            FROM collections
-            WHERE collection = $1
-            ORDER BY position ASC, added_at DESC"#,
+                c.collection_slug as "collection",
+                mi.media_type as "media_type: tmdb::MediaType",
+                mi.tmdb_id,
+                mi.title,
+                mi.poster_path,
+                c.added_at,
+                c.position
+            FROM collections c
+            JOIN media_items mi ON mi.id = c.media_id
+            WHERE c.collection_slug = $1
+            ORDER BY c.position ASC, c.added_at DESC"#,
             collection
         )
         .fetch_all(&self.db)
@@ -171,18 +196,22 @@ impl CollectionsApi for AppContext {
         media_type: tmdb::MediaType,
         id: i64,
     ) -> Result<CollectionStatus, Error> {
-        let count = sqlx::query!(
-            "SELECT COUNT(*) FROM collections WHERE collection = $1 AND media_type = $2 AND tmdb_id = $3",
-        collection,
-        media_type as tmdb::MediaType,
-        id,
-    )
+        let exists: Option<bool> = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM collections c
+                JOIN media_items mi ON mi.id = c.media_id
+                WHERE c.collection_slug = $1 AND mi.media_type = $2 AND mi.tmdb_id = $3
+            )"#,
+            collection,
+            media_type as tmdb::MediaType,
+            id,
+        )
         .fetch_one(&self.db)
         .await
         .map_err(Error::DatabaseError)?;
 
         Ok(CollectionStatus {
-            in_collection: count.count.unwrap_or(0) > 0,
+            in_collection: exists.unwrap_or(false),
         })
     }
 
@@ -238,12 +267,8 @@ impl CollectionsApi for AppContext {
             ));
         }
 
+        // ON DELETE CASCADE on collections.collection_slug removes membership rows.
         sqlx::query!("DELETE FROM collection_meta WHERE slug = $1", slug)
-            .execute(&self.db)
-            .await
-            .map_err(Error::DatabaseError)?;
-
-        sqlx::query!("DELETE FROM collections WHERE collection = $1", slug)
             .execute(&self.db)
             .await
             .map_err(Error::DatabaseError)?;
@@ -281,9 +306,12 @@ impl CollectionsApi for AppContext {
     async fn reorder(&self, collection: String, items: Vec<ReorderItem>) -> Result<(), Error> {
         for (idx, item) in items.iter().enumerate() {
             sqlx::query!(
-                "UPDATE collections
-                SET position = $1
-                WHERE collection = $2 AND media_type = $3 AND tmdb_id = $4",
+                "
+                    UPDATE collections
+                    SET position = $1
+                    WHERE collection_slug = $2
+                    AND media_id = (SELECT id FROM media_items WHERE media_type = $3 AND tmdb_id = $4)
+                ",
                 i32::try_from(idx).unwrap_or(i32::MAX),
                 collection,
                 item.media_type as tmdb::MediaType,

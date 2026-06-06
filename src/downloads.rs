@@ -83,26 +83,27 @@ impl DownloadManager {
                 Download,
                 r#"
                 SELECT
-                    id,
-                    media_type as "media_type: tmdb::MediaType",
-                    tmdb_id,
-                    title,
-                    poster_path,
-                    season,
-                    episode,
-                    resolution,
-                    info_hash,
-                    file_idx,
-                    file_path,
-                    total_bytes,
-                    downloaded_bytes,
-                    status as "status: DownloadStatus",
-                    error,
-                    created_at,
-                    completed_at
-                FROM downloads
-                WHERE status = 'queued'
-                ORDER BY created_at ASC
+                    d.id,
+                    mi.media_type as "media_type: tmdb::MediaType",
+                    mi.tmdb_id,
+                    mi.title,
+                    mi.poster_path,
+                    d.season,
+                    d.episode,
+                    d.resolution,
+                    d.info_hash,
+                    d.file_idx,
+                    d.file_path,
+                    d.total_bytes,
+                    d.downloaded_bytes,
+                    d.status as "status: DownloadStatus",
+                    d.error,
+                    d.created_at,
+                    d.completed_at
+                FROM downloads d
+                JOIN media_items mi ON mi.id = d.media_id
+                WHERE d.status = 'queued'
+                ORDER BY d.created_at ASC
                 LIMIT 1
                 "#,
             )
@@ -273,25 +274,26 @@ pub async fn find_all_downloads(db: &crate::app::Pool) -> crate::app::Result<Vec
         Download,
         r#"
             SELECT
-                id,
-                media_type as "media_type: tmdb::MediaType",
-                tmdb_id,
-                title,
-                poster_path,
-                season,
-                episode,
-                resolution,
-                info_hash,
-                file_idx,
-                file_path,
-                total_bytes,
-                downloaded_bytes,
-                status as "status: DownloadStatus",
-                error,
-                created_at,
-                completed_at
-            FROM downloads
-            ORDER BY created_at DESC
+                d.id,
+                mi.media_type as "media_type: tmdb::MediaType",
+                mi.tmdb_id,
+                mi.title,
+                mi.poster_path,
+                d.season,
+                d.episode,
+                d.resolution,
+                d.info_hash,
+                d.file_idx,
+                d.file_path,
+                d.total_bytes,
+                d.downloaded_bytes,
+                d.status as "status: DownloadStatus",
+                d.error,
+                d.created_at,
+                d.completed_at
+            FROM downloads d
+            JOIN media_items mi ON mi.id = d.media_id
+            ORDER BY d.created_at DESC
         "#,
     )
     .fetch_all(db)
@@ -307,25 +309,26 @@ pub async fn find_download_by_id(
         Download,
         r#"
             SELECT
-                id,
-                media_type as "media_type: tmdb::MediaType",
-                tmdb_id,
-                title,
-                poster_path,
-                season,
-                episode,
-                resolution,
-                info_hash,
-                file_idx,
-                file_path,
-                total_bytes,
-                downloaded_bytes,
-                status as "status: DownloadStatus",
-                error,
-                created_at,
-                completed_at
-            FROM downloads
-            WHERE id = $1
+                d.id,
+                mi.media_type as "media_type: tmdb::MediaType",
+                mi.tmdb_id,
+                mi.title,
+                mi.poster_path,
+                d.season,
+                d.episode,
+                d.resolution,
+                d.info_hash,
+                d.file_idx,
+                d.file_path,
+                d.total_bytes,
+                d.downloaded_bytes,
+                d.status as "status: DownloadStatus",
+                d.error,
+                d.created_at,
+                d.completed_at
+            FROM downloads d
+            JOIN media_items mi ON mi.id = d.media_id
+            WHERE d.id = $1
         "#,
         id,
     )

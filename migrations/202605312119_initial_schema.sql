@@ -1,62 +1,54 @@
 CREATE TYPE media_type AS ENUM ('movie', 'tv');
+CREATE TYPE download_status AS ENUM ('queued', 'downloading', 'paused', 'completed', 'cancelled', 'failed');
+CREATE TYPE collection_kind AS ENUM ('manual', 'ordered');
 
-CREATE TABLE IF NOT EXISTS watch_history
-(
-    id           SERIAL PRIMARY KEY,
-    media_type   media_type               NOT NULL,
-    tmdb_id      BIGINT                   NOT NULL,
-    title        VARCHAR(255)             NOT NULL,
-    poster_path  VARCHAR(255),
-    season       INTEGER                  NOT NULL DEFAULT 0,
-    episode      INTEGER                  NOT NULL DEFAULT 0,
-    info_hash    VARCHAR(63),
-    file_idx     INTEGER                  NOT NULL DEFAULT 0,
-    progress     REAL                     NOT NULL DEFAULT 0,
-    duration     REAL                     NOT NULL DEFAULT 0,
-    last_watched TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-    UNIQUE (media_type, tmdb_id)
-);
-
-
-CREATE TABLE IF NOT EXISTS collections
+CREATE TABLE IF NOT EXISTS media_items
 (
     id          SERIAL PRIMARY KEY,
-    collection  VARCHAR(255)             NOT NULL,
     media_type  media_type               NOT NULL,
     tmdb_id     BIGINT                   NOT NULL,
     title       VARCHAR(255)             NOT NULL,
-    poster_path VARCHAR(255)             NOT NULL,
-    position    INTEGER                  NOT NULL DEFAULT 0,
-    added_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-    UNIQUE (collection, media_type, tmdb_id)
+    poster_path VARCHAR(255),
+    updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (media_type, tmdb_id)
 );
-
-CREATE TYPE download_status AS ENUM ('queued', 'downloading', 'paused', 'completed', 'cancelled', 'failed');
 
 CREATE TABLE IF NOT EXISTS downloads
 (
     id               SERIAL PRIMARY KEY,
-    media_type       media_type               NOT NULL,
-    tmdb_id          BIGINT                   NOT NULL,
-    title            VARCHAR(255)             NOT NULL,
-    poster_path      VARCHAR(255),
-    season           INTEGER                  NOT NULL DEFAULT 0,
-    episode          INTEGER                  NOT NULL DEFAULT 0,
-    resolution       VARCHAR(15),
     info_hash        VARCHAR(63)              NOT NULL,
     file_idx         INTEGER                  NOT NULL,
-    file_path        VARCHAR(255)             NOT NULL,
+
+    name             VARCHAR(512),
     total_bytes      BIGINT,
     downloaded_bytes BIGINT                   NOT NULL DEFAULT 0,
     status           download_status          NOT NULL DEFAULT 'queued',
     error            TEXT,
-    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at     TIMESTAMP WITH TIME ZONE,
-    UNIQUE (media_type, tmdb_id, season, episode)
+
+    UNIQUE (info_hash, file_idx)
 );
 
+CREATE TABLE IF NOT EXISTS download_meta
+(
+    download_id INTEGER PRIMARY KEY REFERENCES downloads (id) ON DELETE CASCADE,
+    media_id    INTEGER NOT NULL REFERENCES media_items (id) ON DELETE CASCADE,
+    season      INTEGER NOT NULL DEFAULT 0,
+    episode     INTEGER NOT NULL DEFAULT 0,
+    resolution  VARCHAR(15)
+);
 
-CREATE TYPE collection_kind AS ENUM ('manual', 'ordered');
+CREATE TABLE IF NOT EXISTS watch_history
+(
+    media_id     INTEGER PRIMARY KEY REFERENCES media_items (id) ON DELETE CASCADE,
+    download_id  INTEGER                  REFERENCES downloads (id) ON DELETE SET NULL,
+    season       INTEGER                  NOT NULL DEFAULT 0,
+    episode      INTEGER                  NOT NULL DEFAULT 0,
+    progress     REAL                     NOT NULL DEFAULT 0,
+    duration     REAL                     NOT NULL DEFAULT 0,
+    last_watched TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS collection_meta
 (
@@ -67,8 +59,17 @@ CREATE TABLE IF NOT EXISTS collection_meta
     position   INTEGER                  NOT NULL DEFAULT 0,
     system     BOOLEAN                  NOT NULL DEFAULT FALSE,
     hidden     BOOLEAN                  NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (slug)
+);
+
+CREATE TABLE IF NOT EXISTS collections
+(
+    collection_slug VARCHAR(255)             NOT NULL REFERENCES collection_meta (slug) ON DELETE CASCADE,
+    media_id        INTEGER                  NOT NULL REFERENCES media_items (id) ON DELETE CASCADE,
+    position        INTEGER                  NOT NULL DEFAULT 0,
+    added_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (collection_slug, media_id)
 );
 
 INSERT INTO collection_meta (slug, title, kind, system, position)
