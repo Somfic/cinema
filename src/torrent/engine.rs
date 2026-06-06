@@ -1,19 +1,15 @@
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use std::task::{Context, Poll};
-
-use librqbit::api::TorrentIdOrHash;
-use librqbit::{
-    AddTorrent, AddTorrentOptions, AddTorrentResponse, Api, ManagedTorrent, Session, SessionOptions,
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
 };
-use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
-use tokio::sync::Mutex;
+
+use librqbit::{
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, Api, Session, SessionOptions,
+    api::TorrentIdOrHash,
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Config;
+use crate::{config::Config, torrent::TorrentFileReader};
 
 static ENGINE: OnceLock<TorrentEngine> = OnceLock::new();
 
@@ -25,92 +21,8 @@ pub struct TorrentEngine {
     span: tracing::Span,
     /// Keep a FileStream alive per (info_hash, file_idx) to maintain
     /// sequential piece prioritization from librqbit's streaming system.
-    stream_handles: Mutex<HashMap<(String, usize), TorrentFileReader>>,
+    stream_handles: tokio::sync::Mutex<HashMap<(String, usize), TorrentFileReader>>,
 }
-
-pub struct TorrentHandle {
-    pub managed: Arc<ManagedTorrent>,
-}
-
-#[draad::ty]
-pub struct AudioTrack {
-    /// ffmpeg absolute stream index
-    pub index: usize,
-    /// audio-only index (0, 1, 2...)
-    pub stream_index: usize,
-    pub name: String,
-    pub language: Option<String>,
-    pub codec: String,
-}
-
-#[draad::ty]
-pub struct EmbeddedSubtitleTrack {
-    /// ffmpeg absolute stream index
-    pub index: usize,
-    /// subtitle-only index (0, 1, 2...)
-    pub stream_index: usize,
-    pub language: Option<String>,
-    pub name: String,
-    pub codec: String,
-}
-
-/// Text-based subtitle codecs that can be extracted as SRT
-const TEXT_SUB_CODECS: &[&str] = &["srt", "subrip", "ass", "ssa", "webvtt", "mov_text"];
-
-/// Trait combining AsyncRead + AsyncSeek for torrent file streaming.
-trait AsyncReadSeek: AsyncRead + AsyncSeek + Send + Unpin {}
-impl<T: AsyncRead + AsyncSeek + Send + Unpin> AsyncReadSeek for T {}
-
-/// A type-erased async reader for streaming torrent files.
-/// Wraps librqbit's FileStream (which can't be named outside the crate).
-pub struct TorrentFileReader {
-    inner: Pin<Box<dyn AsyncReadSeek>>,
-    pub len: u64,
-}
-
-impl AsyncRead for TorrentFileReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        self.inner.as_mut().poll_read(cx, buf)
-    }
-}
-
-impl AsyncSeek for TorrentFileReader {
-    fn start_seek(mut self: Pin<&mut Self>, position: std::io::SeekFrom) -> std::io::Result<()> {
-        self.inner.as_mut().start_seek(position)
-    }
-
-    fn poll_complete(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
-        self.inner.as_mut().poll_complete(cx)
-    }
-}
-
-/// Well-known public trackers as fallback for magnet links.
-const PUBLIC_TRACKERS: &[&str] = &[
-    "udp://tracker.opentrackr.org:1337/announce",
-    "udp://open.stealth.si:80/announce",
-    "udp://tracker.torrent.eu.org:451/announce",
-    "udp://open.demonii.com:1337/announce",
-    "udp://explodie.org:6969/announce",
-    "udp://tracker.tiny-vps.com:6969/announce",
-    "udp://tracker.moeking.me:6969/announce",
-    "udp://tracker1.bt.moack.co.kr:80/announce",
-    "udp://tracker.theoks.net:6969/announce",
-    "udp://tracker.bittor.pw:1337/announce",
-    "udp://p4p.arenabg.com:1337/announce",
-    "http://tracker.files.fm:6969/announce",
-    "udp://tracker.dler.org:6969/announce",
-];
-
-/// Torrent cache services that serve .torrent files by info hash.
-/// Tried in order; first successful response wins.
-const TORRENT_CACHES: &[&str] = &[
-    "https://itorrents.org/torrent/{}.torrent",
-    "https://torrage.info/torrent/{}.torrent",
-];
 
 impl TorrentEngine {
     pub async fn init(
@@ -153,7 +65,7 @@ impl TorrentEngine {
                 http,
                 cancel,
                 span,
-                stream_handles: Mutex::new(HashMap::new()),
+                stream_handles: tokio::sync::Mutex::new(HashMap::new()),
             })
             .map_err(|_| crate::app::Error::Generic("Torrent engine already initialized".into()))?;
 
@@ -169,7 +81,7 @@ impl TorrentEngine {
     /// Returns the raw bytes if found, None otherwise.
     async fn fetch_torrent_file(&self, info_hash: &str) -> Option<bytes::Bytes> {
         let hash_upper = info_hash.to_uppercase();
-        for template in TORRENT_CACHES {
+        for template in super::TORRENT_CACHES {
             let url = template.replace("{}", &hash_upper);
             match self.http.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => match resp.bytes().await {
@@ -190,7 +102,7 @@ impl TorrentEngine {
     /// Build a magnet URI with public trackers as fallback.
     fn magnet_url(info_hash: &str) -> String {
         let mut magnet = format!("magnet:?xt=urn:btih:{info_hash}");
-        for tracker in PUBLIC_TRACKERS {
+        for tracker in super::PUBLIC_TRACKERS {
             magnet.push_str("&tr=");
             magnet.push_str(tracker);
         }
@@ -204,7 +116,7 @@ impl TorrentEngine {
         info_hash: &str,
         file_idx: usize,
         config: &Config,
-    ) -> crate::app::Result<TorrentHandle> {
+    ) -> crate::app::Result<super::TorrentHandle> {
         // Fast path: torrent already active, no logging/fetching needed
         if let Ok(id) = TorrentIdOrHash::parse(info_hash)
             && let Some(handle) = self.session.get(id)
@@ -229,7 +141,7 @@ impl TorrentEngine {
             {
                 handles.insert(key, reader);
             }
-            return Ok(TorrentHandle { managed: handle });
+            return Ok(super::TorrentHandle { managed: handle });
         }
 
         let make_opts = || AddTorrentOptions {
@@ -350,7 +262,7 @@ impl TorrentEngine {
             )
         });
 
-        Ok(TorrentHandle { managed })
+        Ok(super::TorrentHandle { managed })
     }
 
     /// Get a streaming reader for a torrent file via the Api.
@@ -404,7 +316,7 @@ impl TorrentEngine {
     }
 
     /// Get the number of audio tracks in a file using ffprobe.
-    pub async fn audio_tracks(path: &std::path::Path) -> Vec<AudioTrack> {
+    pub async fn audio_tracks(path: &std::path::Path) -> Vec<super::AudioTrack> {
         let output = tokio::process::Command::new("ffprobe")
             .args([
                 "-v",
@@ -469,7 +381,7 @@ impl TorrentEngine {
                         .unwrap_or("");
                     format!("{codec_upper} {ch}").trim().to_string()
                 });
-                AudioTrack {
+                super::AudioTrack {
                     index: s.index,
                     stream_index: i,
                     name,
@@ -507,7 +419,7 @@ impl TorrentEngine {
     }
 
     /// Get embedded subtitle tracks in a file using ffprobe.
-    pub async fn subtitle_tracks(path: &std::path::Path) -> Vec<EmbeddedSubtitleTrack> {
+    pub async fn subtitle_tracks(path: &std::path::Path) -> Vec<super::EmbeddedSubtitleTrack> {
         let output = tokio::process::Command::new("ffprobe")
             .args([
                 "-v",
@@ -554,7 +466,7 @@ impl TorrentEngine {
             .filter(|s| {
                 s.codec_name
                     .as_deref()
-                    .map(|c| TEXT_SUB_CODECS.contains(&c))
+                    .map(|c| super::TEXT_SUB_CODECS.contains(&c))
                     .unwrap_or(false)
             })
             .enumerate()
@@ -570,7 +482,7 @@ impl TorrentEngine {
                     }
                     label
                 });
-                EmbeddedSubtitleTrack {
+                super::EmbeddedSubtitleTrack {
                     index: s.index,
                     stream_index: i,
                     language: lang,
@@ -791,14 +703,6 @@ impl TorrentEngine {
             self.span
                 .in_scope(|| tracing::info!(info_hash, name, "Torrent stopped and files deleted"));
         }
-    }
-}
-
-impl TorrentHandle {
-    /// Get download progress: (downloaded_bytes, total_bytes)
-    pub fn progress(&self) -> (u64, u64) {
-        let stats = self.managed.stats();
-        (stats.progress_bytes, stats.total_bytes)
     }
 }
 
