@@ -45,7 +45,7 @@ toml = "1.1.0"
 
 
 # Torrent
-librqbit = "8"
+librqbit = { version = "8", features = ["disable-upload"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }

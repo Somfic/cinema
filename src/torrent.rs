@@ -126,11 +126,13 @@ impl TorrentEngine {
 
         let opts = SessionOptions {
             disable_dht: !config.use_dht,
-            listen_port_range: Some(config.torrent_port..config.torrent_port + 1),
-            enable_upnp_port_forwarding: true,
             fastresume: true,
             cancellation_token: Some(session_cancel),
             root_span: Some(tracing::Span::current()),
+            // We're no good samaritans
+            disable_upload: true,
+            listen_port_range: None,
+            enable_upnp_port_forwarding: false,
             ..Default::default()
         };
 
