@@ -259,7 +259,7 @@ async fn start_transcoding(
                     Ok(_) => {
                         let trimmed = line.trim();
                         if !trimmed.is_empty() {
-                            tracing::info!(session = %sid, "ffmpeg: {trimmed}");
+                            tracing::trace!(session = %sid, "ffmpeg: {trimmed}");
                             // Keep last 5 lines for error reporting
                             if last_lines.len() >= 5 {
                                 last_lines.remove(0);
