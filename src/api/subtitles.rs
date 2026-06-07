@@ -1,4 +1,3 @@
-
 use crate::app::{AppContext, Error};
 use crate::subtitles as subtitles_mod;
 use crate::tmdb::{MediaType, TmdbClient};

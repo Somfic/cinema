@@ -1,4 +1,3 @@
-
 use crate::app::{AppContext, Error};
 
 #[draad::api(namespace = "hls")]
