@@ -79,6 +79,26 @@
 
 	const infoModal = useModal();
 
+	// YouTube trailer keys for the in-PlayCard preview, best first. TMDB gives no
+	// vote count on videos, so we rank by the signals it does provide: video type
+	// (Trailer > Teaser > anything else), then official > unofficial, then
+	// highest resolution, then most recently published. PlayCard plays them in
+	// order, advancing when each finishes.
+	const trailerKeys = $derived.by(() => {
+		const typeRank = (t: string) =>
+			t === "Trailer" ? 2 : t === "Teaser" ? 1 : 0;
+		return (item.videos ?? [])
+			.filter((v) => v.site === "YouTube")
+			.sort(
+				(a, b) =>
+					typeRank(b.video_type) - typeRank(a.video_type) ||
+					Number(b.official) - Number(a.official) ||
+					b.size - a.size ||
+					(b.published_at ?? "").localeCompare(a.published_at ?? ""),
+			)
+			.map((v) => v.key);
+	});
+
 	const releaseYear = $derived(item.release_date?.slice(0, 4));
 	const runtimeLabel = $derived(
 		item.runtime
@@ -319,6 +339,7 @@
 	{#if !tvMode && item.media_type === "movie" && (movieResume ? onresume : onwatch)}
 		<PlayCard
 			image={movieBackdrop}
+			{trailerKeys}
 			label={item.title}
 			action={movieResume
 				? (item.tagline ?? "Continue")
@@ -335,6 +356,7 @@
 	{#if !tvMode && item.seasons?.length && tvOnclick}
 		<PlayCard
 			image={tvImage}
+			{trailerKeys}
 			label={tvLabel}
 			action={tvAction}
 			remaining={tvRemaining}

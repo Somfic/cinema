@@ -25,6 +25,50 @@ pub fn router() -> Router<AppContext> {
         .route("/hls/{session_id}", delete(hls_stop_raw))
         .route("/image/{*path}", get(image_proxy))
         .route("/files/{*path}", get(serve_file))
+        .route("/trailer/{key}", get(serve_trailer))
+        .route("/trailer/{key}/meta", get(serve_trailer_meta))
+}
+
+async fn serve_trailer_meta(
+    State(ctx): State<AppContext>,
+    Path(key): Path<String>,
+) -> Result<axum::response::Response, RawError> {
+    let meta = crate::trailer::ensure_meta(&ctx.storage, &key).await?;
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=86400")],
+        axum::Json(meta),
+    )
+        .into_response())
+}
+
+async fn serve_trailer(
+    State(ctx): State<AppContext>,
+    Path(key): Path<String>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Result<axum::response::Response, RawError> {
+    let path = crate::trailer::ensure_cached(&ctx.storage, &key).await?;
+
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_| Error::NotFound("trailer not found".into()))?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| Error::Generic("failed to open trailer".into()))?;
+
+    let range_header = req
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let mut response =
+        serve_range_response(file, metadata.len(), range_header.as_deref(), "video/mp4")?;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("public, max-age=86400"),
+    );
+    Ok(response)
 }
 
 async fn image_proxy(

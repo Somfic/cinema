@@ -70,6 +70,12 @@ pub struct Video {
     pub site: String,
     pub name: String,
     pub video_type: String,
+    /// Whether TMDB marks this as an official (studio-published) video.
+    pub official: bool,
+    /// Max resolution reported by TMDB (e.g. 360, 720, 1080, 2160).
+    pub size: i64,
+    /// ISO-8601 publish timestamp, used to prefer the most recent trailer.
+    pub published_at: Option<String>,
 }
 
 #[draad::ty]
@@ -240,6 +246,12 @@ struct TmdbVideo {
     name: String,
     #[serde(rename = "type")]
     video_type: String,
+    #[serde(default)]
+    official: bool,
+    #[serde(default)]
+    size: i64,
+    #[serde(default)]
+    published_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +282,9 @@ fn convert_videos(videos: Option<TmdbVideos>) -> Vec<Video> {
                     site: v.site,
                     name: v.name,
                     video_type: v.video_type,
+                    official: v.official,
+                    size: v.size,
+                    published_at: v.published_at,
                 })
                 .collect()
         })

@@ -19,6 +19,7 @@ mod streams;
 mod subtitles;
 mod tmdb;
 pub(crate) mod torrent;
+mod trailer;
 mod ws;
 
 use app::{AppContext, EventBus, Result};
