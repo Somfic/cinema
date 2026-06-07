@@ -203,42 +203,9 @@ async fn run() -> Result<()> {
 
     // Frontend: dev proxy or static files
     if cli.dev {
+        // The vite dev server is started alongside the backend by `just dev`
+        // (via concurrently); here we just proxy the UI through to it.
         let dev_port = 5174u16;
-
-        // Kill any existing process on the dev port
-        if let Ok(out) = tokio::process::Command::new("lsof")
-            .args(["-ti", &format!(":{dev_port}")])
-            .output()
-            .await
-        {
-            let pids = String::from_utf8_lossy(&out.stdout);
-            for pid in pids.split_whitespace() {
-                let _ = tokio::process::Command::new("kill").arg(pid).output().await;
-            }
-            if !pids.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-        }
-
-        let frontend_dir = PathBuf::from("frontend");
-        if frontend_dir.join("package.json").exists() {
-            info!("starting vite dev server on port {dev_port}");
-            let _child = tokio::process::Command::new("bun")
-                .args([
-                    "run",
-                    "dev",
-                    "--",
-                    "--port",
-                    &dev_port.to_string(),
-                    "--strictPort",
-                ])
-                .current_dir(&frontend_dir)
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .kill_on_drop(true)
-                .spawn();
-        }
-
         info!("proxying ui → http://localhost:{dev_port}");
         let dev_proxy = proxy::DevProxy::new(dev_port);
         router = router.fallback(move |req: axum::extract::Request| {
