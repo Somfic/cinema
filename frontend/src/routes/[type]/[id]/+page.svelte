@@ -734,6 +734,7 @@
 				{loadingStreams}
 				{similarItems}
 				{resumeEntry}
+				playing={selectedStream !== null}
 				tvMode={isTv}
 				onwatch={loadAndPlayMovieStreams}
 				onresume={resume}

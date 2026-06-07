@@ -4,6 +4,7 @@
 	let {
 		image,
 		trailerKeys = [],
+		active = true,
 		label,
 		action,
 		remaining,
@@ -13,6 +14,7 @@
 	}: {
 		image?: string;
 		trailerKeys?: string[];
+		active?: boolean;
 		label?: string;
 		action: string;
 		remaining?: string;
@@ -31,19 +33,14 @@
 	const trailerSrc = $derived(
 		trailerKey ? `/api/trailer/${trailerKey}` : undefined,
 	);
-	// Loop only when there's nothing to advance to; otherwise let it end so we
-	// can crossfade to the next trailer.
 	const loop = $derived(trailerKeys.length <= 1);
 
-	// Restart from the first trailer when the set changes (new item).
 	$effect(() => {
 		trailerKeys;
 		index = 0;
 		trailerPlaying = false;
 	});
 
-	// Each trailer can have its own letterboxing, so reset the detected aspect
-	// whenever the active trailer changes.
 	$effect(() => {
 		trailerKey;
 		aspect = undefined;
@@ -56,7 +53,6 @@
 	}
 
 	function onReady(video: HTMLVideoElement) {
-		// `loop` keeps a lone trailer repeating; with several, advance on end.
 		video.addEventListener("ended", advance, { once: true });
 	}
 
@@ -102,6 +98,7 @@
 				type={trailerSrc ? "video" : "image"}
 				fit="cover"
 				autoplay
+				{active}
 				{loop}
 				{muted}
 				onVideoReady={onReady}

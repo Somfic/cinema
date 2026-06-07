@@ -63,6 +63,7 @@
 		similarItems = [],
 		resumeEntry,
 		onresume,
+		playing = false,
 		tvMode = false,
 	}: {
 		item: MediaItem;
@@ -73,30 +74,25 @@
 		similarItems?: SearchResult[];
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
-		/** When true this is a TV display: show the hero/meta only, no controls. */
+		playing?: boolean;
 		tvMode?: boolean;
 	} = $props();
 
 	const infoModal = useModal();
 
-	// YouTube trailer keys for the in-PlayCard preview, best first. TMDB gives no
-	// vote count on videos, so we rank by the signals it does provide: video type
-	// (Trailer > Teaser > anything else), then official > unofficial, then
-	// highest resolution, then most recently published. PlayCard plays them in
-	// order, advancing when each finishes.
 	const trailerKeys = $derived.by(() => {
-		const typeRank = (t: string) =>
-			t === "Trailer" ? 2 : t === "Teaser" ? 1 : 0;
-		return (item.videos ?? [])
-			.filter((v) => v.site === "YouTube")
-			.sort(
-				(a, b) =>
-					typeRank(b.video_type) - typeRank(a.video_type) ||
-					Number(b.official) - Number(a.official) ||
-					b.size - a.size ||
-					(b.published_at ?? "").localeCompare(a.published_at ?? ""),
-			)
-			.map((v) => v.key);
+		const shuffle = <T,>(arr: T[]): T[] => {
+			const a = [...arr];
+			for (let i = a.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[a[i], a[j]] = [a[j], a[i]];
+			}
+			return a;
+		};
+		const yt = (item.videos ?? []).filter((v) => v.site === "YouTube");
+		const keysOfType = (type: string) =>
+			shuffle(yt.filter((v) => v.video_type === type)).map((v) => v.key);
+		return [...keysOfType("Trailer"), ...keysOfType("Teaser")];
 	});
 
 	const releaseYear = $derived(item.release_date?.slice(0, 4));
@@ -340,6 +336,7 @@
 		<PlayCard
 			image={movieBackdrop}
 			{trailerKeys}
+			active={!playing}
 			label={item.title}
 			action={movieResume
 				? (item.tagline ?? "Continue")
@@ -357,6 +354,7 @@
 		<PlayCard
 			image={tvImage}
 			{trailerKeys}
+			active={!playing}
 			label={tvLabel}
 			action={tvAction}
 			remaining={tvRemaining}
