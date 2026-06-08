@@ -16,7 +16,7 @@ draad = { version = "0.1.0", features = ["codegen"] }
 # Schema-driven RPC — proc-macros only at runtime.
 draad = { version = "0.1.0", features = ["runtime"] }
 async-trait = "0.1"
-ts-rs = "11"
+ts-rs = "12"
 
 # Web
 axum = { version = "0.8.9", features = ["ws"] }
