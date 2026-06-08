@@ -80,9 +80,9 @@
 			</div>
 		{/if}
 		<Button
-			icon="List"
+			icon="Settings"
 			variant="ghost"
-			onclick={() => goto("/collections")}
+			onclick={() => goto("/settings")}
 		/>
 	</div>
 </header>

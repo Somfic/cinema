@@ -21,6 +21,20 @@ fn cache_dir(storage: &Storage) -> PathBuf {
     storage.join("cache/trailers")
 }
 
+/// Path of the uploaded cookies file inside the data dir. Always returned
+/// (even when missing) so callers can write to it.
+pub fn cookies_storage_path(storage: &Storage) -> PathBuf {
+    storage.join("youtube-cookies.txt")
+}
+
+/// The env var takes precedence over the data-dir file so an operator can
+/// force a specific path — return it so the UI can surface that.
+pub fn cookies_env_override() -> Option<String> {
+    std::env::var("CINEMA_YTDLP_COOKIES")
+        .ok()
+        .filter(|p| std::path::Path::new(p).exists())
+}
+
 fn cookies_file(storage: &Storage) -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CINEMA_YTDLP_COOKIES") {
         let path = PathBuf::from(p);
@@ -28,7 +42,7 @@ fn cookies_file(storage: &Storage) -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let path = storage.join("youtube-cookies.txt");
+    let path = cookies_storage_path(storage);
     path.exists().then_some(path)
 }
 

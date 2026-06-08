@@ -102,6 +102,29 @@
 			: undefined,
 	);
 
+	// Live-updating countdown to the next episode's air date.
+	let now = $state(Date.now());
+	$effect(() => {
+		const id = setInterval(() => (now = Date.now()), 60_000);
+		return () => clearInterval(id);
+	});
+	const nextEpisodeLabel = $derived.by(() => {
+		const next = item.next_episode;
+		if (!next?.air_date) return undefined;
+		// TMDB returns YYYY-MM-DD; treat as midnight UTC.
+		const airMs = Date.parse(`${next.air_date}T00:00:00Z`);
+		if (Number.isNaN(airMs)) return undefined;
+		const diffMs = airMs - now;
+		const prefix = `S${next.season_number}E${next.episode_number}`;
+		if (diffMs <= 0) return `${prefix} aired`;
+		const days = Math.floor(diffMs / 86_400_000);
+		const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
+		if (days >= 1) return `${prefix} in ${days}d ${hours}h`;
+		const minutes = Math.max(1, Math.floor(diffMs / 60_000));
+		if (hours >= 1) return `${prefix} in ${hours}h ${minutes % 60}m`;
+		return `${prefix} in ${minutes}m`;
+	});
+
 	let onWatchlist = $state(false);
 	let isFavorite = $state(false);
 	let isWatched = $state(false);
@@ -273,6 +296,11 @@
 				<Text as="span" variant="secondary" size="sm"
 					>★ {item.rating.toFixed(1)}</Text
 				>
+			{/if}
+			{#if nextEpisodeLabel}
+				<Text as="span" variant="secondary" size="sm">
+					{nextEpisodeLabel}
+				</Text>
 			{/if}
 		</div>
 		{#if !tvMode}
