@@ -19,7 +19,7 @@ async-trait = "0.1"
 ts-rs = "11"
 
 # Web
-axum = { version = "0.8.8", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs"] }
 reqwest = { version = "0.13.2", features = ["json", "stream"] }
 
