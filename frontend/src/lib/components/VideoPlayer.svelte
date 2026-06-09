@@ -47,6 +47,7 @@
 		onSubtitleOff,
 		onStreamSelect,
 		onAudioSelect,
+		onSeekRestart,
 		loadingSubtitles = false,
 		activeTrackUrl,
 		accent,
@@ -82,6 +83,9 @@
 		onSubtitleOff?: () => void;
 		onStreamSelect?: (stream: StreamOption) => void;
 		onAudioSelect?: (track: AudioTrack) => void;
+		/** Seek target fell outside the transcoded window — restart the HLS
+		 *  transcode at this time instead of a native seek. */
+		onSeekRestart?: (time: number) => void;
 		loadingSubtitles?: boolean;
 		activeTrackUrl?: string;
 		accent?: string;
@@ -228,10 +232,24 @@
 		muted = volume === 0;
 	}
 
-	export function seekTo(time: number) {
-		if (videoEl) {
-			videoEl.currentTime = time;
+	function withinSeekable(time: number): boolean {
+		if (!videoEl) return false;
+		const r = videoEl.seekable;
+		for (let i = 0; i < r.length; i++) {
+			if (time >= r.start(i) - 1 && time <= r.end(i) + 0.5) return true;
 		}
+		return false;
+	}
+
+	export function seekTo(time: number) {
+		if (!videoEl) return;
+		// During transcoding, a seek past the transcoded segments has no media to
+		// play — restart the transcode at the target instead of a native seek.
+		if (isHls && onSeekRestart && !withinSeekable(time)) {
+			onSeekRestart(time);
+			return;
+		}
+		videoEl.currentTime = time;
 	}
 
 	export function toggleMute() {
@@ -397,6 +415,12 @@
 		isFullscreen = !!document.fullscreenElement;
 	}
 
+	// The probed duration can arrive after metadata has loaded (HLS transcode);
+	// keep the scrubber total in sync once it does.
+	$effect(() => {
+		if (knownDuration > 0) duration = knownDuration;
+	});
+
 	$effect(() => {
 		if (videoEl && src) {
 			initVideo();
@@ -505,11 +529,9 @@
 		}}
 		onloadedmetadata={() => {
 			if (videoEl) {
-				duration =
-					knownDuration > 0 &&
-					(!isFinite(videoEl.duration) || videoEl.duration < 30)
-						? knownDuration
-						: videoEl.duration;
+				// knownDuration is set only for HLS transcode sessions, where
+				// videoEl.duration covers just the segments produced so far.
+				duration = knownDuration > 0 ? knownDuration : videoEl.duration;
 				if (startTime > 0) {
 					videoEl.currentTime = startTime;
 				}

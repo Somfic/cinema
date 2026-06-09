@@ -72,23 +72,13 @@
 			<div class="cast-button">
 				<Button
 					icon="Cast"
-					tooltip={remote.mode === "remote"
-						? "Disconnect"
-						: "Cast to TV"}
+					tooltip={remote.mode === "remote" ? "Disconnect" : "Cast to TV"}
 					onclick={handleCast}
 				/>
 			</div>
 		{/if}
-		<Button
-			icon="HardDrive"
-			variant="ghost"
-			onclick={() => goto("/cache")}
-		/>
-		<Button
-			icon="List"
-			variant="ghost"
-			onclick={() => goto("/collections")}
-		/>
+		<Button icon="HardDrive" variant="ghost" onclick={() => goto("/cache")} />
+		<Button icon="Settings" variant="ghost" onclick={() => goto("/settings")} />
 	</div>
 </header>
 

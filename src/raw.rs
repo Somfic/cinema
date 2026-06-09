@@ -29,6 +29,105 @@ pub fn router() -> Router<AppContext> {
         .route("/hls/{session_id}", delete(hls_stop_raw))
         .route("/image/{*path}", get(image_proxy))
         .route("/files/{*path}", get(serve_file))
+        .route("/trailer/{key}", get(serve_trailer))
+        .route("/trailer/{key}/meta", get(serve_trailer_meta))
+}
+
+async fn serve_trailer_meta(
+    State(ctx): State<AppContext>,
+    Path(key): Path<String>,
+) -> Result<axum::response::Response, RawError> {
+    let meta = crate::trailer::ensure_meta(&ctx.storage, &key).await?;
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=86400")],
+        axum::Json(meta),
+    )
+        .into_response())
+}
+
+async fn serve_trailer(
+    State(ctx): State<AppContext>,
+    Path(key): Path<String>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Result<axum::response::Response, RawError> {
+    // Already downloaded: range-serve the cached file (supports seeking).
+    if let Some(path) = crate::trailer::cached_path(&ctx.storage, &key) {
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|_| Error::NotFound("trailer not found".into()))?;
+        let file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|_| Error::Generic("failed to open trailer".into()))?;
+
+        let range_header = req
+            .headers()
+            .get(header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let mut response =
+            serve_range_response(file, metadata.len(), range_header.as_deref(), "video/mp4")?;
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("public, max-age=86400"),
+        );
+        return Ok(response);
+    }
+
+    // First request: stream the fragmented mp4 as ffmpeg produces it, teeing the
+    // bytes into the cache so later requests hit the fast path above.
+    let stream = crate::trailer::start_stream(&ctx.storage, &key).await?;
+    let crate::trailer::TrailerStream {
+        mut child,
+        stdout,
+        tmp_path,
+        final_path,
+    } = stream;
+
+    let body = axum::body::Body::from_stream(async_stream::stream! {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut reader = stdout;
+        let mut file = tokio::fs::File::create(&tmp_path).await.ok();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut had_error = false;
+
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Some(f) = file.as_mut() {
+                        let _ = f.write_all(&buf[..n]).await;
+                    }
+                    yield Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(&buf[..n]));
+                }
+                Err(e) => {
+                    had_error = true;
+                    yield Err(e);
+                    break;
+                }
+            }
+        }
+
+        // Promote the temp file to the cache only on a clean, complete run.
+        let ok = !had_error && child.wait().await.map(|s| s.success()).unwrap_or(false);
+        if let Some(mut f) = file.take() {
+            let _ = f.flush().await;
+        }
+        if ok {
+            let _ = tokio::fs::rename(&tmp_path, &final_path).await;
+        } else {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+        }
+    });
+
+    Ok(axum::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(body)
+        .unwrap())
 }
 
 async fn image_proxy(

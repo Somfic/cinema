@@ -5,6 +5,7 @@ pub mod hls;
 pub mod media;
 pub mod remote;
 pub mod search;
+pub mod settings;
 pub mod streams;
 pub mod subtitles;
 pub mod watch;

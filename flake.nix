@@ -31,6 +31,8 @@
 
             # Frontend
             bun
+            ffmpeg
+            yt-dlp
 
             # SQLite (for sqlx)
             sqlite

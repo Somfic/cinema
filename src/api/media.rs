@@ -1,4 +1,3 @@
-
 use crate::app::{AppContext, Error};
 use crate::tmdb::{MediaType, TmdbClient};
 

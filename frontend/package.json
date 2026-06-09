@@ -4,7 +4,8 @@
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.61.1",
-    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "concurrently": "^9.2.1",
     "orval": "^8.14.0",
     "svelte": "^5.56.0",
     "svelte-check": "^4.4.8",

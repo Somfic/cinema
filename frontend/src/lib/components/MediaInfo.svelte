@@ -63,6 +63,7 @@
 		similarItems = [],
 		resumeEntry,
 		onresume,
+		playing = false,
 		tvMode = false,
 	}: {
 		item: MediaItem;
@@ -73,11 +74,26 @@
 		similarItems?: SearchResult[];
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
-		/** When true this is a TV display: show the hero/meta only, no controls. */
+		playing?: boolean;
 		tvMode?: boolean;
 	} = $props();
 
 	const infoModal = useModal();
+
+	const trailerKeys = $derived.by(() => {
+		const shuffle = <T,>(arr: T[]): T[] => {
+			const a = [...arr];
+			for (let i = a.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[a[i], a[j]] = [a[j], a[i]];
+			}
+			return a;
+		};
+		const yt = (item.videos ?? []).filter((v) => v.site === "YouTube");
+		const keysOfType = (type: string) =>
+			shuffle(yt.filter((v) => v.video_type === type)).map((v) => v.key);
+		return [...keysOfType("Trailer"), ...keysOfType("Teaser")];
+	});
 
 	const releaseYear = $derived(item.release_date?.slice(0, 4));
 	const runtimeLabel = $derived(
@@ -85,6 +101,29 @@
 			? `${Math.floor(item.runtime / 60) > 0 ? `${Math.floor(item.runtime / 60)}h ` : ""}${item.runtime % 60}min`
 			: undefined,
 	);
+
+	// Live-updating countdown to the next episode's air date.
+	let now = $state(Date.now());
+	$effect(() => {
+		const id = setInterval(() => (now = Date.now()), 60_000);
+		return () => clearInterval(id);
+	});
+	const nextEpisodeLabel = $derived.by(() => {
+		const next = item.next_episode;
+		if (!next?.air_date) return undefined;
+		// TMDB returns YYYY-MM-DD; treat as midnight UTC.
+		const airMs = Date.parse(`${next.air_date}T00:00:00Z`);
+		if (Number.isNaN(airMs)) return undefined;
+		const diffMs = airMs - now;
+		const prefix = `S${next.season_number}E${next.episode_number}`;
+		if (diffMs <= 0) return `${prefix} aired`;
+		const days = Math.floor(diffMs / 86_400_000);
+		const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
+		if (days >= 1) return `${prefix} in ${days}d ${hours}h`;
+		const minutes = Math.max(1, Math.floor(diffMs / 60_000));
+		if (hours >= 1) return `${prefix} in ${hours}h ${minutes % 60}m`;
+		return `${prefix} in ${minutes}m`;
+	});
 
 	let onWatchlist = $state(false);
 	let isFavorite = $state(false);
@@ -258,6 +297,11 @@
 					>★ {item.rating.toFixed(1)}</Text
 				>
 			{/if}
+			{#if nextEpisodeLabel}
+				<Text as="span" variant="secondary" size="sm">
+					{nextEpisodeLabel}
+				</Text>
+			{/if}
 		</div>
 		{#if !tvMode}
 			<Button
@@ -319,6 +363,8 @@
 	{#if !tvMode && item.media_type === "movie" && (movieResume ? onresume : onwatch)}
 		<PlayCard
 			image={movieBackdrop}
+			{trailerKeys}
+			active={!playing}
 			label={item.title}
 			action={movieResume
 				? (item.tagline ?? "Continue")
@@ -335,6 +381,8 @@
 	{#if !tvMode && item.seasons?.length && tvOnclick}
 		<PlayCard
 			image={tvImage}
+			{trailerKeys}
+			active={!playing}
 			label={tvLabel}
 			action={tvAction}
 			remaining={tvRemaining}

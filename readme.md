@@ -1,6 +1,12 @@
 # cinema
 
-A self-hosted media server for movies and TV shows.
+*A self-hosted media torrenting server for movies and TV shows.*
+
+![](https://i.imgur.com/uLk4rJn.jpeg)
+
+![](https://i.imgur.com/mNCzLNB.jpeg)
+
+![](https://i.imgur.com/CCBiQYU.jpeg)
 
 ## Docker
 

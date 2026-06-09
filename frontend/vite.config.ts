@@ -33,6 +33,13 @@ if (!existsSync(schemaIndex)) {
 
 export default defineConfig({
 	plugins: [sveltekit()],
+	// `glow` ships uncompiled `.svelte` files (it sets the `svelte` export
+	// condition). Exclude it from esbuild dep-optimization so the svelte plugin
+	// compiles it via the normal pipeline — otherwise a forced re-optimization
+	// hands glow's `.svelte` files to esbuild, which has no loader for them.
+	optimizeDeps: {
+		exclude: ['glow'],
+	},
 	server: {
 		port: 5174,
 		hmr: {

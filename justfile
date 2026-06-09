@@ -7,8 +7,18 @@ export TS_RS_EXPORT_DIR := justfile_directory() / "target" / "draad-bindings"
 default:
     just dev
 
+# Install Rust crates and frontend (bun) dependencies.
+install:
+    cargo fetch
+    cd frontend && bun install
+
+# concurrently is resolved from frontend's node_modules, so run it from there
+# and bounce back to the root for cargo. `-k` tears down both if either exits.
+# Run backend (--dev) and the vite dev server side by side.
 dev: schema
-    cargo run -- --dev
+    cd frontend && bunx concurrently -k -n backend,frontend -c blue,green \
+        "cd .. && cargo run -- --dev" \
+        "bun run dev -- --strictPort"
 
 build: schema
     cargo build --release

@@ -21,6 +21,16 @@ pub struct MediaItem {
     pub seasons: Option<Vec<Season>>,
     pub cast: Vec<CastMember>,
     pub directors: Vec<CrewMember>,
+    pub next_episode: Option<NextEpisode>,
+}
+
+#[draad::ty]
+pub struct NextEpisode {
+    pub season_number: i64,
+    pub episode_number: i64,
+    pub name: String,
+    pub air_date: Option<String>,
+    pub still_path: Option<String>,
 }
 
 #[draad::ty]
@@ -71,6 +81,12 @@ pub struct Video {
     pub site: String,
     pub name: String,
     pub video_type: String,
+    /// Whether TMDB marks this as an official (studio-published) video.
+    pub official: bool,
+    /// Max resolution reported by TMDB (e.g. 360, 720, 1080, 2160).
+    pub size: i64,
+    /// ISO-8601 publish timestamp, used to prefer the most recent trailer.
+    pub published_at: Option<String>,
 }
 
 #[draad::ty]
@@ -170,6 +186,16 @@ struct TmdbTv {
     seasons: Option<Vec<TmdbSeason>>,
     external_ids: Option<TmdbExternalIds>,
     credits: Option<TmdbCredits>,
+    next_episode_to_air: Option<TmdbNextEpisode>,
+}
+
+#[derive(Deserialize)]
+struct TmdbNextEpisode {
+    season_number: i64,
+    episode_number: i64,
+    name: String,
+    air_date: Option<String>,
+    still_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -241,6 +267,12 @@ struct TmdbVideo {
     name: String,
     #[serde(rename = "type")]
     video_type: String,
+    #[serde(default)]
+    official: bool,
+    #[serde(default)]
+    size: i64,
+    #[serde(default)]
+    published_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -272,6 +304,9 @@ fn convert_videos(videos: Option<TmdbVideos>) -> Vec<Video> {
                     site: v.site,
                     name: v.name,
                     video_type: v.video_type,
+                    official: v.official,
+                    size: v.size,
+                    published_at: v.published_at,
                 })
                 .collect()
         })
@@ -427,6 +462,7 @@ impl From<TmdbMovie> for MediaItem {
             seasons: None,
             cast: convert_cast(&m.credits),
             directors: convert_directors(&m.credits),
+            next_episode: None,
         }
     }
 }
@@ -464,6 +500,13 @@ impl From<TmdbTv> for MediaItem {
             }),
             cast: convert_cast(&t.credits),
             directors: convert_directors(&t.credits),
+            next_episode: t.next_episode_to_air.map(|n| NextEpisode {
+                season_number: n.season_number,
+                episode_number: n.episode_number,
+                name: n.name,
+                air_date: n.air_date,
+                still_path: n.still_path,
+            }),
         }
     }
 }
