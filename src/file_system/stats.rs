@@ -45,9 +45,10 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
         let size = file_system::dir_size(&torrents.join(&dl.info_hash)).await;
         seen_hashes.insert(dl.info_hash.to_lowercase());
         tracked_bytes = tracked_bytes.saturating_add(size);
-        match dl.media_type {
-            crate::tmdb::MediaType::Movie => movies_bytes = movies_bytes.saturating_add(size),
-            crate::tmdb::MediaType::Tv => tv_bytes = tv_bytes.saturating_add(size),
+        match dl.meta.as_ref().map(|m| m.media_type) {
+            Some(crate::tmdb::MediaType::Movie) => movies_bytes = movies_bytes.saturating_add(size),
+            Some(crate::tmdb::MediaType::Tv) => tv_bytes = tv_bytes.saturating_add(size),
+            None => {}
         }
     }
 

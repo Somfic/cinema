@@ -168,4 +168,5 @@ pub struct AppContext {
     pub events: EventBus,
     pub presence: Presence,
     pub http: Client,
+    pub downloads: crate::downloads::Handle,
 }

@@ -25,19 +25,15 @@ pub struct TorrentEngine {
 }
 
 impl TorrentEngine {
-    pub async fn init(
-        config: &Config,
-        storage: &crate::app::Storage,
-        http: reqwest::Client,
-    ) -> crate::app::Result<()> {
-        let output_folder = storage.join("torrents");
+    pub async fn init(ctx: &crate::AppContext) -> crate::app::Result<()> {
+        let output_folder = ctx.storage.join("torrents");
         tokio::fs::create_dir_all(&output_folder).await?;
 
         let cancel = CancellationToken::new();
         let session_cancel = cancel.clone();
 
         let opts = SessionOptions {
-            disable_dht: !config.use_dht,
+            disable_dht: !ctx.config.use_dht,
             fastresume: true,
             cancellation_token: Some(session_cancel),
             root_span: Some(tracing::Span::current()),
@@ -62,7 +58,7 @@ impl TorrentEngine {
             .set(TorrentEngine {
                 session,
                 api,
-                http,
+                http: ctx.http.clone(),
                 cancel,
                 span,
                 stream_handles: tokio::sync::Mutex::new(HashMap::new()),
@@ -109,43 +105,25 @@ impl TorrentEngine {
         magnet
     }
 
-    /// Start a torrent for the given info_hash and file index.
-    /// Idempotent -- returns immediately if already active.
-    pub async fn start(
+    /// Add the torrent to the session if not already present, and await
+    /// metadata resolution. Idempotent - returns immediately if already
+    /// initialized. Does **not** modify the selected file set; call
+    /// [`select_file`] for that.
+    pub async fn ensure_torrent(
         &self,
         info_hash: &str,
-        file_idx: usize,
         config: &Config,
     ) -> crate::app::Result<super::TorrentHandle> {
-        // Fast path: torrent already active, no logging/fetching needed
+        // Fast path: torrent already in session
         if let Ok(id) = TorrentIdOrHash::parse(info_hash)
             && let Some(handle) = self.session.get(id)
         {
-            let mut files: std::collections::HashSet<usize> = handle
-                .only_files()
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            if !files.contains(&file_idx) {
-                files.insert(file_idx);
-                let _ = self.session.update_only_files(&handle, &files).await;
-            }
-            // Unpause this torrent and pause others
-            self.pause_all_except(info_hash);
-
-            // Ensure a persistent stream exists for piece prioritization
-            let key = (info_hash.to_lowercase(), file_idx);
-            let mut handles = self.stream_handles.lock().await;
-            if !handles.contains_key(&key)
-                && let Ok(reader) = self.stream(info_hash, file_idx)
-            {
-                handles.insert(key, reader);
-            }
             return Ok(super::TorrentHandle { managed: handle });
         }
 
         let make_opts = || AddTorrentOptions {
-            only_files: Some(vec![file_idx]),
+            // Start with no files selected; the caller selects via `select_file`
+            only_files: Some(vec![]),
             sub_folder: Some(info_hash.to_string()),
             overwrite: true,
             ..Default::default()
@@ -197,72 +175,147 @@ impl TorrentEngine {
             }
         };
 
-        // Wait for metadata + initial check, but don't block forever.
-        // Log progress so slow peer discovery is visible.
-        {
-            let init_fut = managed.wait_until_initialized();
+        // Wait for metadata + initial check, but don't block forever
+        let init_fut = managed.wait_until_initialized();
 
-            tracing::info!(
-                info_hash,
-                timeout = ?config.torrent_validation_timeout,
-                "Validating torrent metadata"
-            );
-            let result = tokio::time::timeout(config.torrent_validation_timeout, init_fut).await;
+        tracing::info!(
+            info_hash,
+            timeout = ?config.torrent_validation_timeout,
+            "Validating torrent metadata"
+        );
+        let result = tokio::time::timeout(config.torrent_validation_timeout, init_fut).await;
 
-            match result {
-                Ok(Ok(())) => {
-                    tracing::info!(info_hash, "Torrent metadata validated");
-                }
-                Ok(Err(e)) => {
-                    return Err(crate::app::Error::Generic(format!(
-                        "Torrent init failed: {e}"
-                    )));
-                }
-                Err(_) => {
-                    let stats = managed.stats();
-                    let peers = stats
-                        .live
-                        .as_ref()
-                        .map(|l| l.snapshot.peer_stats.queued + l.snapshot.peer_stats.live)
-                        .unwrap_or(0);
-                    self.span.in_scope(|| {
-                        tracing::warn!(info_hash, peers, timeout = ?config.torrent_validation_timeout, "Torrent metadata timeout");
-                    });
-                    return Err(crate::app::Error::Generic(format!(
-                        "Timed out waiting for torrent metadata ({peers} peers found but metadata exchange incomplete)"
-                    )));
-                }
+        match result {
+            Ok(Ok(())) => {
+                let name = managed.name().unwrap_or_else(|| "unknown".into());
+                let stats = managed.stats();
+                self.span.in_scope(|| {
+                    tracing::info!(
+                        name,
+                        info_hash,
+                        total = %format_bytes(stats.total_bytes),
+                        "Torrent metadata validated"
+                    )
+                });
+            }
+            Ok(Err(e)) => {
+                return Err(crate::app::Error::Generic(format!(
+                    "Torrent init failed: {e}"
+                )));
+            }
+            Err(_) => {
+                let stats = managed.stats();
+                let peers = stats
+                    .live
+                    .as_ref()
+                    .map(|l| l.snapshot.peer_stats.queued + l.snapshot.peer_stats.live)
+                    .unwrap_or(0);
+                self.span.in_scope(|| {
+                    tracing::warn!(info_hash, peers, timeout = ?config.torrent_validation_timeout, "Torrent metadata timeout");
+                });
+                return Err(crate::app::Error::Generic(format!(
+                    "Timed out waiting for torrent metadata ({peers} peers found but metadata exchange incomplete)"
+                )));
             }
         }
-
-        // Pause other torrents to prioritize the one being watched
-        self.pause_all_except(info_hash);
-
-        // Register a persistent FileStream so librqbit prioritizes
-        // sequential pieces from the start of the file (32MB lookahead).
-        {
-            let key = (info_hash.to_lowercase(), file_idx);
-            let mut handles = self.stream_handles.lock().await;
-            if !handles.contains_key(&key)
-                && let Ok(reader) = self.stream(info_hash, file_idx)
-            {
-                handles.insert(key, reader);
-            }
-        }
-
-        let name = managed.name().unwrap_or_else(|| "unknown".into());
-        let stats = managed.stats();
-        self.span.in_scope(|| {
-            tracing::info!(
-                name,
-                info_hash,
-                file_idx,
-                total = %format_bytes(stats.total_bytes),
-                "Torrent streaming"
-            )
-        });
 
         Ok(super::TorrentHandle { managed })
+    }
+
+    /// Mark a file as selected for download on an already-present torrent.
+    /// Merges with any files already selected; does not replace.
+    /// Also registers a persistent FileStream so librqbit prioritises
+    /// sequential pieces from the start of the file (32MB lookahead).
+    pub async fn select_file(&self, info_hash: &str, file_idx: usize) -> crate::app::Result<()> {
+        let id = TorrentIdOrHash::parse(info_hash)
+            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+        let handle = self
+            .session
+            .get(id)
+            .ok_or_else(|| crate::app::Error::Generic("Torrent not in session".into()))?;
+
+        let mut files: std::collections::HashSet<usize> = handle
+            .only_files()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        if files.insert(file_idx) {
+            self.session
+                .update_only_files(&handle, &files)
+                .await
+                .map_err(|e| {
+                    crate::app::Error::Generic(format!("Failed to update file selection: {e}"))
+                })?;
+        }
+
+        let key = (info_hash.to_lowercase(), file_idx);
+        let mut handles = self.stream_handles.lock().await;
+        if !handles.contains_key(&key)
+            && let Ok(reader) = self.stream(info_hash, file_idx)
+        {
+            handles.insert(key, reader);
+        }
+        Ok(())
+    }
+
+    /// Drop a file from the selected set and release its prioritization
+    /// stream. The torrent itself is left in the session.
+    pub async fn deselect_file(&self, info_hash: &str, file_idx: usize) -> crate::app::Result<()> {
+        let id = TorrentIdOrHash::parse(info_hash)
+            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+        let Some(handle) = self.session.get(id) else {
+            return Ok(());
+        };
+
+        let mut files: std::collections::HashSet<usize> = handle
+            .only_files()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        if files.remove(&file_idx) {
+            self.session
+                .update_only_files(&handle, &files)
+                .await
+                .map_err(|e| {
+                    crate::app::Error::Generic(format!("Failed to update file selection: {e}"))
+                })?;
+        }
+
+        let key = (info_hash.to_lowercase(), file_idx);
+        self.stream_handles.lock().await.remove(&key);
+        Ok(())
+    }
+
+    /// Pause a single torrent (keeps it in the session for fast resume).
+    pub async fn pause(&self, info_hash: &str) -> crate::app::Result<()> {
+        let id = TorrentIdOrHash::parse(info_hash)
+            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+        let Some(handle) = self.session.get(id) else {
+            return Ok(());
+        };
+        if !handle.is_paused() {
+            self.session
+                .pause(&handle)
+                .await
+                .map_err(|e| crate::app::Error::Generic(format!("Failed to pause: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Resume a single paused torrent.
+    pub async fn resume(&self, info_hash: &str) -> crate::app::Result<()> {
+        let id = TorrentIdOrHash::parse(info_hash)
+            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+        let Some(handle) = self.session.get(id) else {
+            return Ok(());
+        };
+        if handle.is_paused() {
+            self.session
+                .unpause(&handle)
+                .await
+                .map_err(|e| crate::app::Error::Generic(format!("Failed to unpause: {e}")))?;
+        }
+        Ok(())
     }
 
     /// Get a streaming reader for a torrent file via the Api.
@@ -548,32 +601,6 @@ impl TorrentEngine {
         self.span
             .in_scope(|| tracing::info!("Shutting down torrent engine"));
         self.cancel.cancel();
-    }
-
-    /// Pause all torrents except the one with the given info hash.
-    /// Also unpause the target torrent if it was paused.
-    fn pause_all_except(&self, active_hash: &str) {
-        let active_lower = active_hash.to_lowercase();
-        self.session.with_torrents(|iter| {
-            for (_, handle) in iter {
-                let hash = handle.info_hash().as_string();
-                if hash == active_lower {
-                    if handle.is_paused() {
-                        let session = self.session.clone();
-                        let h = handle.clone();
-                        tokio::spawn(async move {
-                            let _ = session.unpause(&h).await;
-                        });
-                    }
-                } else if !handle.is_paused() {
-                    let session = self.session.clone();
-                    let h = handle.clone();
-                    tokio::spawn(async move {
-                        let _ = session.pause(&h).await;
-                    });
-                }
-            }
-        });
     }
 
     /// Returns the info hash of every currently-managed torrent. Used by the

@@ -100,7 +100,20 @@ async fn stream_file(
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, RawError> {
     let engine = TorrentEngine::get();
-    engine.start(&info_hash, file_idx, &ctx.config).await?;
+    // Block until the torrent is loaded and its metadata is known.
+    engine.ensure_torrent(&info_hash, &ctx.config).await?;
+    engine.select_file(&info_hash, file_idx).await?;
+    // Record the active stream in the DB so the manager picks it up too.
+    // This also kicks off the per-download supervisor (progress writes,
+    // async TMDB metadata resolution, etc.).
+    crate::downloads::ensure_download(
+        &ctx.db,
+        &ctx.downloads,
+        &info_hash,
+        file_idx as i32,
+        None,
+    )
+    .await?;
     let reader = engine.stream(&info_hash, file_idx)?;
     let total_size = reader.len;
 
@@ -167,7 +180,16 @@ async fn stream_remux_hls(
     Query(params): Query<RemuxParams>,
 ) -> Result<axum::response::Response, RawError> {
     let engine = TorrentEngine::get();
-    engine.start(&info_hash, file_idx, &ctx.config).await?;
+    engine.ensure_torrent(&info_hash, &ctx.config).await?;
+    engine.select_file(&info_hash, file_idx).await?;
+    crate::downloads::ensure_download(
+        &ctx.db,
+        &ctx.downloads,
+        &info_hash,
+        file_idx as i32,
+        None,
+    )
+    .await?;
 
     let (session_id, playlist_url) = hls::start_session(
         &ctx.storage,

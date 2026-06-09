@@ -1,6 +1,6 @@
 use crate::app::{AppContext, Error};
 pub use crate::streams::Stream;
-use crate::tmdb::{MediaType, TmdbClient};
+use crate::tmdb::{self, MediaType, TmdbClient};
 use crate::torrent::TorrentEngine;
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
 
@@ -8,6 +8,23 @@ use crate::{streams as streams_mod, subtitles as subtitles_mod};
 pub struct StartStream {
     pub url: String,
     pub local: bool,
+}
+
+// TODO: replace with just media_id
+/// Optional media context for a stream start. When provided, the download
+/// row's media metadata is populated synchronously, so the UI doesn't need
+/// to wait for the async TMDB resolver.
+#[draad::ty]
+pub struct StreamMediaContext {
+    pub media_type: tmdb::MediaType,
+    pub tmdb_id: i64,
+    pub title: String,
+    pub poster_path: Option<String>,
+    #[serde(default)]
+    pub season: i32,
+    #[serde(default)]
+    pub episode: i32,
+    pub resolution: Option<String>,
 }
 
 #[draad::ty]
@@ -57,7 +74,15 @@ pub trait StreamsApi {
     async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<Stream>, Error>;
 
     /// Starts a torrent (idempotent) and returns the playback URL.
-    async fn start(&self, info_hash: String, file_idx: i64) -> Result<StartStream, Error>;
+    /// Always creates/updates a `downloads` row so the DB reflects the
+    /// active engine state. When `media` is provided, also populates
+    /// `download_meta` synchronously.
+    async fn start(
+        &self,
+        info_hash: String,
+        file_idx: i64,
+        media: Option<StreamMediaContext>,
+    ) -> Result<StartStream, Error>;
 
     /// Current torrent download stats for a stream.
     async fn stats(&self, info_hash: String) -> Result<StreamStats, Error>;
@@ -99,11 +124,29 @@ impl StreamsApi for AppContext {
         Ok(streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await)
     }
 
-    async fn start(&self, info_hash: String, file_idx: i64) -> Result<StartStream, Error> {
-        let engine = TorrentEngine::get();
-        engine
-            .start(&info_hash, file_idx as usize, &self.config)
-            .await?;
+    async fn start(
+        &self,
+        info_hash: String,
+        file_idx: i64,
+        media: Option<StreamMediaContext>,
+    ) -> Result<StartStream, Error> {
+        let media = media.map(|m| crate::downloads::MediaContext {
+            media_type: m.media_type,
+            tmdb_id: m.tmdb_id,
+            title: m.title,
+            poster_path: m.poster_path,
+            season: m.season,
+            episode: m.episode,
+            resolution: m.resolution,
+        });
+        crate::downloads::ensure_download(
+            &self.db,
+            &self.downloads,
+            &info_hash,
+            file_idx as i32,
+            media.as_ref(),
+        )
+        .await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
     }

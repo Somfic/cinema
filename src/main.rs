@@ -122,6 +122,9 @@ async fn run() -> Result<()> {
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
+    let (downloads_handle, manager) =
+        downloads::DownloadManager::new(pool.clone(), config.clone(), http.clone());
+
     let ctx = AppContext {
         db: pool,
         storage,
@@ -129,13 +132,13 @@ async fn run() -> Result<()> {
         events,
         presence: app::Presence::default(),
         http,
+        downloads: downloads_handle,
     };
 
     // Initialize torrent engine
-    torrent::TorrentEngine::init(&config, &ctx.storage, ctx.http.clone()).await?;
+    torrent::TorrentEngine::init(&ctx).await?;
 
     // Start download manager
-    let manager = downloads::DownloadManager::new(ctx.clone());
     tokio::spawn(manager.run());
 
     // HLS session cleanup reaper

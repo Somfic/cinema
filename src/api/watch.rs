@@ -117,7 +117,7 @@ impl WatchApi for AppContext {
                 mi.poster_path,
                 wh.season,
                 wh.episode,
-                d.info_hash,
+                d.info_hash as "info_hash?",
                 COALESCE(d.file_idx, 0) as "file_idx!",
                 wh.progress,
                 wh.duration,

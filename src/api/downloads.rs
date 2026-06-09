@@ -1,6 +1,6 @@
 use crate::app::{AppContext, Error};
 pub use crate::downloads::Download;
-use crate::downloads::DownloadStatus;
+use crate::downloads::{DownloadCommand, MediaContext};
 use crate::tmdb::TmdbClient;
 use crate::{streams as streams_mod, tmdb};
 
@@ -42,12 +42,22 @@ pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
     async fn list(&self) -> Result<Vec<Download>, Error>;
 
-    /// Cancels an in-progress download and removes its row + files from disk
-    async fn delete(&self, id: i32) -> Result<(), Error>;
+    /// Queue a new download. If `info_hash`/`file_idx` are omitted, picks the
+    /// best stream matching the requested resolution. Returns the download id
+    async fn enqueue(&self, request: EnqueueDownload) -> Result<i32, Error>;
 
-    /// Queues a download. If `info_hash`/`file_idx` are omitted, picks the
-    /// best stream matching the requested resolution
-    async fn enqueue(&self, request: EnqueueDownload) -> Result<(), Error>;
+    /// Temporarily pause. Files stay on disk; resume picks up where it left off.
+    async fn pause(&self, id: i32) -> Result<(), Error>;
+
+    /// Resume a paused or cancelled download. Also re-runs a failed download
+    async fn resume(&self, id: i32) -> Result<(), Error>;
+
+    /// Stop the download but keep the files. Distinct from `pause` in intent
+    /// (user no longer wants this download).
+    async fn cancel(&self, id: i32) -> Result<(), Error>;
+
+    /// Stop and wipe. Removes the row and deletes files from disk
+    async fn remove(&self, id: i32) -> Result<(), Error>;
 
     /// Bandwidth/size estimates per available resolution
     async fn estimate(
@@ -63,35 +73,13 @@ impl DownloadsApi for AppContext {
         crate::downloads::find_all_downloads(&self.db).await
     }
 
-    async fn delete(&self, id: i32) -> Result<(), Error> {
-        let download = crate::downloads::find_download_by_id(id, &self.db).await?;
-
-        if let Some(download) = download {
-            if download.status == DownloadStatus::Downloading {
-                sqlx::query!(
-                    "UPDATE downloads SET status = 'cancelled' WHERE id = $1",
-                    id
-                )
-                .execute(&self.db)
-                .await
-                .map_err(Error::DatabaseError)?;
-            }
-            crate::torrent::TorrentEngine::get()
-                .stop_and_delete(&download.info_hash)
-                .await;
-            sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
-                .execute(&self.db)
-                .await
-                .map_err(Error::DatabaseError)?;
-        }
-        Ok(())
-    }
-
-    async fn enqueue(&self, body: EnqueueDownload) -> Result<(), Error> {
+    async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, Error> {
         let (info_hash, file_idx) =
             if let (Some(hash), Some(idx)) = (&body.info_hash, body.file_idx) {
                 (hash.clone(), idx)
             } else {
+                // TODO: rewrite to remove this part - should work like /streams/start,
+                //  with only info_hash and an optional metadata
                 let tmdb = TmdbClient::new(&self.config, self.http.clone());
                 let item = tmdb.details(body.media_type, body.tmdb_id).await?;
                 let imdb_id = item
@@ -112,64 +100,48 @@ impl DownloadsApi for AppContext {
                 (stream.info_hash.clone(), stream.file_idx)
             };
 
-        let file_path = if body.media_type == tmdb::MediaType::Tv {
-            format!("tv/{}/s{}e{}.mp4", body.tmdb_id, body.season, body.episode)
-        } else {
-            format!("movies/{}.mp4", body.tmdb_id)
+        let media = MediaContext {
+            media_type: body.media_type,
+            tmdb_id: body.tmdb_id,
+            title: body.title,
+            poster_path: body.poster_path,
+            season: body.season,
+            episode: body.episode,
+            resolution: Some(body.resolution),
         };
 
-        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
-
-        let media_id: i32 = sqlx::query_scalar!(
-            r#"
-                INSERT INTO media_items (media_type, tmdb_id, title, poster_path)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    poster_path = EXCLUDED.poster_path,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING id
-            "#,
-            body.media_type as tmdb::MediaType,
-            body.tmdb_id,
-            body.title,
-            body.poster_path,
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(Error::DatabaseError)?;
-
-        sqlx::query!(
-            "
-                INSERT INTO downloads (media_id, season, episode, resolution, info_hash, file_idx, file_path)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT(media_id, season, episode) DO UPDATE SET
-                    info_hash = excluded.info_hash,
-                    file_idx = excluded.file_idx,
-                    resolution = excluded.resolution,
-                    file_path = excluded.file_path,
-                    status = 'queued',
-                    error = NULL,
-                    downloaded_bytes = 0,
-                    total_bytes = NULL,
-                    completed_at = NULL
-            ",
-            media_id,
-            body.season,
-            body.episode,
-            body.resolution,
-            info_hash,
+        let id = crate::downloads::ensure_download(
+            &self.db,
+            &self.downloads,
+            &info_hash,
             file_idx,
-            file_path,
+            Some(&media),
         )
-        .execute(&mut *tx)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
+        Ok(id)
+    }
 
+    async fn pause(&self, id: i32) -> Result<(), Error> {
+        self.downloads.send(DownloadCommand::Pause(id)).await;
+        Ok(())
+    }
+
+    async fn resume(&self, id: i32) -> Result<(), Error> {
+        // Reset terminal/idle state so the manager will pick it up as queued.
+        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+        crate::downloads::reset_for_restart(&mut tx, id).await?;
         tx.commit().await.map_err(Error::DatabaseError)?;
+        self.downloads.send(DownloadCommand::Start(id)).await;
+        Ok(())
+    }
 
-        self.events
-            .publish("download:enqueue", serde_json::json!({}));
+    async fn cancel(&self, id: i32) -> Result<(), Error> {
+        self.downloads.send(DownloadCommand::Cancel(id)).await;
+        Ok(())
+    }
+
+    async fn remove(&self, id: i32) -> Result<(), Error> {
+        self.downloads.send(DownloadCommand::Remove(id)).await;
         Ok(())
     }
 

@@ -49,9 +49,11 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
         let disk_bytes = file_system::dir_size(&dir).await;
         seen_hashes.insert(dl.info_hash.to_lowercase());
 
-        let category = match dl.media_type {
-            tmdb::MediaType::Movie => "movies",
-            tmdb::MediaType::Tv => "tv",
+        // TODO: replace with enum
+        let category = match dl.meta.as_ref().map(|m| m.media_type) {
+            Some(tmdb::MediaType::Movie) => "movies",
+            Some(tmdb::MediaType::Tv) => "tv",
+            None => "other",
         }
         .to_string();
 
@@ -59,13 +61,13 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
             kind: EntryKind::Download,
             id: Some(dl.id),
             info_hash: dl.info_hash,
-            title: Some(dl.title),
-            poster_path: dl.poster_path,
-            media_type: Some(dl.media_type),
+            title: dl.meta.as_ref().map(|m| m.title.clone()).or(dl.name),
+            poster_path: dl.meta.as_ref().and_then(|m| m.poster_path.clone()),
+            media_type: dl.meta.as_ref().map(|m| m.media_type),
             category,
-            season: Some(dl.season),
-            episode: Some(dl.episode),
-            resolution: dl.resolution,
+            season: dl.meta.as_ref().map(|m| m.season),
+            episode: dl.meta.as_ref().map(|m| m.episode),
+            resolution: dl.meta.as_ref().and_then(|m| m.resolution.clone()),
             status: Some(dl.status),
             disk_bytes,
             total_bytes: dl.total_bytes,
