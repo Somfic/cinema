@@ -112,10 +112,15 @@
 	function posFromEvent(clientX: number): number | null {
 		if (!trackEl || !duration) return null;
 		const rect = trackEl.getBoundingClientRect();
-		const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+		const pct = Math.max(
+			0,
+			Math.min(1, (clientX - rect.left) / rect.width),
+		);
 		return pct * duration;
 	}
-	function onPointerDown(e: PointerEvent & { currentTarget: HTMLDivElement }) {
+	function onPointerDown(
+		e: PointerEvent & { currentTarget: HTMLDivElement },
+	) {
 		const t = posFromEvent(e.clientX);
 		if (t == null) return;
 		scrubbing = true;
@@ -181,7 +186,9 @@
 			: []),
 		{ kind: "header" as const, label: "Sources" },
 		...(activeResolution
-			? streams.filter((s: StreamOption) => s.resolution === activeResolution)
+			? streams.filter(
+					(s: StreamOption) => s.resolution === activeResolution,
+				)
 			: streams
 		)
 			.slice(0, 8)
@@ -254,7 +261,9 @@
 								t.id.startsWith("embedded:") === isEmbedded,
 						);
 						const suffix =
-							dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
+							dupes.length > 1
+								? ` #${dupes.indexOf(track) + 1}`
+								: "";
 						return {
 							kind: "item" as const,
 							label: `${track.language}${suffix}`,
@@ -266,7 +275,10 @@
 					...(subtitlesActive && subtitleOffsetControl
 						? [
 								"divider" as const,
-								{ kind: "custom" as const, render: subtitleOffsetControl },
+								{
+									kind: "custom" as const,
+									render: subtitleOffsetControl,
+								},
 							]
 						: []),
 				]
@@ -277,7 +289,9 @@
 <div
 	class="pc"
 	style:--accent={accent ? `rgb(${accent})` : "#e4e4e7"}
-	style:--accent-dim={accent ? `rgba(${accent}, 0.5)` : "rgba(228, 228, 231, 0.4)"}
+	style:--accent-dim={accent
+		? `rgba(${accent}, 0.5)`
+		: "rgba(228, 228, 231, 0.4)"}
 >
 	<div class="gradient"></div>
 
@@ -302,7 +316,10 @@
 					{/each}
 				</div>
 			{/if}
-			<div class="progress-buffered" style="width: {bufferedPercent}%"></div>
+			<div
+				class="progress-buffered"
+				style="width: {bufferedPercent}%"
+			></div>
 			<div class="progress-fill" style="width: {progressPercent}%">
 				<div class="progress-thumb"></div>
 			</div>
@@ -334,7 +351,8 @@
 					max="1"
 					step="0.01"
 					value={muted ? 0 : volume}
-					oninput={(e) => onSetVolume(parseFloat(e.currentTarget.value))}
+					oninput={(e) =>
+						onSetVolume(parseFloat(e.currentTarget.value))}
 					class="volume-slider"
 					class:open={volumeAlwaysOpen}
 				/>
@@ -558,7 +576,6 @@
 		font-family: "JetBrains Mono", monospace;
 		font-size: 0.75rem;
 		font-weight: 400;
-		color: var(--accent-dim);
 		letter-spacing: 0.02em;
 		margin-left: 8px;
 		white-space: nowrap;

@@ -16,18 +16,18 @@ draad = { version = "0.1.0", features = ["codegen"] }
 # Schema-driven RPC — proc-macros only at runtime.
 draad = { version = "0.1.0", features = ["runtime"] }
 async-trait = "0.1"
-ts-rs = "11"
+ts-rs = "12"
 
 # Web
-axum = { version = "0.8.8", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs"] }
-reqwest = { version = "0.13.2", features = ["json", "stream"] }
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
 
 # Database
 sqlx = { version = "0.8.6", features = ["any", "sqlite", "postgres", "mysql", "runtime-tokio", "migrate"] }
 
 # Async
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 futures = "0.3"
 async-stream = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }

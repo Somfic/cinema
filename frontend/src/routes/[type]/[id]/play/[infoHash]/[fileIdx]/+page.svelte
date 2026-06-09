@@ -289,21 +289,23 @@
 
 		const check = async () => {
 			try {
-				const res = await fetch(`/api/stream/${hash}/${idx}/audio`);
-				const data = await res.json();
+				const data = await api.streams.audioTracks(hash, idx);
 				const tracks: AudioTrackInfo[] = data.tracks ?? [];
-				if (tracks.length > 0) {
-					if (tracks.length > 1) fileAudioTracks = tracks;
-					if (data.duration) mediaDuration = data.duration;
-					if (
-						!hlsSessionId &&
-						tracks[0] &&
-						!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
-					) {
-						fileAudioTracks = tracks;
-						transcoding.enabled = true;
-						startHlsRemux(hash, idx, 0, transcoding.onlyAudio);
-					}
+				if (data.duration) mediaDuration = data.duration;
+				if (tracks.length === 0) return; // keep polling until tracks appear
+				if (tracks.length > 1) fileAudioTracks = tracks;
+				if (
+					!hlsSessionId &&
+					tracks[0] &&
+					!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
+				) {
+					fileAudioTracks = tracks;
+					transcoding.enabled = true;
+					startHlsRemux(hash, idx, 0, transcoding.onlyAudio);
+				}
+				// Stop once we also have a duration; keep polling if it hasn't
+				// resolved yet (e.g. an mp4 whose moov atom isn't downloaded).
+				if (mediaDuration > 0) {
 					clearInterval(audioPollTimer);
 					audioPollTimer = undefined;
 				}
@@ -446,6 +448,19 @@
 		);
 	}
 
+	// Seek beyond the transcoded window: restart the HLS transcode at the target
+	// time. `-ss`/`-copyts` keep currentTime aligned to the absolute timeline,
+	// so the player resumes at the sought position once the new playlist loads.
+	async function seekRestart(time: number) {
+		await startHlsRemux(
+			infoHash as string,
+			fileIdx as number,
+			activeAudioIdx,
+			transcoding.onlyAudio,
+			time,
+		);
+	}
+
 	async function toggleTranscoding(enabled: boolean, onlyAudio: boolean) {
 		if (enabled) {
 			await startHlsRemux(
@@ -534,6 +549,7 @@
 			activeAudioTrack={activeAudioIdx}
 			onAudioSelect={(track) => switchAudio(track.id)}
 			knownDuration={hlsSessionId ? mediaDuration : 0}
+			onSeekRestart={hlsSessionId ? seekRestart : undefined}
 			{streamStats}
 			{pieceMap}
 			bind:transcoding
