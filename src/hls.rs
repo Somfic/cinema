@@ -137,7 +137,7 @@ async fn start_transcoding(
     let video_args: Vec<String> = if session_input.only_audio {
         vec!["-c:v".into(), "copy".into()]
     } else {
-        let engine = crate::torrent::TorrentEngine::get();
+        let engine = crate::downloads::TorrentEngine::get();
         let file_path = engine.file_path(&session_input.info_hash, session_input.file_idx)?;
         let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
         let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
@@ -213,7 +213,7 @@ async fn start_transcoding(
         .take()
         .ok_or_else(|| crate::app::Error::Generic("Failed to open ffmpeg stdin".into()))?;
 
-    let engine = crate::torrent::TorrentEngine::get();
+    let engine = crate::downloads::TorrentEngine::get();
     let reader = engine.stream(&session_input.info_hash, session_input.file_idx)?;
 
     let span = tracing::Span::current();

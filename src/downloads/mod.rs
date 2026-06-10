@@ -7,8 +7,10 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 mod engine;
+mod manager;
 
 pub use engine::TorrentEngine;
+pub use manager::*;
 
 #[draad::ty]
 pub struct AudioTrack {

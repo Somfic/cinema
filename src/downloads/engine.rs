@@ -9,7 +9,7 @@ use librqbit::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::Config, torrent::TorrentFileReader};
+use crate::{config::Config, downloads::TorrentFileReader};
 
 static ENGINE: OnceLock<TorrentEngine> = OnceLock::new();
 

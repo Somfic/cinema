@@ -9,10 +9,10 @@ use std::time::Duration;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use super::TorrentEngine;
 use crate::app::Pool;
 use crate::config::Config;
 use crate::tmdb::{self, TmdbClient};
-use crate::torrent::TorrentEngine;
 
 // ── Public types ─────────────────────────────────────────────────────────
 

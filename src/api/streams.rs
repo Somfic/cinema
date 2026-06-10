@@ -1,7 +1,7 @@
 use crate::app::{AppContext, Error};
+use crate::downloads::TorrentEngine;
 pub use crate::streams::Stream;
 use crate::tmdb::{self, MediaType, TmdbClient};
-use crate::torrent::TorrentEngine;
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
 
 #[draad::ty]
@@ -51,8 +51,8 @@ pub struct StreamStatsUpdate {
 
 #[draad::ty]
 pub struct AudioTracks {
-    pub tracks: Vec<crate::torrent::AudioTrack>,
-    pub subtitles: Vec<crate::torrent::EmbeddedSubtitleTrack>,
+    pub tracks: Vec<crate::downloads::AudioTrack>,
+    pub subtitles: Vec<crate::downloads::EmbeddedSubtitleTrack>,
     pub duration: Option<f64>,
 }
 

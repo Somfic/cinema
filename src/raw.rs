@@ -11,8 +11,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::app::{AppContext, Error};
+use crate::downloads::TorrentEngine;
 use crate::hls;
-use crate::torrent::TorrentEngine;
 
 pub fn router() -> Router<AppContext> {
     Router::new()
@@ -205,14 +205,8 @@ async fn stream_file(
     // Record the active stream in the DB so the manager picks it up too.
     // This also kicks off the per-download supervisor (progress writes,
     // async TMDB metadata resolution, etc.).
-    crate::downloads::ensure_download(
-        &ctx.db,
-        &ctx.downloads,
-        &info_hash,
-        file_idx as i32,
-        None,
-    )
-    .await?;
+    crate::downloads::ensure_download(&ctx.db, &ctx.downloads, &info_hash, file_idx as i32, None)
+        .await?;
     let reader = engine.stream(&info_hash, file_idx)?;
     let total_size = reader.len;
 
@@ -281,14 +275,8 @@ async fn stream_remux_hls(
     let engine = TorrentEngine::get();
     engine.ensure_torrent(&info_hash, &ctx.config).await?;
     engine.select_file(&info_hash, file_idx).await?;
-    crate::downloads::ensure_download(
-        &ctx.db,
-        &ctx.downloads,
-        &info_hash,
-        file_idx as i32,
-        None,
-    )
-    .await?;
+    crate::downloads::ensure_download(&ctx.db, &ctx.downloads, &info_hash, file_idx as i32, None)
+        .await?;
 
     let (session_id, playlist_url) = hls::start_session(
         &ctx.storage,

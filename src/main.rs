@@ -10,7 +10,7 @@ use tracing::info;
 mod api;
 mod app;
 mod config;
-mod downloads;
+pub(crate) mod downloads;
 mod file_system;
 mod hls;
 mod logging;
@@ -19,7 +19,6 @@ mod raw;
 mod streams;
 mod subtitles;
 mod tmdb;
-pub(crate) mod torrent;
 mod trailer;
 mod ws;
 
@@ -137,7 +136,7 @@ async fn run() -> Result<()> {
     };
 
     // Initialize torrent engine
-    torrent::TorrentEngine::init(&ctx).await?;
+    downloads::TorrentEngine::init(&ctx).await?;
 
     // Start download manager
     tokio::spawn(manager.run());
@@ -156,7 +155,7 @@ async fn run() -> Result<()> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(333)).await;
-                let engine = torrent::TorrentEngine::get();
+                let engine = downloads::TorrentEngine::get();
                 for hash in engine.active_info_hashes() {
                     let Ok(stats) = engine.stats(&hash) else {
                         continue;
@@ -238,7 +237,7 @@ async fn run() -> Result<()> {
 
     // Shutdown
     hls::stop_all().await;
-    torrent::TorrentEngine::get().shutdown().await;
+    downloads::TorrentEngine::get().shutdown().await;
 
     Ok(())
 }
