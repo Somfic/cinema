@@ -366,7 +366,7 @@
 
     "get-tsconfig": ["get-tsconfig@4.14.0", "", { "dependencies": { "resolve-pkg-maps": "^1.0.0" } }, "sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA=="],
 
-    "glow": ["glow@github:somfic/glow#c615371", { "dependencies": { "@sveltejs/kit": "^2.58.0", "@sveltejs/package": "^2.5.7", "@sveltejs/vite-plugin-svelte": "^6.2.4", "@types/node": "^24.12.2", "cropperjs": "^1.6.2", "hls.js": "^1.6.16", "lucide-svelte": "^0.563.0", "prettier": "^3.8.3", "prettier-plugin-svelte": "^3.5.1", "publint": "^0.3.18", "sass": "^1.99.0", "shiki": "^4.0.2", "svelte": "^5.55.5", "svelte-check": "^4.4.6", "typescript": "^5.9.3", "vite": "^7.3.2" }, "peerDependencies": { "svelte": "^5.0.0" } }, "Somfic-glow-c615371", "sha512-EKaZemeQ+x76/ZKWmKCHvEqQ3GBbYrjVt9mP3HwVB/oAbAEV6roQSYxhZG0vGeKjOcw/f4/1QZ3fdnh5rkpRqA=="],
+    "glow": ["glow@github:somfic/glow#d641d67", { "dependencies": { "@sveltejs/kit": "^2.58.0", "@sveltejs/package": "^2.5.7", "@sveltejs/vite-plugin-svelte": "^6.2.4", "@types/node": "^24.12.2", "cropperjs": "^1.6.2", "hls.js": "^1.6.16", "lucide-svelte": "^0.563.0", "prettier": "^3.8.3", "prettier-plugin-svelte": "^3.5.1", "publint": "^0.3.18", "sass": "^1.99.0", "shiki": "^4.0.2", "svelte": "^5.55.5", "svelte-check": "^4.4.6", "typescript": "^5.9.3", "vite": "^7.3.2" }, "peerDependencies": { "svelte": "^5.0.0" } }, "Somfic-glow-d641d67", "sha512-PGLVw235yt7A2bmdVk7bJ8DAXMEHst2gdupCkq54nhO9u+ag2XBQDqTBCgQ2DpqML6aWCHVmyyU94BsxbizltQ=="],
 
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
