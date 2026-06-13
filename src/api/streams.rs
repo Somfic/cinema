@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 pub use crate::streams::Stream;
 use crate::tmdb::{MediaType, TmdbClient};
 use crate::torrent::TorrentEngine;
@@ -8,6 +9,12 @@ use crate::{streams as streams_mod, subtitles as subtitles_mod};
 pub struct StartStream {
     pub url: String,
     pub local: bool,
+}
+
+#[draad::ty]
+pub struct RemuxSession {
+    pub session_id: String,
+    pub playlist_url: String,
 }
 
 #[draad::ty]
@@ -51,24 +58,43 @@ pub struct PiecesUpdate {
 #[draad::api(namespace = "streams")]
 pub trait StreamsApi {
     /// Aggregates available torrent streams for a movie.
+    #[get]
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error>;
 
     /// Aggregates available torrent streams for a specific TV episode.
+    #[get]
     async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<Stream>, Error>;
 
     /// Starts a torrent (idempotent) and returns the playback URL.
+    #[post]
     async fn start(&self, info_hash: String, file_idx: i64) -> Result<StartStream, Error>;
 
+    /// Starts an HLS remux/transcode session for a file and returns its
+    /// playlist URL (feed to hls.js). Callers stop the previous session first.
+    #[post]
+    async fn remux(
+        &self,
+        info_hash: String,
+        file_idx: i64,
+        audio: i64,
+        t: f64,
+        only_audio: bool,
+    ) -> Result<RemuxSession, Error>;
+
     /// Current torrent download stats for a stream.
+    #[get]
     async fn stats(&self, info_hash: String) -> Result<StreamStats, Error>;
 
     /// Per-piece availability bitmap (200 buckets) for a given file in a torrent.
+    #[get]
     async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, Error>;
 
     /// Embedded audio + subtitle tracks + duration for a downloaded file.
+    #[get]
     async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error>;
 
     /// Extracts cues from an embedded subtitle track in the source file.
+    #[get]
     async fn embedded_subtitles(
         &self,
         info_hash: String,
@@ -106,6 +132,36 @@ impl StreamsApi for AppContext {
             .await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
+    }
+
+    async fn remux(
+        &self,
+        info_hash: String,
+        file_idx: i64,
+        audio: i64,
+        t: f64,
+        only_audio: bool,
+    ) -> Result<RemuxSession, Error> {
+        let engine = TorrentEngine::get();
+        engine
+            .start(&info_hash, file_idx as usize, &self.config)
+            .await?;
+        let (session_id, playlist_url) = crate::hls::start_session(
+            &self.storage,
+            &self.config,
+            crate::hls::HlsSessionStartInput {
+                info_hash,
+                file_idx: file_idx as usize,
+                audio_index: audio as usize,
+                start_time: t,
+                only_audio,
+            },
+        )
+        .await?;
+        Ok(RemuxSession {
+            session_id,
+            playlist_url,
+        })
     }
 
     async fn stats(&self, info_hash: String) -> Result<StreamStats, Error> {

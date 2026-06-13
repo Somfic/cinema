@@ -490,14 +490,15 @@
 		stopHlsSession();
 		streamUrl = null;
 		try {
-			const t = startAt > 0 ? `&t=${startAt.toFixed(1)}` : "";
-			const res = await fetch(
-				`/api/stream/${hash}/${idx}/remux?audio=${audioIdx}${t}&onlyAudio=${onlyAudio}`,
-				{ method: "POST" },
+			const session = await api.streams.remux(
+				hash,
+				idx,
+				audioIdx,
+				startAt,
+				onlyAudio,
 			);
-			const data = await res.json();
-			hlsSessionId = data.session_id;
-			streamUrl = data.playlist_url;
+			hlsSessionId = session.session_id;
+			streamUrl = session.playlist_url;
 		} catch (e: any) {
 			error = e.message;
 		}
@@ -505,9 +506,7 @@
 
 	function stopHlsSession() {
 		if (hlsSessionId) {
-			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(
-				() => {},
-			);
+			api.hls.stop(hlsSessionId).catch(() => {});
 			hlsSessionId = null;
 		}
 	}

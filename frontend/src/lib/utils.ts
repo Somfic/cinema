@@ -2,7 +2,9 @@ import type { MediaType } from "$lib/schema";
 import { api } from "$lib/api";
 
 export function imageUrl(path: string, size: string = "original"): string {
-	return `/api/image/${size}${path}`;
+	// URL contract lives in the draad `#[raw]` schema; the catch-all carries
+	// `{size}{path}` (path already begins with `/`).
+	return api.urls.image(`${size}${path}`);
 }
 
 export async function getDetails(type: MediaType, id: number) {

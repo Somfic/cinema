@@ -13,7 +13,7 @@ import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { toast } from "glow";
 import type { ClientPresence } from "$lib/schema";
-import { announce, listen, onOpen, publish, type UnlistenFn } from "$lib/schema/rpc";
+import { announce, conn, listen, onOpen, publish, type UnlistenFn } from "$lib/schema/rpc";
 
 export type Mode = "browser" | "tv" | "remote";
 export type DeviceKind = "phone" | "tablet" | "desktop";
@@ -141,21 +141,14 @@ export interface CastTarget {
 	episode?: number | null;
 }
 
-const ID_KEY = "remote.id";
 const LABEL_KEY = "remote.label";
 const MODE_KEY = "remote.mode";
 const PAIRED_KEY = "remote.paired";
 
-// Identity is per *window*, not per browser profile: two tabs/windows of the
-// same browser are two distinct clients. sessionStorage gives exactly that —
-// unique per tab, yet preserved across reloads (so a reloaded TV keeps its mode
-// and pairing). localStorage would be shared across all tabs, collapsing them
-// into a single client id.
-
-function genId(): string {
-	if (browser && crypto?.randomUUID) return crypto.randomUUID();
-	return `c-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-}
+// Identity (`selfId`) is now the transport's server-assigned `client_id`
+// (see `conn.id`): per-window, persisted by draad in sessionStorage, and
+// stable across reconnects. It's `null` until the first WS welcome, so the
+// mode-restore + announce below wait for `onOpen`.
 
 /** Best-effort friendly device name from the user agent, e.g. "Chrome · macOS". */
 function defaultLabel(): string {
@@ -242,21 +235,11 @@ class RemoteStore {
 		this._started = true;
 
 		const ss = window.sessionStorage;
-		this.selfId = ss.getItem(ID_KEY) ?? genId();
-		ss.setItem(ID_KEY, this.selfId);
 		this.selfLabel = ss.getItem(LABEL_KEY) ?? defaultLabel();
 		ss.setItem(LABEL_KEY, this.selfLabel);
 
 		const savedMode = ss.getItem(MODE_KEY) as Mode | null;
 		const savedPaired = ss.getItem(PAIRED_KEY);
-		if (savedMode === "tv") {
-			this.mode = "tv";
-			this._startTv();
-		} else if (savedMode === "remote" && savedPaired) {
-			this.mode = "remote";
-			this.pairedId = savedPaired;
-			this._startRemote(savedPaired);
-		}
 
 		window.addEventListener("resize", () => {
 			this.width = window.innerWidth;
@@ -265,13 +248,31 @@ class RemoteStore {
 			this._resizeTimer = setTimeout(() => this._announce(), 200);
 		});
 
+		// Subscribing opens the socket; the server then assigns our id and
+		// `onOpen` fires (after the welcome frame), so `conn.id` is set below.
 		listen<ClientPresence[]>("remote_presence", (roster) =>
 			this._onPresence(roster),
 		);
-		// Re-announce on every (re)connect — a fresh socket starts with no
-		// server-side roster entry.
-		onOpen(() => this._announce());
-		this._announce();
+
+		// Everything keyed on `selfId` (mode restore, topic subscriptions,
+		// announce) waits for the server-assigned id. Restore the saved role
+		// once, then re-announce on every (re)connect.
+		let restored = false;
+		onOpen(() => {
+			if (conn.id) this.selfId = conn.id;
+			if (!restored) {
+				restored = true;
+				if (savedMode === "tv") {
+					this.mode = "tv";
+					this._startTv();
+				} else if (savedMode === "remote" && savedPaired) {
+					this.mode = "remote";
+					this.pairedId = savedPaired;
+					this._startRemote(savedPaired);
+				}
+			}
+			this._announce();
+		});
 	}
 
 	private _persist() {

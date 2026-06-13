@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 
 #[draad::ty]
 pub struct CollectionRequest {
@@ -54,15 +55,19 @@ pub struct ReorderItem {
 #[draad::api(namespace = "collections")]
 pub trait CollectionsApi {
     /// Adds an item to a named collection
+    #[post]
     async fn add(&self, item: CollectionRequest) -> Result<(), Error>;
 
     /// Removes an item from a collection
+    #[delete]
     async fn remove(&self, collection: String, media_type: String, id: i64) -> Result<(), Error>;
 
     /// Lists items in a single collection, ordered by position then added time
+    #[get]
     async fn get(&self, collection: String) -> Result<Vec<CollectionItem>, Error>;
 
     /// Whether the given item is in the given collection
+    #[get]
     async fn contains(
         &self,
         collection: String,
@@ -71,22 +76,28 @@ pub trait CollectionsApi {
     ) -> Result<CollectionStatus, Error>;
 
     /// Lists every collection definition (user + system), ordered by position
+    #[get]
     async fn list_defs(&self) -> Result<Vec<CollectionDef>, Error>;
 
     /// Creates (or upserts) a collection definition
+    #[put]
     async fn create_def(&self, def: CreateCollection) -> Result<(), Error>;
 
     /// Deletes a collection definition and all its items. System defs can't
     /// be deleted
+    #[delete]
     async fn delete_def(&self, slug: String) -> Result<(), Error>;
 
     /// Hides/unhides a collection from the UI without deleting its items
+    #[patch]
     async fn set_visibility(&self, slug: String, hidden: bool) -> Result<(), Error>;
 
     /// Reorders the list of collection definitions
+    #[patch]
     async fn reorder_defs(&self, slugs: Vec<String>) -> Result<(), Error>;
 
     /// Reorders items within a single collection
+    #[patch]
     async fn reorder(&self, collection: String, items: Vec<ReorderItem>) -> Result<(), Error>;
 }
 

@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 pub use crate::downloads::Download;
 use crate::streams as streams_mod;
 use crate::tmdb::TmdbClient;
@@ -39,16 +40,20 @@ pub struct ResolutionEstimate {
 #[draad::api(namespace = "downloads")]
 pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
+    #[get]
     async fn list(&self) -> Result<Vec<Download>, Error>;
 
     /// Cancels an in-progress download and removes its row + files from disk
+    #[delete]
     async fn delete(&self, id: i64) -> Result<(), Error>;
 
     /// Queues a download. If `info_hash`/`file_idx` are omitted, picks the
     /// best stream matching the requested resolution
+    #[post]
     async fn enqueue(&self, request: EnqueueDownload) -> Result<(), Error>;
 
     /// Bandwidth/size estimates per available resolution
+    #[get]
     async fn estimate(
         &self,
         media_type: String,
@@ -149,7 +154,7 @@ impl DownloadsApi for AppContext {
         .map_err(|e| Error::Generic(e.to_string()))?;
 
         self.events
-            .publish("download:enqueue", serde_json::json!({}));
+            .publish("download:enqueue", &serde_json::json!({}));
         Ok(())
     }
 

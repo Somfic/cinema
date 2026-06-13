@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 use crate::subtitles as subtitles_mod;
 use crate::tmdb::{MediaType, TmdbClient};
 
@@ -7,12 +8,15 @@ pub use crate::subtitles::{SubtitleCue, SubtitleTrack};
 #[draad::api(namespace = "subtitles")]
 pub trait SubtitlesApi {
     /// External subtitle tracks (OpenSubtitles etc.) for a movie
+    #[get]
     async fn movie(&self, id: i64) -> Result<Vec<SubtitleTrack>, Error>;
 
     /// External subtitle tracks for a specific TV episode
+    #[get]
     async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<SubtitleTrack>, Error>;
 
     /// Fetches and parses cues from an SRT URL
+    #[get]
     async fn cues(&self, url: String) -> Result<Vec<SubtitleCue>, Error>;
 }
 

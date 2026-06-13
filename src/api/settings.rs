@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 
 #[draad::ty]
 pub struct YoutubeCookiesStatus {
@@ -13,13 +14,16 @@ pub struct YoutubeCookiesStatus {
 #[draad::api(namespace = "settings")]
 pub trait SettingsApi {
     /// Returns the active yt-dlp cookies source.
+    #[get]
     async fn youtube_cookies_status(&self) -> Result<YoutubeCookiesStatus, Error>;
 
     /// Stores a Netscape-format `cookies.txt` body in the data dir so yt-dlp
     /// can use it on subsequent trailer requests.
+    #[put]
     async fn set_youtube_cookies(&self, content: String) -> Result<YoutubeCookiesStatus, Error>;
 
     /// Removes the stored cookies file (the env override, if any, still wins).
+    #[delete]
     async fn clear_youtube_cookies(&self) -> Result<YoutubeCookiesStatus, Error>;
 }
 

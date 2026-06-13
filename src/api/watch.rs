@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 
 #[draad::ty]
 pub struct RecordWatch {
@@ -33,9 +34,11 @@ pub struct WatchHistoryItem {
 #[draad::api(namespace = "watch")]
 pub trait WatchApi {
     /// Inserts the current playback position for a piece of media
+    #[post]
     async fn record(&self, watch: RecordWatch) -> Result<(), Error>;
 
     /// Returns the 20 most-recently-watched items
+    #[get]
     async fn history(&self) -> Result<Vec<WatchHistoryItem>, Error>;
 }
 

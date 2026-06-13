@@ -2,24 +2,21 @@
 name = "cinema"
 version = "0.1.0"
 edition = "2024"
-build = "build.rs"
 
 [[bin]]
 name = "cinema"
 path = "src/main.rs"
 
-[build-dependencies]
-# Same crate, with the codegen feature flipped on for build.rs.
-draad = { version = "0.1.0", features = ["codegen"] }
-
 [dependencies]
-# Schema-driven RPC — proc-macros only at runtime.
-draad = { version = "0.1.0", features = ["runtime"] }
+# Schema-driven RPC. `include_generated!` drives the whole scan → emit
+# pipeline at macro-expansion time, so there's no build.rs and no ts-rs.
+# The `runtime` feature ships the EventBus + the WS Session/Conn/Conns system
+# and the connected-client identity the WebSocket + RPC layers are built on.
+draad = { git = "https://github.com/somfic/draad", tag = "v0.3.0", features = ["runtime"] }
 async-trait = "0.1"
-ts-rs = "12"
 
 # Web
-axum = { version = "0.8.9", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws", "macros"] }
 tower-http = { version = "0.6", features = ["fs"] }
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 
