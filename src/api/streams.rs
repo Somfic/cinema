@@ -186,12 +186,16 @@ impl StreamsApi for AppContext {
     }
 
     async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error> {
-        let engine = TorrentEngine::get();
-        let path = engine.file_path(&info_hash, file_idx as usize)?;
+        // Probe through the local HTTP stream route, not the on-disk file: a
+        // still-downloading torrent is sparse on disk (missing pieces = holes),
+        // so a direct ffprobe fails until the file is complete. The HTTP route
+        // serves through the blocking, range-capable reader the transcode uses,
+        // so ffprobe gets coherent bytes (and can seek to a trailing moov atom).
+        let url = self.stream_url(&info_hash, file_idx);
         let (tracks, subtitles, duration) = tokio::join!(
-            TorrentEngine::audio_tracks(&path),
-            TorrentEngine::subtitle_tracks(&path),
-            TorrentEngine::probe_duration(&path),
+            TorrentEngine::audio_tracks(&url),
+            TorrentEngine::subtitle_tracks(&url),
+            TorrentEngine::probe_duration(&url),
         );
         let allowed: Vec<&str> = self
             .config
@@ -221,9 +225,20 @@ impl StreamsApi for AppContext {
         file_idx: i64,
         stream_index: i64,
     ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error> {
-        let engine = TorrentEngine::get();
-        let path = engine.file_path(&info_hash, file_idx as usize)?;
-        Ok(TorrentEngine::extract_subtitle_cues(&path, stream_index as usize).await)
+        let url = self.stream_url(&info_hash, file_idx);
+        Ok(TorrentEngine::extract_subtitle_cues(&url, stream_index as usize).await)
+    }
+}
+
+impl AppContext {
+    /// Loopback URL for this file's range-served bytes, so ffprobe/ffmpeg read
+    /// through the blocking torrent reader (the [`crate::urls::STREAM`] route)
+    /// rather than the sparse on-disk file.
+    fn stream_url(&self, info_hash: &str, file_idx: i64) -> String {
+        format!(
+            "http://127.0.0.1:{}/api/stream/{}/{}",
+            self.config.port, info_hash, file_idx
+        )
     }
 }
 

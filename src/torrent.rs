@@ -401,8 +401,12 @@ impl TorrentEngine {
         Ok(path)
     }
 
-    /// Get the number of audio tracks in a file using ffprobe.
-    pub async fn audio_tracks(path: &std::path::Path) -> Vec<AudioTrack> {
+    /// Get the number of audio tracks in a file using ffprobe. `input` is an
+    /// ffprobe input — either an on-disk path or, for a still-downloading
+    /// torrent, the local HTTP stream URL so ffprobe reads through the blocking,
+    /// range-capable reader (the same one the transcode uses) instead of the
+    /// sparse on-disk file.
+    pub async fn audio_tracks(input: &str) -> Vec<AudioTrack> {
         let output = tokio::process::Command::new("ffprobe")
             .args([
                 "-v",
@@ -413,13 +417,11 @@ impl TorrentEngine {
                 "-select_streams",
                 "a",
             ])
-            .arg(path)
-            .output()
-            .await;
-
-        let output = match output {
-            Ok(o) if o.status.success() => o.stdout,
-            _ => return vec![],
+            .arg(input)
+            .output();
+        let output = match Self::ffprobe_output(output).await {
+            Some(o) => o,
+            None => return vec![],
         };
 
         #[derive(serde::Deserialize)]
@@ -478,18 +480,14 @@ impl TorrentEngine {
             .collect()
     }
 
-    /// Get the duration of a media file in seconds.
-    pub async fn probe_duration(path: &std::path::Path) -> Option<f64> {
+    /// Get the duration of a media file in seconds. `input` is an ffprobe input
+    /// (on-disk path or local HTTP stream URL).
+    pub async fn probe_duration(input: &str) -> Option<f64> {
         let output = tokio::process::Command::new("ffprobe")
             .args(["-v", "quiet", "-print_format", "json", "-show_format"])
-            .arg(path)
-            .output()
-            .await
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
+            .arg(input)
+            .output();
+        let stdout = Self::ffprobe_output(output).await?;
 
         #[derive(serde::Deserialize)]
         struct Probe {
@@ -500,12 +498,25 @@ impl TorrentEngine {
             duration: Option<String>,
         }
 
-        let probe: Probe = serde_json::from_slice(&output.stdout).ok()?;
+        let probe: Probe = serde_json::from_slice(&stdout).ok()?;
         probe.format.duration.and_then(|d| d.parse::<f64>().ok())
     }
 
-    /// Get embedded subtitle tracks in a file using ffprobe.
-    pub async fn subtitle_tracks(path: &std::path::Path) -> Vec<EmbeddedSubtitleTrack> {
+    /// Await an ffprobe `.output()` future with a timeout, returning its stdout
+    /// only on a clean exit. Probing over the torrent HTTP stream can block on
+    /// missing pieces, so the timeout prevents a wedged probe from hanging.
+    async fn ffprobe_output(
+        fut: impl std::future::Future<Output = std::io::Result<std::process::Output>>,
+    ) -> Option<Vec<u8>> {
+        match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
+            Ok(Ok(o)) if o.status.success() => Some(o.stdout),
+            _ => None,
+        }
+    }
+
+    /// Get embedded subtitle tracks in a file using ffprobe. `input` is an
+    /// ffprobe input (on-disk path or local HTTP stream URL).
+    pub async fn subtitle_tracks(input: &str) -> Vec<EmbeddedSubtitleTrack> {
         let output = tokio::process::Command::new("ffprobe")
             .args([
                 "-v",
@@ -516,13 +527,11 @@ impl TorrentEngine {
                 "-select_streams",
                 "s",
             ])
-            .arg(path)
-            .output()
-            .await;
-
-        let output = match output {
-            Ok(o) if o.status.success() => o.stdout,
-            _ => return vec![],
+            .arg(input)
+            .output();
+        let output = match Self::ffprobe_output(output).await {
+            Some(o) => o,
+            None => return vec![],
         };
 
         #[derive(serde::Deserialize)]
@@ -582,13 +591,13 @@ impl TorrentEngine {
     /// Extract subtitle cues from an embedded subtitle track.
     /// Runs ffmpeg with a timeout since the file may be partially downloaded.
     pub async fn extract_subtitle_cues(
-        path: &std::path::Path,
+        input: &str,
         stream_index: usize,
     ) -> Vec<crate::subtitles::SubtitleCue> {
         let mut child = match tokio::process::Command::new("ffmpeg")
             .args([
                 "-i",
-                path.to_str().unwrap_or(""),
+                input,
                 "-map",
                 &format!("0:s:{stream_index}"),
                 "-f",
