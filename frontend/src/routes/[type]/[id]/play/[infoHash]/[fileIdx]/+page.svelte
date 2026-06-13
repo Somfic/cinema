@@ -70,7 +70,8 @@
 		if (mediaType === "tv" && season !== null && episode !== null) {
 			const still = item?.seasons
 				?.find((s) => s.season_number === season)
-				?.episodes?.find((e) => e.episode_number === episode)?.stills?.[0];
+				?.episodes?.find((e) => e.episode_number === episode)
+				?.stills?.[0];
 			if (still) return imageUrl(still, "original");
 		}
 		return backdropUrls[0];
@@ -190,10 +191,15 @@
 					(w) =>
 						w.media_type === type &&
 						w.tmdb_id === id &&
-						(type === "movie" || (w.season === s && w.episode === e)) &&
+						(type === "movie" ||
+							(w.season === s && w.episode === e)) &&
 						w.progress > 0,
 				);
-				if (entry && entry.duration > 0 && entry.progress < entry.duration - 30) {
+				if (
+					entry &&
+					entry.duration > 0 &&
+					entry.progress < entry.duration - 30
+				) {
 					startTime = entry.progress;
 				}
 			})
@@ -252,7 +258,11 @@
 			if (mediaType === "movie") {
 				subtitleTracks = await api.subtitles.movie(item.id);
 			} else if (season !== null && episode !== null) {
-				subtitleTracks = await api.subtitles.tv(item.id, season, episode);
+				subtitleTracks = await api.subtitles.tv(
+					item.id,
+					season,
+					episode,
+				);
 			}
 
 			if (subtitleTracks.length > 0) {
@@ -301,6 +311,7 @@
 				) {
 					fileAudioTracks = tracks;
 					transcoding.enabled = true;
+					transcoding.onlyAudio = true;
 					startHlsRemux(hash, idx, 0, transcoding.onlyAudio);
 				}
 				// Stop once we also have a duration; keep polling if it hasn't

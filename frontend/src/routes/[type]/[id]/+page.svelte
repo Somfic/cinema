@@ -411,7 +411,6 @@
 				const subs: EmbeddedSubtitleTrack[] = data.subtitles ?? [];
 				if (data.duration) mediaDuration = data.duration;
 				if (tracks.length > 1) fileAudioTracks = tracks;
-				// Auto-switch to HLS remux if default audio codec is unsupported by the browser
 				if (
 					!hlsSessionId &&
 					tracks[0] &&
@@ -419,6 +418,7 @@
 				) {
 					fileAudioTracks = tracks;
 					transcoding.enabled = true;
+					transcoding.onlyAudio = true;
 					startHlsRemux(infoHash, fileIdx, 0, transcoding.onlyAudio);
 				}
 				if (subs.length > 0 && embeddedSubtitleTracks.length === 0) {

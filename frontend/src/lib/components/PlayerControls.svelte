@@ -167,6 +167,28 @@
 		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
 	});
 
+	const TRANSCODE_OPTIONS = [
+		{ value: "none", label: "None", icon: "Ban" as const },
+		{ value: "audio", label: "Audio", icon: "AudioLines" as const },
+		{ value: "both", label: "Audio + video", icon: "Film" as const },
+	];
+
+	const transcodingMode = $derived(
+		!transcoding.enabled
+			? "none"
+			: transcoding.onlyAudio
+				? "audio"
+				: "both",
+	);
+
+	function setTranscodingMode(mode: string) {
+		const enabled = mode !== "none";
+		const onlyAudio = mode === "audio";
+		transcoding.enabled = enabled;
+		transcoding.onlyAudio = onlyAudio;
+		onTranscodingChange?.(enabled, onlyAudio);
+	}
+
 	const streamMenuItems = $derived<PopoverMenuEntry[]>([
 		...(resolutions.length > 1
 			? [
@@ -204,27 +226,13 @@
 			})),
 		...(onTranscodingChange
 			? [
-					"divider" as const,
+					{ kind: "header" as const, label: "Transcoding" },
 					{
-						kind: "toggle" as const,
-						label: "Transcoding",
-						description: "Re-encode stream for compatibility",
-						checked: transcoding.enabled,
-						onChange: (value: boolean) => {
-							transcoding.enabled = value;
-							onTranscodingChange?.(value, transcoding.onlyAudio);
-						},
-					},
-					{
-						kind: "toggle" as const,
-						label: "Only audio",
-						description: "Only re-encode audio",
-						disabled: !transcoding.enabled,
-						checked: transcoding.onlyAudio,
-						onChange: (value: boolean) => {
-							transcoding.onlyAudio = value;
-							onTranscodingChange?.(transcoding.enabled, value);
-						},
+						kind: "radio" as const,
+						options: TRANSCODE_OPTIONS,
+						value: transcodingMode,
+						iconOnly: true,
+						onChange: setTranscodingMode,
 					},
 				]
 			: []),
