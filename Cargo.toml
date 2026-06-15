@@ -21,7 +21,7 @@ tower-http = { version = "0.6", features = ["fs"] }
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 
 # Database
-sqlx = { version = "0.8.6", features = ["any", "sqlite", "postgres", "mysql", "runtime-tokio", "migrate"] }
+sqlx = { version = "0.9.0", features = ["any", "sqlite", "postgres", "mysql", "runtime-tokio", "migrate"] }
 
 # Async
 tokio = { version = "1.52.3", features = ["full"] }
