@@ -1,6 +1,7 @@
-//! Download lifecycle. The database is the source of truth; this module
-//! actuates against `TorrentEngine` in response to commands and writes
-//! observed progress back.
+//! Download lifecycle. The database is the source of truth; `Handle` owns
+//! the in-flight supervisor map and a capacity semaphore, and exposes async
+//! operations (`start`, `pause`, `cancel`, `remove`) that block until the
+//! engine and DB are in the requested state.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,11 +9,13 @@ use std::time::Duration;
 
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use super::TorrentEngine;
-use crate::app::Pool;
+use crate::app::{Error, Pool};
 use crate::config::Config;
-use crate::tmdb::{self, TmdbClient};
+use crate::downloads::supervisor_guard::SupervisorGuard;
+use crate::tmdb;
 
 // ── Public types ─────────────────────────────────────────────────────────
 
@@ -54,8 +57,7 @@ pub struct Download {
     pub meta: Option<DownloadMeta>,
 }
 
-/// Flat row mapped from the LEFT JOIN'd select. Made `pub(crate)` so the
-/// query_as! macro can construct it; collapsed to [`Download`] via `From`.
+/// Flat row mapped from the LEFT JOIN'd select; collapsed to [`Download`] via `From`.
 #[derive(Debug)]
 struct DownloadRow {
     id: i32,
@@ -104,329 +106,290 @@ impl From<DownloadRow> for Download {
     }
 }
 
-// ── Commands & Handle ────────────────────────────────────────────────────
-
-#[derive(Debug)]
-pub enum DownloadCommand {
-    /// Start (or resume) a download. Valid from queued/paused/cancelled/failed.
-    Start(i32),
-    /// Stop downloading, keep files. Intent: temporary hold.
-    Pause(i32),
-    /// Stop downloading, keep files. Intent: user no longer wants this download.
-    Cancel(i32),
-    /// Stop downloading, wipe files + row. Always destructive.
-    Remove(i32),
-    /// Look for queued rows that can be started given current capacity.
-    Refresh,
-    /// Internal: a supervisor task finished and is no longer holding its slot.
-    Done(i32),
+/// Result of a `start` attempt. `Started` is the only outcome that spawns a
+/// new supervisor; the rest are idempotent no-ops the caller may want to
+/// observe (e.g. surface "NoCapacity" to a UI as "queued").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartOutcome {
+    Started,
+    AlreadyRunning,
+    AlreadyComplete,
+    NoCapacity,
+    Cancelled,
 }
 
+// ── Handle ───────────────────────────────────────────────────────────────
+
+/// Cheap, cloneable handle to the download subsystem.
 #[derive(Clone)]
-pub struct Handle {
-    tx: mpsc::Sender<DownloadCommand>,
+pub struct Handle(Arc<Inner>);
+
+struct Inner {
+    db: Pool,
+    config: Arc<Config>,
+    semaphore: Arc<Semaphore>,
+    supervisors: std::sync::Mutex<HashMap<i32, CancellationToken>>,
+    refresh_tx: mpsc::Sender<()>,
+    shutdown: CancellationToken,
+    tracker: TaskTracker,
 }
 
 impl Handle {
-    pub async fn send(&self, cmd: DownloadCommand) {
-        if let Err(err) = self.tx.send(cmd).await {
-            tracing::error!(?err, "Download command channel closed");
-        }
-    }
-}
-
-// ── Manager ──────────────────────────────────────────────────────────────
-
-pub struct DownloadManager {
-    db: Pool,
-    config: Arc<Config>,
-    http: reqwest::Client,
-    rx: mpsc::Receiver<DownloadCommand>,
-    tx_self: mpsc::Sender<DownloadCommand>,
-    semaphore: Arc<Semaphore>,
-    supervisors: HashMap<i32, CancellationToken>,
-}
-
-impl DownloadManager {
-    pub fn new(db: Pool, config: Arc<Config>, http: reqwest::Client) -> (Handle, Self) {
+    pub fn new(db: Pool, config: Arc<Config>) -> Self {
         let permits = config.max_concurrent_downloads;
-        let (tx, rx) = mpsc::channel::<DownloadCommand>(256);
-        let mgr = Self {
+        let (refresh_tx, mut refresh_rx) = mpsc::channel::<()>(64);
+        let inner = Arc::new(Inner {
             db,
             config,
-            http,
-            rx,
-            tx_self: tx.clone(),
             semaphore: Arc::new(Semaphore::new(permits)),
-            supervisors: HashMap::new(),
-        };
-        (Handle { tx }, mgr)
-    }
+            supervisors: std::sync::Mutex::new(HashMap::new()),
+            refresh_tx,
+            shutdown: CancellationToken::new(),
+            tracker: TaskTracker::new(),
+        });
 
-    pub async fn run(mut self) {
-        if let Err(err) = self.boot_recover().await {
-            tracing::error!(?err, "Download manager boot recovery failed");
-        }
-        tracing::info!("Download manager started");
-
-        while let Some(cmd) = self.rx.recv().await {
-            match cmd {
-                DownloadCommand::Start(id) => self.handle_start(id).await,
-                DownloadCommand::Pause(id) => self.handle_pause(id).await,
-                DownloadCommand::Cancel(id) => self.handle_cancel(id).await,
-                DownloadCommand::Remove(id) => self.handle_remove(id).await,
-                DownloadCommand::Refresh => self.handle_refresh().await,
-                DownloadCommand::Done(id) => self.handle_done(id).await,
+        let weak = Arc::downgrade(&inner);
+        let shutdown = inner.shutdown.clone();
+        inner.tracker.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => break,
+                    msg = refresh_rx.recv() => {
+                        if msg.is_none() {
+                            break;
+                        }
+                        let Some(inner) = weak.upgrade() else {
+                            break;
+                        };
+                        Self(inner).refresh().await;
+                    }
+                }
             }
+        });
+
+        Self(inner)
+    }
+
+    /// Cancel all in-flight supervisors and wait for them to drain.
+    /// After this returns, no new downloads will be started.
+    pub async fn shutdown(&self) {
+        self.0.shutdown.cancel();
+        self.0.tracker.close();
+        if let Err(err) = tokio::time::timeout(Duration::from_secs(5), self.0.tracker.wait()).await
+        {
+            tracing::error!(?err, "Download manager shutdown timed out");
         }
     }
 
-    async fn boot_recover(&mut self) -> crate::app::Result<()> {
-        // Anything left as `downloading` was interrupted by the previous run;
-        // demote to `queued` so handle_refresh re-fetches it normally.
+    /// Boot-time recovery: demote any rows left as `downloading` from a prior
+    /// run back to `queued`, then schedule everything queued.
+    pub async fn boot(&self) -> crate::app::Result<()> {
         let reset =
             sqlx::query!("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
-                .execute(&self.db)
+                .execute(&self.0.db)
                 .await
-                .map_err(crate::app::Error::DatabaseError)?;
+                .map_err(Error::DatabaseError)?;
+
         if reset.rows_affected() > 0 {
             tracing::info!(
                 count = reset.rows_affected(),
                 "Reset interrupted downloads to queued"
             );
         }
-        self.handle_refresh().await;
+        self.refresh().await;
+
         Ok(())
     }
 
-    async fn handle_start(&mut self, id: i32) {
-        if self.supervisors.contains_key(&id) {
-            return;
+    /// Start (or resume) a download. Blocks until the supervisor has been
+    /// spawned and the engine has the torrent loaded and the requested file
+    /// selected, or returns a non-`Started` outcome that explains why no
+    /// supervisor was started.
+    pub async fn start(&self, id: i32) -> crate::app::Result<StartOutcome> {
+        if self.0.supervisors.lock().unwrap().contains_key(&id) {
+            return Ok(StartOutcome::AlreadyRunning);
         }
-        let permit = match self.semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                // No capacity — leave queued; handle_refresh will retry as
-                // supervisors finish and emit Done.
-                return;
+
+        let row = load_min(&self.0.db, id)
+            .await
+            .ok_or_else(|| Error::NotFound(format!("Download {id} not found")))?;
+
+        if row.status == DownloadStatus::Completed {
+            return Ok(StartOutcome::AlreadyComplete);
+        }
+
+        // Claim the supervisor slot. Any concurrent start (for same download) will early return.
+        // Child of the manager-wide shutdown token so a single `shutdown.cancel()` cascades
+        // to every live supervisor.
+        let cancel = self.0.shutdown.child_token();
+        let guard = {
+            let mut sup = self.0.supervisors.lock().unwrap();
+            if sup.contains_key(&id) {
+                return Ok(StartOutcome::AlreadyRunning);
             }
+            sup.insert(id, cancel.clone());
+
+            SupervisorGuard::new(|| {
+                if let Ok(mut supervisors) = self.0.supervisors.lock()
+                    && let Some(cancel) = supervisors.remove(&id)
+                {
+                    cancel.cancel();
+                } else {
+                    tracing::warn!("The guard could not clean up the supervisor for download #{id}")
+                }
+            })
         };
-        if let Err(err) = sqlx::query!(
-            "UPDATE downloads SET status = 'downloading', error = NULL WHERE id = $1",
-            id
-        )
-        .execute(&self.db)
-        .await
-        {
-            tracing::error!(?err, id, "Failed to mark download as downloading");
-            return;
-        }
 
-        let cancel = CancellationToken::new();
-        self.supervisors.insert(id, cancel.clone());
-        let db = self.db.clone();
-        let config = self.config.clone();
-        let http = self.http.clone();
-        let tx_self = self.tx_self.clone();
-        tokio::spawn(async move {
-            supervisor(db, config, http, id, cancel).await;
-            drop(permit);
-            let _ = tx_self.send(DownloadCommand::Done(id)).await;
-        });
+        // Reserve capacity before doing any slow engine work. If we can't,
+        // leave the row as-is so a future refresh retries it.
+        let permit = match self.0.semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => return Ok(StartOutcome::NoCapacity),
+        };
+
+        let engine = TorrentEngine::get();
+
+        let cancel_clone = cancel.clone();
+        let start = async {
+            let torrent = match engine.ensure_torrent(&row.info_hash, &self.0.config).await {
+                Ok(h) => h,
+                Err(err) => {
+                    fail(&self.0.db, id, &err).await;
+                    return Err(err);
+                }
+            };
+            if let Err(err) = engine.resume(&row.info_hash).await {
+                tracing::warn!(?err, info_hash = %row.info_hash, "engine.resume failed");
+            }
+            if let Err(err) = engine
+                .select_file(&row.info_hash, row.file_idx as usize)
+                .await
+            {
+                fail(&self.0.db, id, &err).await;
+                return Err(err);
+            }
+
+            guard.commit();
+
+            let inner = self.0.clone();
+            let db = self.0.db.clone();
+            self.0.tracker.spawn(async move {
+                super::supervisor::Supervisor::new(db, id, torrent, cancel)
+                    .await
+                    .run()
+                    .await;
+                drop(permit);
+                inner.supervisors.lock().unwrap().remove(&id);
+                // A slot just freed up, kick the coordinator to refresh.
+                let _ = inner.refresh_tx.send(()).await;
+            });
+
+            Ok(StartOutcome::Started)
+        };
+
+        tokio::select! {
+            biased;
+            _ = cancel_clone.cancelled() => {
+                if let Err(err) = engine.stop(&row.info_hash).await {
+                    tracing::warn!(?err, "Error while cleaning up in-flight start after cancellation");
+                }
+
+                Ok(StartOutcome::Cancelled)
+            }
+            res = start => res
+        }
     }
 
-    async fn handle_pause(&mut self, id: i32) {
-        if let Some(cancel) = self.supervisors.remove(&id) {
+    /// Pause downloading, keep files.
+    pub async fn pause(&self, id: i32) -> crate::app::Result<()> {
+        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
+            tracing::info!(id, "Pausing torrent");
             cancel.cancel();
         }
-        if let Some(hash) = self.fetch_info_hash(id).await
+        if let Some(hash) = fetch_info_hash(&self.0.db, id).await
             && let Err(err) = TorrentEngine::get().pause(&hash).await
         {
-            tracing::debug!(?err, id, "Pause: engine.pause returned error");
+            tracing::debug!(?err, id, "Counld not pause");
         }
-        if let Err(err) = sqlx::query!("UPDATE downloads SET status = 'paused' WHERE id = $1", id)
-            .execute(&self.db)
+        sqlx::query!("UPDATE downloads SET status = 'paused' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
+            .execute(&self.0.db)
             .await
-        {
-            tracing::error!(?err, id, "Failed to mark download as paused");
-        }
+            .map_err(Error::DatabaseError)?;
+        Ok(())
     }
 
-    async fn handle_cancel(&mut self, id: i32) {
-        if let Some(cancel) = self.supervisors.remove(&id) {
+    /// Stop downloading, keep files, releasing the resources
+    pub async fn cancel(&self, id: i32) -> crate::app::Result<()> {
+        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
+            tracing::info!(id, "Cancelling torrent");
             cancel.cancel();
         }
-        if let Some(hash) = self.fetch_info_hash(id).await
-            && let Err(err) = TorrentEngine::get().pause(&hash).await
+        if let Some(hash) = fetch_info_hash(&self.0.db, id).await
+            && let Err(err) = TorrentEngine::get().stop(&hash).await
         {
-            tracing::debug!(?err, id, "Cancel: engine.pause returned error");
+            tracing::debug!(?err, id, "Could not cancel");
         }
-        if let Err(err) = sqlx::query!(
-            "UPDATE downloads SET status = 'cancelled' WHERE id = $1",
+        sqlx::query!(
+            "UPDATE downloads SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')",
             id
         )
-        .execute(&self.db)
+        .execute(&self.0.db)
         .await
-        {
-            tracing::error!(?err, id, "Failed to mark download as cancelled");
-        }
+        .map_err(Error::DatabaseError)?;
+        Ok(())
     }
 
-    async fn handle_remove(&mut self, id: i32) {
-        if let Some(cancel) = self.supervisors.remove(&id) {
+    /// Stop downloading, wipe files + row. Always destructive.
+    pub async fn remove(&self, id: i32) -> crate::app::Result<()> {
+        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
+            tracing::info!(id, "Cancelling torrent (remove)");
             cancel.cancel();
         }
-        let hash = self.fetch_info_hash(id).await;
-        if let Some(h) = hash {
-            TorrentEngine::get().stop_and_delete(&h).await;
+        if let Some(hash) = fetch_info_hash(&self.0.db, id).await {
+            TorrentEngine::get().stop_and_delete(&hash).await;
         }
-        if let Err(err) = sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
-            .execute(&self.db)
+        sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
+            .execute(&self.0.db)
             .await
-        {
-            tracing::error!(?err, id, "Failed to delete download row");
-        }
+            .map_err(Error::DatabaseError)?;
+        Ok(())
     }
 
-    async fn handle_refresh(&mut self) {
-        let queued = match sqlx::query_scalar!(
+    /// Scan queued rows and try to start as many as fit under the
+    /// concurrency cap. Spawns each start so slow engine I/O doesn't
+    /// serialize across queued items.
+    pub async fn refresh(&self) {
+        let queued: Vec<i32> = match sqlx::query_scalar!(
             "SELECT id FROM downloads WHERE status = 'queued' ORDER BY created_at ASC"
         )
-        .fetch_all(&self.db)
+        .fetch_all(&self.0.db)
         .await
         {
-            Ok(res) => res,
+            Ok(r) => r,
             Err(err) => {
                 tracing::error!(?err, "Failed to query queued downloads");
                 return;
             }
         };
-        for id in queued {
-            if self.semaphore.available_permits() == 0 {
-                break;
-            }
-            self.handle_start(id).await;
-        }
-    }
-
-    async fn handle_done(&mut self, id: i32) {
-        self.supervisors.remove(&id);
-        self.handle_refresh().await;
-    }
-
-    async fn fetch_info_hash(&self, id: i32) -> Option<String> {
-        sqlx::query_scalar!("SELECT info_hash FROM downloads WHERE id = $1", id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten()
-    }
-}
-
-// ── Supervisor ───────────────────────────────────────────────────────────
-
-async fn supervisor(
-    db: Pool,
-    config: Arc<Config>,
-    http: reqwest::Client,
-    id: i32,
-    cancel: CancellationToken,
-) {
-    let row = match load_min(&db, id).await {
-        Some(res) => res,
-        None => {
-            tracing::warn!(id, "Supervisor: row not found, exiting");
-            return;
-        }
-    };
-    let info_hash = row.info_hash.clone();
-    let file_idx = row.file_idx as usize;
-    tracing::info!(id, info_hash = %info_hash, file_idx, "Supervisor starting");
-
-    let engine = TorrentEngine::get();
-    let handle = match engine.ensure_torrent(&info_hash, &config).await {
-        Ok(handle) => handle,
-        Err(err) => {
-            fail(&db, id, &err).await;
-            return;
-        }
-    };
-    if let Err(err) = engine.resume(&info_hash).await {
-        tracing::warn!(?err, info_hash, "Supervisor: failed to resume torrent");
-    }
-    if let Err(err) = engine.select_file(&info_hash, file_idx).await {
-        fail(&db, id, &err).await;
-        return;
-    }
-
-    let stats = handle.managed.stats();
-    let name = handle.managed.name();
-    if let Err(err) = sqlx::query!(
-        "UPDATE downloads SET total_bytes = $1, name = $2 WHERE id = $3",
-        stats.total_bytes as i64,
-        name.clone(),
-        id
-    )
-    .execute(&db)
-    .await
-    {
-        tracing::warn!(?err, id, "Supervisor: failed to persist total_bytes/name");
-    }
-
-    if !row.has_meta
-        && config.auto_resolve_stream_metadata
-        && let Some(name) = name.clone()
-    {
-        let db2 = db.clone();
-        let http2 = http.clone();
-        let config2 = config.clone();
-        tokio::spawn(async move {
-            resolve_meta_async(db2, config2, http2, id, name).await;
-        });
-    }
-
-    loop {
-        let (downloaded, total) = handle.progress();
-        if let Err(err) = sqlx::query!(
-            "UPDATE downloads SET downloaded_bytes = $1, total_bytes = $2 WHERE id = $3",
-            downloaded as i64,
-            total as i64,
-            id
-        )
-        .execute(&db)
-        .await
-        {
-            tracing::warn!(?err, id, "Supervisor: failed to write progress");
-        }
-
-        if handle.managed.stats().finished {
-            if let Err(err) = sqlx::query!(
-                "UPDATE downloads SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = $1",
-                id
-            )
-            .execute(&db)
-            .await
-            {
-                tracing::error!(?err, id, "Supervisor: failed to mark completed");
-            }
-            tracing::info!(id, "Download completed");
-            return;
-        }
-
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                tracing::debug!(id, "Supervisor cancelled");
-                return;
-            }
-            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+        let take = self.0.semaphore.available_permits();
+        for id in queued.into_iter().take(take) {
+            let h = self.clone();
+            self.0.tracker.spawn(async move {
+                if let Err(err) = h.start(id).await {
+                    tracing::warn!(?err, id, "Refresh: start failed");
+                }
+            });
         }
     }
 }
 
-async fn fail(db: &Pool, id: i32, err: &crate::app::Error) {
-    tracing::error!(id, error = %err, "download failed");
+// ── Private helpers ──────────────────────────────────────────────────────
+
+async fn fail(db: &Pool, id: i32, err: &Error) {
+    tracing::error!(id, error = %err, "Download failed");
     if let Err(err) = sqlx::query!(
-        "UPDATE downloads SET status = 'failed', error = $1 WHERE id = $2",
+        "UPDATE downloads SET status = 'failed', error = $1 WHERE id = $2 AND status NOT IN ('cancelled', 'paused')",
         err.to_string(),
         id
     )
@@ -437,10 +400,18 @@ async fn fail(db: &Pool, id: i32, err: &crate::app::Error) {
     }
 }
 
+async fn fetch_info_hash(db: &Pool, id: i32) -> Option<String> {
+    sqlx::query_scalar!("SELECT info_hash FROM downloads WHERE id = $1", id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+}
+
 struct MinRow {
     info_hash: String,
     file_idx: i32,
-    has_meta: bool,
+    status: DownloadStatus,
 }
 
 async fn load_min(db: &Pool, id: i32) -> Option<MinRow> {
@@ -449,7 +420,7 @@ async fn load_min(db: &Pool, id: i32) -> Option<MinRow> {
         SELECT
             d.info_hash,
             d.file_idx,
-            EXISTS (SELECT 1 FROM download_meta dm WHERE dm.download_id = d.id) AS "has_meta!"
+            d.status as "status: DownloadStatus"
         FROM downloads d
         WHERE d.id = $1
         "#,
@@ -462,7 +433,7 @@ async fn load_min(db: &Pool, id: i32) -> Option<MinRow> {
     Some(MinRow {
         info_hash: res.info_hash,
         file_idx: res.file_idx,
-        has_meta: res.has_meta,
+        status: res.status,
     })
 }
 
@@ -498,7 +469,7 @@ pub async fn find_all_downloads(db: &Pool) -> crate::app::Result<Vec<Download>> 
     )
     .fetch_all(db)
     .await
-    .map_err(crate::app::Error::DatabaseError)?;
+    .map_err(Error::DatabaseError)?;
     Ok(rows.into_iter().map(Download::from).collect())
 }
 
@@ -533,7 +504,7 @@ pub async fn find_download_by_id(id: i32, db: &Pool) -> crate::app::Result<Optio
     )
     .fetch_optional(db)
     .await
-    .map_err(crate::app::Error::DatabaseError)?;
+    .map_err(Error::DatabaseError)?;
     Ok(row.map(Download::from))
 }
 
@@ -569,7 +540,7 @@ pub async fn upsert_download(
     )
     .fetch_one(&mut **tx)
     .await
-    .map_err(crate::app::Error::DatabaseError)
+    .map_err(Error::DatabaseError)
 }
 
 /// Upsert media_items + download_meta linking media context to a download.
@@ -595,7 +566,7 @@ pub async fn upsert_meta(
     )
     .fetch_one(&mut **tx)
     .await
-    .map_err(crate::app::Error::DatabaseError)?;
+    .map_err(Error::DatabaseError)?;
 
     sqlx::query!(
         r#"
@@ -615,7 +586,7 @@ pub async fn upsert_meta(
     )
     .execute(&mut **tx)
     .await
-    .map_err(crate::app::Error::DatabaseError)?;
+    .map_err(Error::DatabaseError)?;
     Ok(())
 }
 
@@ -629,22 +600,20 @@ pub async fn reset_for_restart(
         r#"
         UPDATE downloads
         SET status = 'queued',
-            error = NULL,
-            completed_at = NULL
-        WHERE id = $1 AND status IN ('paused','cancelled','completed','failed')
+            error = NULL
+        WHERE id = $1 AND status IN ('paused', 'cancelled', 'failed')
         "#,
         id
     )
     .execute(&mut **tx)
     .await
-    .map_err(crate::app::Error::DatabaseError)?;
+    .map_err(Error::DatabaseError)?;
     Ok(())
 }
 
 /// Upsert a download row (and optional media context), reset it from any
-/// terminal state, and tell the manager to start it. Returns the download id.
-/// Used by streams.start (with media context) and the raw stream handler
-/// (without).
+/// terminal state, and start it. Blocks until the supervisor is spawned
+/// (or returns a non-`Started` outcome). Returns the download id.
 pub async fn ensure_download(
     db: &Pool,
     handle: &Handle,
@@ -652,7 +621,7 @@ pub async fn ensure_download(
     file_idx: i32,
     media: Option<&MediaContext>,
 ) -> crate::app::Result<i32> {
-    let mut tx = db.begin().await.map_err(crate::app::Error::DatabaseError)?;
+    let mut tx = db.begin().await.map_err(Error::DatabaseError)?;
 
     let id = upsert_download(&mut tx, info_hash, file_idx).await?;
 
@@ -662,157 +631,9 @@ pub async fn ensure_download(
 
     reset_for_restart(&mut tx, id).await?;
 
-    tx.commit()
-        .await
-        .map_err(crate::app::Error::DatabaseError)?;
+    tx.commit().await.map_err(Error::DatabaseError)?;
 
-    handle.send(DownloadCommand::Start(id)).await;
+    handle.start(id).await?;
 
     Ok(id)
-}
-
-// ── Async TMDB metadata resolution ───────────────────────────────────────
-
-async fn resolve_meta_async(
-    db: Pool,
-    config: Arc<Config>,
-    http: reqwest::Client,
-    id: i32,
-    name: String,
-) {
-    let parsed = parse_release_name(&name);
-    let Some(query) = parsed.title.clone() else {
-        return;
-    };
-    let client = TmdbClient::new(&config, http);
-    let results = match client.search(&query).await {
-        Ok(res) => res,
-        Err(err) => {
-            tracing::debug!(?err, name, "TMDB search failed");
-            return;
-        }
-    };
-    let Some(best) = results.into_iter().next() else {
-        tracing::debug!(name, "no TMDB match found");
-        return;
-    };
-    let bt = best.title.to_lowercase();
-    let qt = query.to_lowercase();
-
-    if !bt.contains(&qt) && !qt.contains(&bt) {
-        tracing::debug!(
-            name,
-            candidate = %best.title,
-            "TMDB match below confidence threshold"
-        );
-        return;
-    }
-
-    let media_ctx = MediaContext {
-        media_type: best.media_type,
-        tmdb_id: best.id,
-        title: best.title,
-        poster_path: best.poster_path,
-        season: parsed.season.unwrap_or(0),
-        episode: parsed.episode.unwrap_or(0),
-        resolution: parsed.resolution,
-    };
-
-    let mut tx = match db.begin().await {
-        Ok(t) => t,
-        Err(err) => {
-            tracing::warn!(?err, "Async meta upsert: begin tx failed");
-            return;
-        }
-    };
-    if let Err(err) = upsert_meta(&mut tx, id, &media_ctx).await {
-        tracing::warn!(?err, id, "Async meta upsert failed");
-        return;
-    }
-    if let Err(err) = tx.commit().await {
-        tracing::warn!(?err, id, "Async meta upsert commit failed");
-        return;
-    }
-
-    tracing::info!(
-        id,
-        name,
-        tmdb_id = media_ctx.tmdb_id,
-        "Resolved metadata via TMDB"
-    );
-}
-
-struct ParsedName {
-    title: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-    resolution: Option<String>,
-}
-
-/// Best-effort parse of a release-style torrent name. Returns whatever it can
-/// extract; missing fields stay None.
-fn parse_release_name(raw: &str) -> ParsedName {
-    let normalized = raw.replace(['.', '_'], " ");
-    let lower = normalized.to_lowercase();
-
-    let resolution = ["2160p", "4k", "1080p", "720p", "480p"]
-        .iter()
-        .find(|r| lower.contains(*r))
-        .map(|r| match *r {
-            "2160p" | "4k" => "4K".to_string(),
-            other => other.to_string(),
-        });
-
-    // SxxExx pattern.
-    let (mut season, mut episode) = (None, None);
-    let bytes = lower.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b's' {
-            let mut j = i + 1;
-            let mut s = String::new();
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                s.push(bytes[j] as char);
-                j += 1;
-            }
-            if !s.is_empty() && j < bytes.len() && bytes[j] == b'e' {
-                let mut k = j + 1;
-                let mut e = String::new();
-                while k < bytes.len() && bytes[k].is_ascii_digit() {
-                    e.push(bytes[k] as char);
-                    k += 1;
-                }
-                if !e.is_empty() {
-                    season = s.parse().ok();
-                    episode = e.parse().ok();
-                    break;
-                }
-            }
-        }
-        i += 1;
-    }
-
-    // Title: everything before the first "stop token" (resolution or year).
-    let stop_candidates = ["2160p", "4k", "1080p", "720p", "480p"];
-    let mut stop_idx = stop_candidates.iter().filter_map(|t| lower.find(t)).min();
-    for year in 1900..=2099u32 {
-        let y = year.to_string();
-        if let Some(idx) = lower.find(&y) {
-            stop_idx = Some(stop_idx.map_or(idx, |s| s.min(idx)));
-        }
-    }
-    let stop = stop_idx.unwrap_or(normalized.len());
-    let title_raw = normalized[..stop].trim().to_string();
-    let title = if title_raw.is_empty() {
-        None
-    } else {
-        Some(title_raw)
-    };
-
-    ParsedName {
-        title,
-        season,
-        episode,
-        resolution,
-    }
 }

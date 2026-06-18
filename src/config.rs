@@ -32,12 +32,6 @@ pub struct Config {
     #[serde(default = "default_torrent_validation_timeout")]
     pub torrent_validation_timeout: Duration,
 
-    /// When a download starts via /stream (no media context provided),
-    /// attempt to parse the torrent name and look up media metadata on TMDB
-    /// so the row gets a populated `download_meta`.
-    #[serde(default = "default_auto_resolve_stream_metadata")]
-    pub auto_resolve_stream_metadata: bool,
-
     #[serde(default = "default_ffmpeg_max_startup_duration")]
     pub ffmpeg_max_startup_duration: Duration,
     #[serde(default = "default_ffmpeg_startup_poll_interval")]
@@ -151,10 +145,6 @@ fn default_dht_enabled() -> bool {
 
 fn default_torrent_validation_timeout() -> Duration {
     Duration::from_secs(30)
-}
-
-fn default_auto_resolve_stream_metadata() -> bool {
-    true
 }
 
 fn default_ffmpeg_max_startup_duration() -> Duration {

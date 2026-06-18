@@ -80,7 +80,7 @@ pub trait StreamsApi {
     async fn start(
         &self,
         info_hash: String,
-        file_idx: i64,
+        file_idx: i32,
         media: Option<StreamMediaContext>,
     ) -> Result<StartStream, Error>;
 
@@ -127,7 +127,7 @@ impl StreamsApi for AppContext {
     async fn start(
         &self,
         info_hash: String,
-        file_idx: i64,
+        file_idx: i32,
         media: Option<StreamMediaContext>,
     ) -> Result<StartStream, Error> {
         let media = media.map(|m| crate::downloads::MediaContext {
@@ -143,7 +143,7 @@ impl StreamsApi for AppContext {
             &self.db,
             &self.downloads,
             &info_hash,
-            file_idx as i32,
+            file_idx,
             media.as_ref(),
         )
         .await?;

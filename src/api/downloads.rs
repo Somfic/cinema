@@ -1,6 +1,6 @@
 use crate::app::{AppContext, Error};
 pub use crate::downloads::Download;
-use crate::downloads::{DownloadCommand, MediaContext};
+use crate::downloads::MediaContext;
 use crate::tmdb::TmdbClient;
 use crate::{streams as streams_mod, tmdb};
 
@@ -122,27 +122,24 @@ impl DownloadsApi for AppContext {
     }
 
     async fn pause(&self, id: i32) -> Result<(), Error> {
-        self.downloads.send(DownloadCommand::Pause(id)).await;
-        Ok(())
+        self.downloads.pause(id).await
     }
 
     async fn resume(&self, id: i32) -> Result<(), Error> {
-        // Reset terminal/idle state so the manager will pick it up as queued.
+        // Reset terminal/idle state so start treats it as a fresh launch.
         let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
         crate::downloads::reset_for_restart(&mut tx, id).await?;
         tx.commit().await.map_err(Error::DatabaseError)?;
-        self.downloads.send(DownloadCommand::Start(id)).await;
+        self.downloads.start(id).await?;
         Ok(())
     }
 
     async fn cancel(&self, id: i32) -> Result<(), Error> {
-        self.downloads.send(DownloadCommand::Cancel(id)).await;
-        Ok(())
+        self.downloads.cancel(id).await
     }
 
     async fn remove(&self, id: i32) -> Result<(), Error> {
-        self.downloads.send(DownloadCommand::Remove(id)).await;
-        Ok(())
+        self.downloads.remove(id).await
     }
 
     async fn estimate(

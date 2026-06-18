@@ -8,6 +8,8 @@ use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 mod engine;
 mod manager;
+mod supervisor;
+mod supervisor_guard;
 
 pub use engine::TorrentEngine;
 pub use manager::*;

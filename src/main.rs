@@ -91,7 +91,7 @@ async fn run() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .event_format(logging::CinemaFormatter)
+        // .event_format(logging::CinemaFormatter)
         .init();
 
     let cli = Cli::parse();
@@ -122,8 +122,7 @@ async fn run() -> Result<()> {
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let (downloads_handle, manager) =
-        downloads::DownloadManager::new(pool.clone(), config.clone(), http.clone());
+    let downloads_handle = downloads::Handle::new(pool.clone(), config.clone());
 
     let ctx = AppContext {
         db: pool,
@@ -138,8 +137,9 @@ async fn run() -> Result<()> {
     // Initialize torrent engine
     downloads::TorrentEngine::init(&ctx).await?;
 
-    // Start download manager
-    tokio::spawn(manager.run());
+    if let Err(err) = ctx.downloads.boot().await {
+        tracing::error!(?err, "Download boot recovery failed");
+    }
 
     // HLS session cleanup reaper
     tokio::spawn(async {
@@ -237,6 +237,7 @@ async fn run() -> Result<()> {
 
     // Shutdown
     hls::stop_all().await;
+    ctx.downloads.shutdown().await;
     downloads::TorrentEngine::get().shutdown().await;
 
     Ok(())

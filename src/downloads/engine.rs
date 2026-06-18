@@ -705,14 +705,18 @@ impl TorrentEngine {
     }
 
     /// Remove a torrent from the session. Files are kept on disk.
-    pub async fn stop(&self, info_hash: &str) {
+    pub async fn stop(&self, info_hash: &str) -> crate::Result<()> {
         self.drop_stream_handles(info_hash).await;
         if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
             let name = self.session.get(id).and_then(|h| h.name());
-            let _ = self.session.delete(id, false).await;
+            self.session.delete(id, false).await.map_err(|err| {
+                crate::app::Error::Generic(format!("Could not stop the torrent: {err}"))
+            })?;
             self.span
                 .in_scope(|| tracing::info!(info_hash, name, "Torrent stopped (files kept)"));
         }
+
+        Ok(())
     }
 
     async fn drop_stream_handles(&self, info_hash: &str) {

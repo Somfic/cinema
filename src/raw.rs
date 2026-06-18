@@ -203,8 +203,6 @@ async fn stream_file(
     engine.ensure_torrent(&info_hash, &ctx.config).await?;
     engine.select_file(&info_hash, file_idx).await?;
     // Record the active stream in the DB so the manager picks it up too.
-    // This also kicks off the per-download supervisor (progress writes,
-    // async TMDB metadata resolution, etc.).
     crate::downloads::ensure_download(&ctx.db, &ctx.downloads, &info_hash, file_idx as i32, None)
         .await?;
     let reader = engine.stream(&info_hash, file_idx)?;
