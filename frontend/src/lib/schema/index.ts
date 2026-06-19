@@ -87,7 +87,7 @@ export type StreamStats = { progress_bytes: number, total_bytes: number, downloa
  */
 export type StreamStatsUpdate = { info_hash: string, progress_bytes: number, total_bytes: number, download_speed_mbps: number, peers: number, finished: boolean, };
 
-export type AudioTracks = { tracks: AudioTrack[], subtitles: EmbeddedSubtitleTrack[], duration: number | null, };
+export type AudioTracks = { tracks: AudioTrack[], subtitles: EmbeddedSubtitleTrack[], duration: number | null, chapters: Chapter[], };
 
 /**
  * Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
@@ -164,6 +164,16 @@ index: number,
  * subtitle-only index (0, 1, 2...)
  */
 stream_index: number, language: string | null, name: string, codec: string, };
+
+export type Chapter = { 
+/**
+ * chapter start time in seconds
+ */
+start: number, 
+/**
+ * chapter end time in seconds
+ */
+end: number, title: string, };
 
 /** Display metadata for a cached trailer. */
 export type TrailerMeta = { aspect: number, };
@@ -423,6 +433,16 @@ export class StreamsApi {
 	 */
 	start(info_hash: string, file_idx: number): Promise<StartStream> {
 		return this.rpc.call("streams/start", { info_hash, file_idx });
+	}
+
+	/**
+	 * Reveals the on-disk file for a torrent stream in the server's file
+	 * manager. Only meaningful when the server runs on the user's own machine
+	 * (the self-hosted local case).
+	 * @throws {RpcError<Error>}
+	 */
+	reveal(info_hash: string, file_idx: number): Promise<void> {
+		return this.rpc.call("streams/reveal", { info_hash, file_idx });
 	}
 
 	/**

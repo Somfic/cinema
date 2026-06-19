@@ -54,6 +54,15 @@ pub struct EmbeddedSubtitleTrack {
     pub codec: String,
 }
 
+#[draad::ty]
+pub struct Chapter {
+    /// chapter start time in seconds
+    pub start: f64,
+    /// chapter end time in seconds
+    pub end: f64,
+    pub title: String,
+}
+
 /// Text-based subtitle codecs that can be extracted as SRT
 const TEXT_SUB_CODECS: &[&str] = &["srt", "subrip", "ass", "ssa", "webvtt", "mov_text"];
 
@@ -500,6 +509,56 @@ impl TorrentEngine {
 
         let probe: Probe = serde_json::from_slice(&stdout).ok()?;
         probe.format.duration.and_then(|d| d.parse::<f64>().ok())
+    }
+
+    /// Get embedded chapters of a media file. `input` is an ffprobe input
+    /// (on-disk path or local HTTP stream URL). Chapters without a title get a
+    /// generated "Chapter N" name; an unchaptered file returns an empty vec.
+    pub async fn chapters(input: &str) -> Vec<Chapter> {
+        let output = tokio::process::Command::new("ffprobe")
+            .args(["-v", "quiet", "-print_format", "json", "-show_chapters"])
+            .arg(input)
+            .output();
+        let output = match Self::ffprobe_output(output).await {
+            Some(o) => o,
+            None => return vec![],
+        };
+
+        #[derive(serde::Deserialize)]
+        struct Probe {
+            chapters: Vec<ProbeChapter>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ProbeChapter {
+            start_time: Option<String>,
+            end_time: Option<String>,
+            tags: Option<ProbeTags>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ProbeTags {
+            title: Option<String>,
+        }
+
+        let probe: Probe = match serde_json::from_slice(&output) {
+            Ok(p) => p,
+            Err(_) => return vec![],
+        };
+
+        probe
+            .chapters
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                let start = c.start_time.and_then(|s| s.parse::<f64>().ok())?;
+                let end = c.end_time.and_then(|s| s.parse::<f64>().ok())?;
+                let title = c
+                    .tags
+                    .and_then(|t| t.title)
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| format!("Chapter {}", i + 1));
+                Some(Chapter { start, end, title })
+            })
+            .collect()
     }
 
     /// Await an ffprobe `.output()` future with a timeout, returning its stdout

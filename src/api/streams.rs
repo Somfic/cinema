@@ -44,6 +44,7 @@ pub struct AudioTracks {
     pub tracks: Vec<crate::torrent::AudioTrack>,
     pub subtitles: Vec<crate::torrent::EmbeddedSubtitleTrack>,
     pub duration: Option<f64>,
+    pub chapters: Vec<crate::torrent::Chapter>,
 }
 
 /// Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
@@ -68,6 +69,12 @@ pub trait StreamsApi {
     /// Starts a torrent (idempotent) and returns the playback URL.
     #[post]
     async fn start(&self, info_hash: String, file_idx: i64) -> Result<StartStream, Error>;
+
+    /// Reveals the on-disk file for a torrent stream in the server's file
+    /// manager. Only meaningful when the server runs on the user's own machine
+    /// (the self-hosted local case).
+    #[post]
+    async fn reveal(&self, info_hash: String, file_idx: i64) -> Result<(), Error>;
 
     /// Starts an HLS remux/transcode session for a file and returns its
     /// playlist URL (feed to hls.js). Callers stop the previous session first.
@@ -103,6 +110,58 @@ pub trait StreamsApi {
     ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error>;
 }
 
+/// Reveal a file in the host's file manager — selecting it where the platform
+/// supports it, otherwise opening its containing folder. Best-effort and only
+/// meaningful when the server shares a desktop with the user.
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), Error> {
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(path).spawn()?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Prefer FileManager1's ShowItems (selects the file in its folder),
+        // falling back to opening the parent directory via xdg-open. The URI
+        // must be properly percent-encoded — torrent paths contain spaces and
+        // brackets, and an unencoded file:// URI makes Nautilus report
+        // "'file' locations are not supported".
+        let selected = url::Url::from_file_path(path)
+            .ok()
+            .map(|uri| {
+                Command::new("dbus-send")
+                    .args([
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                    ])
+                    .arg(format!("array:string:{uri}"))
+                    .arg("string:")
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !selected {
+            let dir = path.parent().unwrap_or(path);
+            Command::new("xdg-open").arg(dir).spawn()?;
+        }
+    }
+
+    Ok(())
+}
+
 #[draad::api]
 impl StreamsApi for AppContext {
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error> {
@@ -132,6 +191,12 @@ impl StreamsApi for AppContext {
             .await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
+    }
+
+    async fn reveal(&self, info_hash: String, file_idx: i64) -> Result<(), Error> {
+        let engine = TorrentEngine::get();
+        let path = engine.file_path(&info_hash, file_idx as usize)?;
+        reveal_in_file_manager(&path)
     }
 
     async fn remux(
@@ -192,10 +257,11 @@ impl StreamsApi for AppContext {
         // serves through the blocking, range-capable reader the transcode uses,
         // so ffprobe gets coherent bytes (and can seek to a trailing moov atom).
         let url = self.stream_url(&info_hash, file_idx);
-        let (tracks, subtitles, duration) = tokio::join!(
+        let (tracks, subtitles, duration, chapters) = tokio::join!(
             TorrentEngine::audio_tracks(&url),
             TorrentEngine::subtitle_tracks(&url),
             TorrentEngine::probe_duration(&url),
+            TorrentEngine::chapters(&url),
         );
         let allowed: Vec<&str> = self
             .config
@@ -216,6 +282,7 @@ impl StreamsApi for AppContext {
             tracks,
             subtitles,
             duration,
+            chapters,
         })
     }
 

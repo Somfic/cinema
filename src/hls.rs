@@ -51,6 +51,10 @@ fn new_session_id() -> String {
 /// Browser-safe video codecs that can be copied directly into HLS.
 const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
 
+/// Encoder keyframe interval (in frames) for transcoded video. ~2s at 24-30fps,
+/// matching the 2s HLS segment length so the muxer always has a cut point.
+const GOP_FRAMES: u32 = 48;
+
 /// Probe the video codec of a file using ffprobe.
 pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
     let output = tokio::process::Command::new("ffprobe")
@@ -75,6 +79,129 @@ pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
         .trim()
         .to_lowercase();
     if codec.is_empty() { None } else { Some(codec) }
+}
+
+/// Whether the `h264_nvenc` hardware encoder is usable (compiled in AND backed
+/// by a working GPU). Probed once via a trivial test encode and cached, since a
+/// machine whose ffmpeg lists nvenc may still lack an NVIDIA device.
+static NVENC_AVAILABLE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+
+async fn nvenc_available() -> bool {
+    *NVENC_AVAILABLE
+        .get_or_init(|| async {
+            let status = tokio::process::Command::new("ffmpeg")
+                .args([
+                    "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            let ok = matches!(status, Ok(s) if s.success());
+            if ok {
+                tracing::info!("h264_nvenc hardware encoder available");
+            } else {
+                tracing::info!("h264_nvenc unavailable; falling back to software libx264");
+            }
+            ok
+        })
+        .await
+}
+
+/// The video half of an ffmpeg invocation, split by where each arg must go.
+struct VideoPipeline {
+    /// Decode-side args that must precede `-i` (e.g. `-hwaccel`).
+    pre_input: Vec<String>,
+    /// Output-side filter args (e.g. `-vf scale_cuda=...`).
+    filter: Vec<String>,
+    /// Encoder selection + tuning (`-c:v ...`).
+    encode: Vec<String>,
+}
+
+/// Decide how to handle the video stream. `copy_video` streams it through
+/// untouched; otherwise we prefer a fully GPU-resident NVENC pipeline (decode →
+/// scale_cuda → encode, no CPU frame copy) and fall back to software libx264.
+///
+/// The NVENC path matters for load: with `-hwaccel auto` ffmpeg decodes on the
+/// GPU but downloads every frame to do the 10-bit→8-bit `-pix_fmt` conversion on
+/// the CPU (~4 cores for 4K). Keeping frames on the GPU via `scale_cuda` drops
+/// that to a fraction.
+async fn video_pipeline(config: &crate::Config, copy_video: bool) -> VideoPipeline {
+    if copy_video {
+        return VideoPipeline {
+            pre_input: Vec::new(),
+            filter: Vec::new(),
+            encode: vec!["-c:v".into(), "copy".into()],
+        };
+    }
+
+    let want_nvenc = matches!(config.ffmpeg_hwaccel.as_str(), "auto" | "cuda" | "nvenc");
+    if want_nvenc && nvenc_available().await {
+        VideoPipeline {
+            // Decode on the GPU and keep frames in VRAM.
+            pre_input: vec![
+                "-hwaccel".into(),
+                "cuda".into(),
+                "-hwaccel_output_format".into(),
+                "cuda".into(),
+            ],
+            // Convert 10-bit (p010) → 8-bit (nv12) on the GPU; h264_nvenc is
+            // 8-bit only. Doing it here avoids the CPU `-pix_fmt` round-trip.
+            filter: vec!["-vf".into(), "scale_cuda=format=nv12".into()],
+            encode: vec![
+                "-c:v".into(),
+                "h264_nvenc".into(),
+                "-preset".into(),
+                "p4".into(),
+                "-tune".into(),
+                "ll".into(), // low-latency: prioritise fast segment production
+                "-rc".into(),
+                "vbr".into(),
+                "-cq".into(),
+                config.ffmpeg_video_crf.to_string(),
+                "-b:v".into(),
+                "0".into(),
+                // Fixed keyframe interval (~2s at 24-30fps). Without it, nvenc
+                // with `-tune ll` emits only the opening keyframe and *ignores*
+                // `-force_key_frames`, so the HLS muxer finds no split points,
+                // buffers everything into segment 0, and only flushes at EOF —
+                // read as a startup timeout. A periodic IDR lets segments cut.
+                "-g".into(),
+                GOP_FRAMES.to_string(),
+            ],
+        }
+    } else {
+        VideoPipeline {
+            pre_input: if config.ffmpeg_hwaccel != "none" {
+                vec!["-hwaccel".into(), config.ffmpeg_hwaccel.clone()]
+            } else {
+                Vec::new()
+            },
+            filter: Vec::new(),
+            encode: vec![
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                config.ffmpeg_video_preset.clone(),
+                "-tune".into(),
+                "zerolatency".into(),
+                "-crf".into(),
+                config.ffmpeg_video_crf.to_string(),
+                // Match the segment cadence so the first segment closes quickly
+                // rather than at libx264's default ~250-frame keyint.
+                "-g".into(),
+                GOP_FRAMES.to_string(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                "-bf".into(),
+                "0".into(),
+                "-b_strategy".into(),
+                "0".into(),
+            ],
+        }
+    }
 }
 
 pub struct HlsSessionStartInput {
@@ -116,10 +243,27 @@ async fn start_transcoding(
     let playlist_path = dir.join("playlist.m3u8");
     let segment_pattern = dir.join("seg%05d.ts");
 
-    let mut pre_args: Vec<String> = Vec::new();
-    if config.ffmpeg_hwaccel != "none" {
-        pre_args.extend_from_slice(&["-hwaccel".into(), config.ffmpeg_hwaccel.clone()]);
+    // Probe the video codec to decide whether to copy or transcode. Even in
+    // `only_audio` mode we must check: copying a browser-unplayable codec (e.g.
+    // HEVC) into the HLS stream makes the browser's MSE reject the SourceBuffer
+    // (hls.js BUFFER_ADD_CODEC_ERROR), so we transcode the video regardless of
+    // the only_audio preference when the source codec isn't browser-safe.
+    let engine = crate::torrent::TorrentEngine::get();
+    let file_path = engine.file_path(&session_input.info_hash, session_input.file_idx)?;
+    let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
+    let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
+
+    if !copy_video && session_input.only_audio {
+        tracing::info!(
+            "audio-only transcode requested but video codec '{video_codec}' is not \
+             browser-safe; transcoding video too session={session_id}"
+        );
     }
+
+    let video = video_pipeline(config, copy_video).await;
+
+    // Decode-side args precede `-i`: the video hwaccel, then input seeking.
+    let mut pre_args = video.pre_input.clone();
     if session_input.start_time > 0.0 {
         pre_args.extend_from_slice(&[
             "-ss".into(),
@@ -133,37 +277,6 @@ async fn start_transcoding(
         session_input.info_hash, session_input.file_idx
     );
 
-    // Probe video codec to decide whether to copy or transcode
-    let video_args: Vec<String> = if session_input.only_audio {
-        vec!["-c:v".into(), "copy".into()]
-    } else {
-        let engine = crate::torrent::TorrentEngine::get();
-        let file_path = engine.file_path(&session_input.info_hash, session_input.file_idx)?;
-        let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
-        let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
-
-        if copy_video {
-            vec!["-c:v".into(), "copy".into()]
-        } else {
-            vec![
-                "-c:v".into(),
-                "libx264".into(),
-                "-preset".into(),
-                config.ffmpeg_video_preset.clone(),
-                "-tune".into(),
-                "zerolatency".into(),
-                "-crf".into(),
-                config.ffmpeg_video_crf.to_string(),
-                "-pix_fmt".into(),
-                "yuv420p".into(),
-                "-bf".into(),
-                "0".into(),
-                "-b_strategy".into(),
-                "0".into(),
-            ]
-        }
-    };
-
     // Feed ffmpeg from stdin using the torrent stream, which blocks on
     // missing pieces rather than hitting premature EOF on a partial file.
     let mut child = tokio::process::Command::new("ffmpeg")
@@ -176,7 +289,8 @@ async fn start_transcoding(
             "-map",
             &format!("0:a:{}", session_input.audio_index),
         ])
-        .args(&video_args)
+        .args(&video.filter)
+        .args(&video.encode)
         .args([
             "-c:a",
             "aac",
@@ -188,8 +302,11 @@ async fn start_transcoding(
             "aresample=async=1:first_pts=0",
             "-f",
             "hls",
+            // Short segments so the first one needs far less input data — critical
+            // for a cold torrent (have 0) where ffmpeg blocks on pipe:0 waiting for
+            // the head of the file to download before it can emit segment 0.
             "-hls_time",
-            "4",
+            "2",
             "-hls_list_size",
             "0",
             "-hls_flags",

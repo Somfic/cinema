@@ -13,6 +13,7 @@
 		type SearchResult,
 		type WatchHistoryItem,
 		type EmbeddedSubtitleTrack,
+		type Chapter,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
@@ -81,6 +82,7 @@
 	let piecesUnsub: (() => void) | undefined;
 
 	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
+	let fileChapters = $state<Chapter[]>([]);
 	let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
 	let activeAudioIdx = $state(0);
 	let mediaDuration = $state(0);
@@ -386,6 +388,7 @@
 				playingLocal = result.local;
 				streamUrl = result.url;
 				fileAudioTracks = [];
+				fileChapters = [];
 				activeAudioIdx = 0;
 				pollAudioTracks(stream.info_hash, stream.file_idx);
 				if (!result.local)
@@ -407,9 +410,19 @@
 		const check = async () => {
 			try {
 				const data = await api.streams.audioTracks(infoHash, fileIdx);
+				// Discard results from a superseded stream: an episode/source
+				// switch may have happened while this request was in flight, and
+				// applying its data would write the previous file's chapters,
+				// audio tracks, and subtitles back over the new one.
+				if (
+					selectedStream?.info_hash !== infoHash ||
+					selectedStream?.file_idx !== fileIdx
+				)
+					return;
 				const tracks: AudioTrackInfo[] = data.tracks ?? [];
 				const subs: EmbeddedSubtitleTrack[] = data.subtitles ?? [];
 				if (data.duration) mediaDuration = data.duration;
+				if (data.chapters?.length) fileChapters = data.chapters;
 				if (tracks.length > 1) fileAudioTracks = tracks;
 				if (
 					!hlsSessionId &&
@@ -625,6 +638,7 @@
 		activeCues = [];
 		activeTrackUrl = undefined;
 		fileAudioTracks = [];
+		fileChapters = [];
 		embeddedSubtitleTracks = [];
 		const u = new URL(window.location.href);
 		u.searchParams.delete("hash");
@@ -802,6 +816,7 @@
 				}))}
 				activeAudioTrack={activeAudioIdx}
 				onAudioSelect={(track) => switchAudio(track.id)}
+				chapters={fileChapters}
 				knownDuration={hlsSessionId ? mediaDuration : 0}
 				onSeekRestart={hlsSessionId ? seekRestart : undefined}
 				{subtitleTracks}
@@ -818,6 +833,16 @@
 				onTranscodingChange={toggleTranscoding}
 				streams={playingLocal ? [] : streams}
 				activeStreamHash={selectedStream?.info_hash}
+				externalUrl={api.urls.stream(
+					selectedStream.info_hash,
+					selectedStream.file_idx,
+				)}
+				onReveal={() =>
+					selectedStream &&
+					api.streams.reveal(
+						selectedStream.info_hash,
+						selectedStream.file_idx,
+					)}
 				onStreamSelect={playingLocal ? undefined : switchStream}
 				bind:currentTime={playerTime}
 				bind:duration={playerDuration}
