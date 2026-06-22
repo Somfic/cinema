@@ -17,7 +17,7 @@ async-trait = "0.1"
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "macros"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs"] }
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 
 # Database
