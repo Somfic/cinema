@@ -253,22 +253,11 @@ async fn start_transcoding(
     let playlist_path = dir.join("playlist.m3u8");
     let segment_pattern = dir.join("seg%05d.ts");
 
-    // Probe the video codec to decide whether to copy or transcode. Even in
-    // `only_audio` mode we must check: copying a browser-unplayable codec (e.g.
-    // HEVC) into the HLS stream makes the browser's MSE reject the SourceBuffer
-    // (hls.js BUFFER_ADD_CODEC_ERROR), so we transcode the video regardless of
-    // the only_audio preference when the source codec isn't browser-safe.
     let engine = crate::downloads::TorrentEngine::get();
     let file_path = engine.file_path(&session_input.info_hash, session_input.file_idx)?;
     let video_codec = probe_video_codec(&file_path).await.unwrap_or_default();
-    let copy_video = BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
-
-    if !copy_video && session_input.only_audio {
-        tracing::info!(
-            "audio-only transcode requested but video codec '{video_codec}' is not \
-             browser-safe; transcoding video too session={session_id}"
-        );
-    }
+    let copy_video =
+        session_input.only_audio || BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
 
     let video = video_pipeline(config, copy_video).await;
 
