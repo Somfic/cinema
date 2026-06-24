@@ -148,7 +148,10 @@ fn default_torrent_validation_timeout() -> Duration {
 }
 
 fn default_ffmpeg_max_startup_duration() -> Duration {
-    Duration::from_secs(10)
+    // Generous because the bottleneck at startup is the torrent delivering the
+    // head of the file (a cold 4K stream can take >10s to buffer the first
+    // segment), not the now hardware-accelerated encode.
+    Duration::from_secs(45)
 }
 
 fn default_ffmpeg_startup_poll_interval() -> Duration {

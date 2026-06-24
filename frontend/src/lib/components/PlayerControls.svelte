@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from "svelte";
+	import type { Chapter } from "$lib/schema";
 	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
 
 	interface AudioTrack {
@@ -29,6 +30,7 @@
 		activeAudioTrack = 0,
 		subtitleTracks = [],
 		subtitlesActive = false,
+		chapters = [],
 		activeTrackUrl,
 		transcoding = { enabled: false, onlyAudio: false },
 		streamStats = null,
@@ -37,6 +39,8 @@
 		accent,
 		volumeAlwaysOpen = false,
 		isFullscreen = false,
+		externalUrl,
+		onReveal,
 		onTogglePlay,
 		onSeek,
 		onScrub,
@@ -64,6 +68,7 @@
 		activeAudioTrack?: number;
 		subtitleTracks?: SubtitleTrack[];
 		subtitlesActive?: boolean;
+		chapters?: Chapter[];
 		activeTrackUrl?: string;
 		transcoding?: { enabled: boolean; onlyAudio: boolean };
 		streamStats?: { total_bytes: number; finished: boolean } | null;
@@ -72,6 +77,12 @@
 		accent?: string;
 		volumeAlwaysOpen?: boolean;
 		isFullscreen?: boolean;
+		/** Direct stream URL (path or absolute) to hand off to a desktop player.
+		 *  When set, an "open in external player" button is shown. */
+		externalUrl?: string;
+		/** Reveal the source file in the server's file manager. When set, a
+		 *  "Reveal in file explorer" entry is added to the external menu. */
+		onReveal?: () => void;
 		onTogglePlay: () => void;
 		onSeek: (time: number) => void;
 		onScrub?: (time: number) => void;
@@ -99,6 +110,37 @@
 		duration > 0 ? (buffered / duration) * 100 : 0,
 	);
 
+	// Only show chapters when there's more than one and we know the duration.
+	const showChapters = $derived(chapters.length > 1 && duration > 0);
+
+	// How far (0–1) a given time has progressed within a single chapter — used to
+	// fill each YouTube-style segment independently.
+	function segFraction(chapter: Chapter, time: number): number {
+		const span = chapter.end - chapter.start;
+		if (span <= 0) return 0;
+		return Math.max(0, Math.min(1, (time - chapter.start) / span));
+	}
+
+	function chapterAt(time: number): Chapter | undefined {
+		if (!showChapters) return undefined;
+		return (
+			chapters.find((c) => time >= c.start && time < c.end) ??
+			(time >= chapters[chapters.length - 1].start
+				? chapters[chapters.length - 1]
+				: undefined)
+		);
+	}
+
+	const currentChapter = $derived(chapterAt(displayTime));
+
+	// Hover state for the chapter tooltip while pointing along the track.
+	let hovering = $state(false);
+	let hoverTime = $state(0);
+	const hoverPercent = $derived(
+		duration > 0 ? (hoverTime / duration) * 100 : 0,
+	);
+	const hoverChapter = $derived(chapterAt(hoverTime));
+
 	function formatTime(seconds: number): string {
 		if (!isFinite(seconds) || seconds < 0) return "0:00";
 		const h = Math.floor(seconds / 3600);
@@ -112,15 +154,10 @@
 	function posFromEvent(clientX: number): number | null {
 		if (!trackEl || !duration) return null;
 		const rect = trackEl.getBoundingClientRect();
-		const pct = Math.max(
-			0,
-			Math.min(1, (clientX - rect.left) / rect.width),
-		);
+		const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
 		return pct * duration;
 	}
-	function onPointerDown(
-		e: PointerEvent & { currentTarget: HTMLDivElement },
-	) {
+	function onPointerDown(e: PointerEvent & { currentTarget: HTMLDivElement }) {
 		const t = posFromEvent(e.clientX);
 		if (t == null) return;
 		scrubbing = true;
@@ -129,11 +166,16 @@
 		e.currentTarget.setPointerCapture(e.pointerId);
 	}
 	function onPointerMove(e: PointerEvent) {
-		if (!scrubbing) return;
 		const t = posFromEvent(e.clientX);
 		if (t == null) return;
+		hovering = true;
+		hoverTime = t;
+		if (!scrubbing) return;
 		scrubValue = t;
 		onScrub?.(t);
+	}
+	function onPointerLeave() {
+		if (!scrubbing) hovering = false;
 	}
 	function onPointerUp(e: PointerEvent) {
 		if (!scrubbing) return;
@@ -167,6 +209,24 @@
 		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
 	});
 
+	const TRANSCODE_OPTIONS = [
+		{ value: "none", label: "None", icon: "Ban" as const },
+		{ value: "audio", label: "Audio", icon: "AudioLines" as const },
+		{ value: "both", label: "Audio + video", icon: "Film" as const },
+	];
+
+	const transcodingMode = $derived(
+		!transcoding.enabled ? "none" : transcoding.onlyAudio ? "audio" : "both",
+	);
+
+	function setTranscodingMode(mode: string) {
+		const enabled = mode !== "none";
+		const onlyAudio = mode === "audio";
+		transcoding.enabled = enabled;
+		transcoding.onlyAudio = onlyAudio;
+		onTranscodingChange?.(enabled, onlyAudio);
+	}
+
 	const streamMenuItems = $derived<PopoverMenuEntry[]>([
 		...(resolutions.length > 1
 			? [
@@ -186,9 +246,7 @@
 			: []),
 		{ kind: "header" as const, label: "Sources" },
 		...(activeResolution
-			? streams.filter(
-					(s: StreamOption) => s.resolution === activeResolution,
-				)
+			? streams.filter((s: StreamOption) => s.resolution === activeResolution)
 			: streams
 		)
 			.slice(0, 8)
@@ -204,27 +262,13 @@
 			})),
 		...(onTranscodingChange
 			? [
-					"divider" as const,
+					{ kind: "header" as const, label: "Transcoding" },
 					{
-						kind: "toggle" as const,
-						label: "Transcoding",
-						description: "Re-encode stream for compatibility",
-						checked: transcoding.enabled,
-						onChange: (value: boolean) => {
-							transcoding.enabled = value;
-							onTranscodingChange?.(value, transcoding.onlyAudio);
-						},
-					},
-					{
-						kind: "toggle" as const,
-						label: "Only audio",
-						description: "Only re-encode audio",
-						disabled: !transcoding.enabled,
-						checked: transcoding.onlyAudio,
-						onChange: (value: boolean) => {
-							transcoding.onlyAudio = value;
-							onTranscodingChange?.(transcoding.enabled, value);
-						},
+						kind: "radio" as const,
+						options: TRANSCODE_OPTIONS,
+						value: transcodingMode,
+						iconOnly: true,
+						onChange: setTranscodingMode,
 					},
 				]
 			: []),
@@ -261,9 +305,7 @@
 								t.id.startsWith("embedded:") === isEmbedded,
 						);
 						const suffix =
-							dupes.length > 1
-								? ` #${dupes.indexOf(track) + 1}`
-								: "";
+							dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
 						return {
 							kind: "item" as const,
 							label: `${track.language}${suffix}`,
@@ -281,6 +323,75 @@
 								},
 							]
 						: []),
+				]
+			: []),
+	]);
+
+	// Resolve to an absolute URL a desktop player on the same network can reach.
+	function absoluteExternalUrl(): string {
+		if (!externalUrl) return "";
+		return /^https?:\/\//.test(externalUrl)
+			? externalUrl
+			: `${window.location.origin}${externalUrl}`;
+	}
+
+	let copied = $state(false);
+	let copiedTimer: ReturnType<typeof setTimeout>;
+
+	async function copyExternalUrl() {
+		try {
+			await navigator.clipboard.writeText(absoluteExternalUrl());
+			copied = true;
+			clearTimeout(copiedTimer);
+			copiedTimer = setTimeout(() => (copied = false), 1500);
+		} catch {
+			// Clipboard may be unavailable (insecure context) — ignore.
+		}
+	}
+
+	// Download an .m3u playlist pointing at the stream. Desktop VLC/mpv register
+	// as the .m3u handler, so opening the downloaded file launches the user's
+	// default player — the reliable cross-platform alternative to a `vlc://`
+	// scheme link, which only mobile VLC honours.
+	function downloadM3u() {
+		const url = absoluteExternalUrl();
+		if (!url) return;
+		const content = `#EXTM3U\n#EXTINF:-1,Cinema stream\n${url}\n`;
+		const blob = new Blob([content], { type: "audio/x-mpegurl" });
+		const href = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = href;
+		a.download = "stream.m3u";
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(href), 1000);
+	}
+
+	const externalMenuItems = $derived<PopoverMenuEntry[]>([
+		...(externalUrl
+			? [
+					{ kind: "header" as const, label: "External player" },
+					{
+						kind: "item" as const,
+						label: "Open playlist (.m3u)",
+						onclick: downloadM3u,
+					},
+					{
+						kind: "item" as const,
+						label: copied ? "Copied!" : "Copy stream link",
+						onclick: copyExternalUrl,
+					},
+				]
+			: []),
+		...(onReveal
+			? [
+					{ kind: "header" as const, label: "On this server" },
+					{
+						kind: "item" as const,
+						label: "Reveal in file explorer",
+						onclick: () => onReveal?.(),
+					},
 				]
 			: []),
 	]);
@@ -302,13 +413,14 @@
 		onpointerdown={onPointerDown}
 		onpointermove={onPointerMove}
 		onpointerup={onPointerUp}
+		onpointerleave={onPointerLeave}
 		role="slider"
 		aria-valuenow={currentTime}
 		aria-valuemin={0}
 		aria-valuemax={duration}
 		tabindex="-1"
 	>
-		<div class="progress-track">
+		<div class="progress-track" class:segmented={showChapters}>
 			{#if pieceMap.length > 0 && streamStats && !streamStats.finished}
 				<div class="progress-pieces">
 					{#each pieceMap as value}
@@ -316,14 +428,37 @@
 					{/each}
 				</div>
 			{/if}
-			<div
-				class="progress-buffered"
-				style="width: {bufferedPercent}%"
-			></div>
-			<div class="progress-fill" style="width: {progressPercent}%">
-				<div class="progress-thumb"></div>
-			</div>
+			{#if showChapters}
+				{#each chapters as chapter}
+					<div
+						class="seg"
+						style="left: {(chapter.start / duration) *
+							100}%; width: {((chapter.end - chapter.start) / duration) * 100}%"
+					>
+						<div class="seg-bg">
+							<div
+								class="seg-buffered"
+								style="width: {segFraction(chapter, buffered) * 100}%"
+							></div>
+							<div
+								class="seg-fill"
+								style="width: {segFraction(chapter, displayTime) * 100}%"
+							></div>
+						</div>
+					</div>
+				{/each}
+			{:else}
+				<div class="progress-buffered" style="width: {bufferedPercent}%"></div>
+				<div class="progress-fill" style="width: {progressPercent}%"></div>
+			{/if}
+			<div class="progress-thumb" style="left: {progressPercent}%"></div>
 		</div>
+		{#if showChapters && hovering && hoverChapter}
+			<div class="chapter-tooltip" style="left: {hoverPercent}%">
+				<span class="chapter-tooltip-title">{hoverChapter.title}</span>
+				<span class="chapter-tooltip-time">{formatTime(hoverTime)}</span>
+			</div>
+		{/if}
 	</div>
 
 	<div class="controls-bar">
@@ -351,8 +486,7 @@
 					max="1"
 					step="0.01"
 					value={muted ? 0 : volume}
-					oninput={(e) =>
-						onSetVolume(parseFloat(e.currentTarget.value))}
+					oninput={(e) => onSetVolume(parseFloat(e.currentTarget.value))}
 					class="volume-slider"
 					class:open={volumeAlwaysOpen}
 				/>
@@ -363,7 +497,21 @@
 			</span>
 		</div>
 
+		{#if currentChapter}
+			<span class="current-chapter" title={currentChapter.title}>
+				{currentChapter.title}
+			</span>
+		{/if}
+
 		<div class="controls-right">
+			{#if externalUrl || onReveal}
+				<PopoverMenu items={externalMenuItems} align="right">
+					{#snippet trigger()}
+						<Button variant="ghost" icon="ExternalLink" />
+					{/snippet}
+				</PopoverMenu>
+			{/if}
+
 			{#if streams.length > 0 && onStreamSelect}
 				<PopoverMenu items={streamMenuItems} align="right">
 					{#snippet trigger()}
@@ -438,6 +586,48 @@
 		height: 6px;
 	}
 
+	/* In chapter mode each segment paints its own background; the gaps between
+	   them should read as empty rather than the continuous track fill. */
+	.progress-track.segmented {
+		background: transparent;
+	}
+
+	.seg {
+		position: absolute;
+		top: 0;
+		height: 100%;
+	}
+
+	.seg-bg {
+		position: absolute;
+		inset: 0;
+		margin-right: 2px; /* the gap between chapters */
+		background: rgba(255, 255, 255, 0.15);
+		border-radius: 2px;
+		overflow: hidden;
+	}
+
+	.seg:last-child .seg-bg {
+		margin-right: 0;
+	}
+
+	.seg-buffered,
+	.seg-fill {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 100%;
+	}
+
+	.seg-buffered {
+		background: rgba(255, 255, 255, 0.2);
+	}
+
+	.seg-fill {
+		background: var(--accent);
+		transition: width 0.05s linear;
+	}
+
 	.progress-pieces {
 		position: absolute;
 		top: 0;
@@ -472,25 +662,69 @@
 		height: 100%;
 		background: var(--accent);
 		border-radius: 2px;
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
 		transition: width 0.05s linear;
 	}
 
 	.progress-thumb {
+		position: absolute;
+		top: 50%;
 		width: 14px;
 		height: 14px;
 		background: var(--accent);
 		border-radius: 50%;
-		transform: translateX(50%) scale(0);
+		transform: translate(-50%, -50%) scale(0);
 		transition: transform 0.15s ease;
-		flex-shrink: 0;
 		box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+		pointer-events: none;
+		z-index: 3;
 	}
 
 	.progress-container:hover .progress-thumb {
-		transform: translateX(50%) scale(1);
+		transform: translate(-50%, -50%) scale(1);
+	}
+
+	.chapter-tooltip {
+		position: absolute;
+		bottom: 18px;
+		transform: translateX(-50%);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1px;
+		padding: 4px 8px;
+		background: rgba(0, 0, 0, 0.85);
+		border-radius: 6px;
+		pointer-events: none;
+		white-space: nowrap;
+		z-index: 3;
+	}
+
+	.chapter-tooltip-title {
+		color: #fff;
+		font-size: 12px;
+		font-weight: 500;
+	}
+
+	.chapter-tooltip-time {
+		color: rgba(255, 255, 255, 0.6);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.current-chapter {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
+		color: rgba(255, 255, 255, 0.65);
+		font-size: 13px;
+		font-weight: 500;
+		max-width: 40%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+		pointer-events: none;
 	}
 
 	/* ── Controls bar ── */

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Icon, Media } from "glow";
+	import { api } from "$lib/api";
 
 	let {
 		image,
@@ -31,7 +32,7 @@
 
 	const trailerKey = $derived(trailerKeys[index]);
 	const trailerSrc = $derived(
-		trailerKey ? `/api/trailer/${trailerKey}` : undefined,
+		trailerKey ? api.urls.trailer(trailerKey) : undefined,
 	);
 	const loop = $derived(trailerKeys.length <= 1);
 
@@ -60,9 +61,7 @@
 		trailerPlaying = true;
 		if (!trailerKey || aspect != null) return;
 		try {
-			const res = await fetch(`/api/trailer/${trailerKey}/meta`);
-			if (!res.ok) return;
-			const meta = await res.json();
+			const meta = await api.trailer.meta(trailerKey);
 			if (meta?.aspect) aspect = meta.aspect;
 		} catch {
 			/* leave at default 16:9 */

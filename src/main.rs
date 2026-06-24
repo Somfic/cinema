@@ -22,10 +22,10 @@ mod tmdb;
 mod trailer;
 mod ws;
 
-use app::{AppContext, EventBus, Result};
+use app::{AppContext, Result};
 use config::Config;
 
-draad::include_generated!(crate::AppContext, crate::EventBus);
+draad::include_generated!(crate::AppContext, draad::runtime::EventBus);
 
 #[derive(Parser)]
 #[command(name = "cinema", about = "Cinema media server")]
@@ -117,7 +117,7 @@ async fn run() -> Result<()> {
     // Initialize core services
     let pool = app::create_pool(&config).await?;
     let storage = app::create_storage(&config).await?;
-    let events = app::EventBus::new();
+    let events = draad::runtime::EventBus::new();
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -129,7 +129,8 @@ async fn run() -> Result<()> {
         storage,
         config: config.clone(),
         events,
-        presence: app::Presence::default(),
+        conns: draad::runtime::Conns::new(),
+        clients: app::ClientRoster::new(),
         http,
         downloads: downloads_handle,
     };
@@ -201,9 +202,11 @@ async fn run() -> Result<()> {
     info!("mounting ws at /api/ws");
     router = router.nest("/api/ws", ws::router().with_state(ctx.clone()));
 
-    // Mount the raw HTTP endpoints (range video, HLS segments, image proxy).
-    info!("mounting raw routes at /api");
-    router = router.nest("/api", raw::router().with_state(ctx.clone()));
+    // Mount the raw byte-serving routes (range video, HLS segments, image
+    // proxy). Their paths come from the `#[draad::raw]` schema and are
+    // absolute, so merge them flat rather than nesting under `/api`.
+    info!("mounting raw byte routes");
+    router = router.merge(raw::router().with_state(ctx.clone()));
 
     // Frontend: dev proxy or static files
     if cli.dev {

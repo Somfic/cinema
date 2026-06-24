@@ -1,7 +1,8 @@
-use crate::app::{AppContext, Error};
+use crate::app::AppContext;
+pub use crate::app::Error;
 pub use crate::downloads::Download;
 use crate::downloads::MediaContext;
-use crate::tmdb::TmdbClient;
+use crate::tmdb::{MediaType, TmdbClient};
 use crate::{streams as streams_mod, tmdb};
 
 /// Streaming progress for an active download. Emitted periodically by the
@@ -40,6 +41,7 @@ pub struct ResolutionEstimate {
 #[draad::api(namespace = "downloads")]
 pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
+    #[get]
     async fn list(&self) -> Result<Vec<Download>, Error>;
 
     /// Queue a new download. If `info_hash`/`file_idx` are omitted, picks the
@@ -47,6 +49,7 @@ pub trait DownloadsApi {
     async fn enqueue(&self, request: EnqueueDownload) -> Result<i32, Error>;
 
     /// Temporarily pause. Files stay on disk; resume picks up where it left off.
+    #[delete]
     async fn pause(&self, id: i32) -> Result<(), Error>;
 
     /// Resume a paused or cancelled download. Also re-runs a failed download
@@ -57,9 +60,11 @@ pub trait DownloadsApi {
     async fn cancel(&self, id: i32) -> Result<(), Error>;
 
     /// Stop and wipe. Removes the row and deletes files from disk
+    #[post]
     async fn remove(&self, id: i32) -> Result<(), Error>;
 
     /// Bandwidth/size estimates per available resolution
+    #[get]
     async fn estimate(
         &self,
         media_type: String,
@@ -148,12 +153,12 @@ impl DownloadsApi for AppContext {
         tmdb_id: i64,
     ) -> Result<Vec<ResolutionEstimate>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let mt = crate::api::media::parse_media_type(&media_type)?;
+        let mt = MediaType::try_from(media_type)?;
         let item = tmdb.details(mt, tmdb_id).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-        let path = if media_type == "tv" {
+        let path = if mt == MediaType::Tv {
             format!("series/{imdb_id}:1:1")
         } else {
             format!("movie/{imdb_id}")

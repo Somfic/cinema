@@ -2,48 +2,28 @@
 //! bytes, HLS segment files, image/asset proxies. These mount as plain Axum
 //! routes alongside `rpc_router()`.
 
-use axum::extract::{Path, Query, State};
+use axum::Router;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post};
-use axum::{Json, Router};
-use serde::Deserialize;
+use axum::routing::get;
 
 use crate::app::{AppContext, Error};
 use crate::downloads::TorrentEngine;
 use crate::hls;
 
+// Paths come from the `#[draad::raw]` schema (`crate::api::urls`) so the route
+// strings and the frontend's `api.urls.*` builders can't drift. draad owns the
+// URL contract; the byte-serving handlers below stay hand-written.
 pub fn router() -> Router<AppContext> {
     Router::new()
-        .route("/stream/{info_hash}/{file_idx}", get(stream_file))
-        .route(
-            "/stream/{info_hash}/{file_idx}/audio",
-            get(stream_audio_tracks),
-        )
-        .route(
-            "/stream/{info_hash}/{file_idx}/remux",
-            post(stream_remux_hls),
-        )
-        .route("/hls/{session_id}/{file}", get(hls_serve))
-        .route("/hls/{session_id}", delete(hls_stop_raw))
-        .route("/image/{*path}", get(image_proxy))
-        .route("/files/{*path}", get(serve_file))
-        .route("/trailer/{key}", get(serve_trailer))
-        .route("/trailer/{key}/meta", get(serve_trailer_meta))
-}
-
-async fn serve_trailer_meta(
-    State(ctx): State<AppContext>,
-    Path(key): Path<String>,
-) -> Result<axum::response::Response, RawError> {
-    let meta = crate::trailer::ensure_meta(&ctx.storage, &key).await?;
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=86400")],
-        axum::Json(meta),
-    )
-        .into_response())
+        .route(crate::urls::STREAM, get(stream_file))
+        .route(crate::urls::STREAM_AUDIO, get(stream_audio_tracks))
+        .route(crate::urls::HLS, get(hls_serve))
+        .route(crate::urls::IMAGE, get(image_proxy))
+        .route(crate::urls::FILE, get(serve_file))
+        .route(crate::urls::TRAILER, get(serve_trailer))
 }
 
 async fn serve_trailer(
@@ -220,7 +200,7 @@ async fn stream_file(
 async fn stream_audio_tracks(
     State(ctx): State<AppContext>,
     Path((info_hash, file_idx)): Path<(String, usize)>,
-) -> Result<Json<serde_json::Value>, RawError> {
+) -> Result<axum::Json<serde_json::Value>, RawError> {
     let engine = TorrentEngine::get();
     let path = engine.file_path(&info_hash, file_idx)?;
     let (tracks, subtitles, duration) = tokio::join!(
@@ -248,49 +228,11 @@ async fn stream_audio_tracks(
             .collect::<Vec<_>>()
     };
 
-    Ok(Json(serde_json::json!({
+    Ok(axum::Json(serde_json::json!({
         "tracks": tracks,
         "subtitles": subtitles,
         "duration": duration,
     })))
-}
-
-#[derive(Deserialize)]
-struct RemuxParams {
-    #[serde(default)]
-    audio: usize,
-    #[serde(default)]
-    t: f64,
-    #[serde(default)]
-    only_audio: bool,
-}
-
-async fn stream_remux_hls(
-    State(ctx): State<AppContext>,
-    Path((info_hash, file_idx)): Path<(String, usize)>,
-    Query(params): Query<RemuxParams>,
-) -> Result<axum::response::Response, RawError> {
-    let engine = TorrentEngine::get();
-    engine.ensure_torrent(&info_hash, &ctx.config).await?;
-    engine.select_file(&info_hash, file_idx).await?;
-    crate::downloads::ensure_download(&ctx.db, &ctx.downloads, &info_hash, file_idx as i32, None)
-        .await?;
-
-    let (session_id, playlist_url) = hls::start_session(
-        &ctx.storage,
-        &ctx.config,
-        hls::HlsSessionStartInput {
-            info_hash,
-            file_idx,
-            audio_index: params.audio,
-            start_time: params.t,
-            only_audio: params.only_audio,
-        },
-    )
-    .await?;
-
-    let body = serde_json::json!({ "session_id": session_id, "playlist_url": playlist_url });
-    Ok((StatusCode::OK, axum::Json(body)).into_response())
 }
 
 async fn hls_serve(
@@ -330,11 +272,6 @@ async fn hls_serve(
         .header(header::CACHE_CONTROL, cache)
         .body(axum::body::Body::from(bytes))
         .unwrap())
-}
-
-async fn hls_stop_raw(Path(session_id): Path<String>) -> StatusCode {
-    hls::stop_session(&session_id).await;
-    StatusCode::NO_CONTENT
 }
 
 async fn serve_file(

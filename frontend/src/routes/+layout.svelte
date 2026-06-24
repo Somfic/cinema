@@ -1,17 +1,21 @@
 <script lang="ts">
 	import "glow/styles";
-	import { ToastContainer } from "glow";
+	import { toast, ToastContainer } from "glow";
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
 	import TopBar from "$lib/components/TopBar.svelte";
 	import RemotePrompt from "$lib/components/RemotePrompt.svelte";
 	import { remote } from "$lib/remote.svelte";
+	import { api } from "$lib/api";
 
 	let { children } = $props();
 
 	// Connect, register this client and start tracking presence (browser-only).
 	$effect(() => {
 		remote.init();
+		api.onError((err) => {
+			toast.error(`API error: ${err.message}`);
+		});
 	});
 
 	// Remote side: mirror the phone's current page onto the paired TV so it
@@ -77,12 +81,13 @@
 	}
 
 	@font-face {
-		font-family: 'Subtitle';
-		src: url('/fonts/Helvetica Neue 67 Medium Condensed.otf') format('opentype');
+		font-family: "Subtitle";
+		src: url("/fonts/Helvetica Neue 67 Medium Condensed.otf")
+			format("opentype");
 		font-display: swap;
 	}
 
 	:global(:root) {
-		--subtitle-font: 'Subtitle', system-ui, sans-serif;
+		--subtitle-font: "Subtitle", system-ui, sans-serif;
 	}
 </style>

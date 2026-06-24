@@ -1,4 +1,5 @@
-use crate::app::{AppContext, Error};
+pub use crate::app::Error;
+use crate::{app::AppContext, tmdb::MediaType};
 
 pub(crate) use crate::tmdb;
 
@@ -62,44 +63,54 @@ pub struct ReorderItem {
 #[draad::api(namespace = "collections")]
 pub trait CollectionsApi {
     /// Adds an item to a named collection
+    #[post]
     async fn add(&self, item: CollectionRequest) -> Result<(), Error>;
 
     /// Removes an item from a collection
+    #[delete]
     async fn remove(
         &self,
         collection: String,
-        media_type: tmdb::MediaType,
+        media_type: String, // draad doesn't allow enums in DELETE
         id: i64,
     ) -> Result<(), Error>;
 
     /// Lists items in a single collection, ordered by position then added time
+    #[get]
     async fn get(&self, collection: String) -> Result<Vec<CollectionItem>, Error>;
 
     /// Whether the given item is in the given collection
+    #[get]
     async fn contains(
         &self,
         collection: String,
-        media_type: tmdb::MediaType,
+        media_type: String, // draad doesn't allow enums in GET
         id: i64,
     ) -> Result<CollectionStatus, Error>;
 
     /// Lists every collection definition (user + system), ordered by position
+    #[get]
     async fn list_defs(&self) -> Result<Vec<CollectionDef>, Error>;
 
     /// Creates (or upserts) a collection definition
+    #[put]
     async fn create_def(&self, def: CreateCollection) -> Result<(), Error>;
 
     /// Deletes a collection definition and all its items. System defs can't
     /// be deleted
+    #[delete]
     async fn delete_def(&self, slug: String) -> Result<(), Error>;
 
     /// Hides/unhides a collection from the UI without deleting its items
+    #[patch]
     async fn set_visibility(&self, slug: String, hidden: bool) -> Result<(), Error>;
 
     /// Reorders the list of collection definitions
+    #[patch]
     async fn reorder_defs(&self, slugs: Vec<String>) -> Result<(), Error>;
 
     /// Reorders items within a single collection
+    #[patch]
     async fn reorder(&self, collection: String, items: Vec<ReorderItem>) -> Result<(), Error>;
 }
 
@@ -144,12 +155,10 @@ impl CollectionsApi for AppContext {
         Ok(())
     }
 
-    async fn remove(
-        &self,
-        collection: String,
-        media_type: tmdb::MediaType,
-        id: i64,
-    ) -> Result<(), Error> {
+    async fn remove(&self, collection: String, media_type: String, id: i64) -> Result<(), Error> {
+        let media_type: tmdb::MediaType = serde_json::from_str(&media_type).map_err(|_| {
+            Error::InvalidInput(String::from("Invalid values passed for media_type"))
+        })?;
         sqlx::query!(
             "
                 DELETE FROM collections
@@ -193,9 +202,10 @@ impl CollectionsApi for AppContext {
     async fn contains(
         &self,
         collection: String,
-        media_type: tmdb::MediaType,
+        media_type: String,
         id: i64,
     ) -> Result<CollectionStatus, Error> {
+        let media_type = MediaType::try_from(media_type)?;
         let exists: Option<bool> = sqlx::query_scalar!(
             r#"SELECT EXISTS (
                 SELECT 1 FROM collections c

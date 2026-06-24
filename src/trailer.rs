@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::Mutex;
 
@@ -59,7 +58,8 @@ fn apply_cookies(cmd: &mut tokio::process::Command, storage: &Storage) {
 }
 
 /// Display metadata for a cached trailer.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[draad::ty]
+#[derive(Copy)]
 pub struct TrailerMeta {
     pub aspect: f64,
 }

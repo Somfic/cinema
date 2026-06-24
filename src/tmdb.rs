@@ -58,6 +58,20 @@ pub enum MediaType {
     Tv,
 }
 
+impl TryFrom<String> for MediaType {
+    type Error = crate::app::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "movie" => Ok(MediaType::Movie),
+            "tv" => Ok(MediaType::Tv),
+            _ => Err(crate::app::Error::InvalidInput(format!(
+                "Incorrect media type: \"{value}\""
+            ))),
+        }
+    }
+}
+
 #[draad::ty]
 pub struct SearchResult {
     pub id: i64,

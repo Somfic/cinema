@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from "svelte";
 	import { fade } from "svelte/transition";
+	import type { Chapter } from "$lib/schema";
 	import Hls from "hls.js";
 	import { Button, Icon } from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
@@ -42,6 +43,7 @@
 		activeStreamHash,
 		audioTracks = [],
 		activeAudioTrack = 0,
+		chapters = [],
 		onClose,
 		onSubtitleSelect,
 		onSubtitleOff,
@@ -52,6 +54,8 @@
 		activeTrackUrl,
 		accent,
 		backdrop,
+		externalUrl,
+		onReveal,
 		knownDuration = 0,
 		startTime = 0,
 		streamStats = null,
@@ -78,6 +82,7 @@
 		activeStreamHash?: string;
 		audioTracks?: AudioTrack[];
 		activeAudioTrack?: number;
+		chapters?: Chapter[];
 		onClose?: () => void;
 		onSubtitleSelect?: (track: SubtitleTrack) => void;
 		onSubtitleOff?: () => void;
@@ -90,6 +95,10 @@
 		activeTrackUrl?: string;
 		accent?: string;
 		backdrop?: string;
+		/** Direct stream URL handed to a desktop player via the controls menu. */
+		externalUrl?: string;
+		/** Reveal the source file in the server's file manager. */
+		onReveal?: () => void;
 		knownDuration?: number;
 		startTime?: number;
 		currentTime?: number;
@@ -641,6 +650,7 @@
 				{activeStreamHash}
 				{audioTracks}
 				{activeAudioTrack}
+				{chapters}
 				{subtitleTracks}
 				subtitlesActive={subtitles.length > 0}
 				{activeTrackUrl}
@@ -650,6 +660,8 @@
 				{loadingSubtitles}
 				{accent}
 				{isFullscreen}
+				{externalUrl}
+				{onReveal}
 				onTogglePlay={togglePlay}
 				onSeek={seekTo}
 				onScrub={seekTo}

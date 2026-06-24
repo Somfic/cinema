@@ -29,3 +29,29 @@ pub trait RemoteEvents {
     /// Subscribers diff it client-side to drive pairing.
     fn presence(payload: Vec<ClientPresence>);
 }
+
+use crate::app::AppContext;
+pub use crate::app::Error;
+use draad::runtime::Conn;
+
+#[draad::api(namespace = "remote")]
+pub trait RemoteApi {
+    /// Returns the caller's own presence and pushes it back down their socket
+    /// (`remote_self`). Demonstrates injecting the live connection into an HTTP
+    /// handler — the `conn` arg is server-filled, so the generated TS is just
+    /// `whoami(): Promise<ClientPresence>`. 409s if the caller has no live socket.
+    async fn whoami(&self, conn: &Conn) -> Result<ClientPresence, Error>;
+}
+
+#[draad::api]
+impl RemoteApi for AppContext {
+    async fn whoami(&self, conn: &Conn) -> Result<ClientPresence, Error> {
+        let me = self
+            .clients
+            .get(conn.client_id())
+            .await
+            .ok_or_else(|| Error::NotFound("client not in roster".into()))?;
+        conn.send("remote_self", &me);
+        Ok(me)
+    }
+}

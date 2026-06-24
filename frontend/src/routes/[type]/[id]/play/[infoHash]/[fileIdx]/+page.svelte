@@ -7,20 +7,15 @@
 		type SubtitleTrack,
 		type SubtitleCue,
 		type Stream,
+		type Chapter,
+		type AudioTrack,
+		type StreamStats,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
 	import { getDetails, imageUrl, playStream } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import { remote, type PlayerControls } from "$lib/remote.svelte";
 	import type { MediaType } from "$lib/schema/tmdb";
-
-	interface AudioTrackInfo {
-		index: number;
-		stream_index: number;
-		name: string;
-		language: string | null;
-		codec: string;
-	}
 
 	const BROWSER_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "vorbis", "flac"]);
 
@@ -31,18 +26,17 @@
 	let activeTrackUrl = $state<string | undefined>(undefined);
 	let loadingSubtitles = $state(false);
 	let error = $state<string | null>(null);
-	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
+	let fileAudioTracks = $state<AudioTrack[]>([]);
+	let fileChapters = $state<Chapter[]>([]);
 	let activeAudioIdx = $state(0);
 	let mediaDuration = $state(0);
 	let hlsSessionId = $state<string | null>(null);
+	// True while a remux request is in flight. The backend blocks until the
+	// first HLS segment exists (up to the startup timeout), so without this guard
+	// the audio-track poll can fire a second `startHlsRemux` before the first
+	// resolves, spawning duplicate ffmpeg sessions for the same file.
+	let hlsStarting = false;
 
-	interface StreamStats {
-		progress_bytes: number;
-		total_bytes: number;
-		download_speed_mbps: number;
-		peers: number;
-		finished: boolean;
-	}
 	let streamStats = $state<StreamStats | null>(null);
 	let pieceMap = $state<number[]>([]);
 	let statsUnsub: (() => void) | undefined;
@@ -64,7 +58,8 @@
 		if (mediaType === "tv" && season !== null && episode !== null) {
 			const still = item?.seasons
 				?.find((s) => s.season_number === season)
-				?.episodes?.find((e) => e.episode_number === episode)?.stills?.[0];
+				?.episodes?.find((e) => e.episode_number === episode)
+				?.stills?.[0];
 			if (still) return imageUrl(still, "original");
 		}
 		return backdropUrls[0];
@@ -74,6 +69,11 @@
 	const mediaId = $derived(Number(page.params.id));
 	const infoHash = $derived(page.params.infoHash);
 	const fileIdx = $derived(Number(page.params.fileIdx));
+
+	// Direct (raw, untranscoded) stream URL for the "open in external player"
+	// control — a desktop player handles any codec, so it's offered regardless
+	// of whether the browser can play the file inline.
+	const externalUrl = $derived(api.urls.stream(infoHash as string, fileIdx));
 
 	// Parse season/episode from query params for TV
 	const season = $derived(
@@ -182,7 +182,8 @@
 					(w) =>
 						w.media_type === type &&
 						w.tmdb_id === id &&
-						(type === "movie" || (w.season === s && w.episode === e)) &&
+						(type === "movie" ||
+							(w.season === s && w.episode === e)) &&
 						w.progress > 0,
 				);
 				if (
@@ -248,7 +249,11 @@
 			if (mediaType === "movie") {
 				subtitleTracks = await api.subtitles.movie(item.id);
 			} else if (season !== null && episode !== null) {
-				subtitleTracks = await api.subtitles.tv(item.id, season, episode);
+				subtitleTracks = await api.subtitles.tv(
+					item.id,
+					season,
+					episode,
+				);
 			}
 
 			if (subtitleTracks.length > 0) {
@@ -286,17 +291,20 @@
 		const check = async () => {
 			try {
 				const data = await api.streams.audioTracks(hash, idx);
-				const tracks: AudioTrackInfo[] = data.tracks ?? [];
+				const tracks: AudioTrack[] = data.tracks ?? [];
 				if (data.duration) mediaDuration = data.duration;
+				if (data.chapters?.length) fileChapters = data.chapters;
 				if (tracks.length === 0) return; // keep polling until tracks appear
 				if (tracks.length > 1) fileAudioTracks = tracks;
 				if (
 					!hlsSessionId &&
+					!hlsStarting &&
 					tracks[0] &&
 					!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
 				) {
 					fileAudioTracks = tracks;
 					transcoding.enabled = true;
+					transcoding.onlyAudio = true;
 					startHlsRemux(hash, idx, 0, transcoding.onlyAudio);
 				}
 				// Stop once we also have a duration; keep polling if it hasn't
@@ -482,23 +490,27 @@
 	) {
 		stopHlsSession();
 		streamUrl = null;
+		hlsStarting = true;
 		try {
-			const t = startAt > 0 ? `&t=${startAt.toFixed(1)}` : "";
-			const res = await fetch(
-				`/api/stream/${hash}/${idx}/remux?audio=${audioIdx}${t}&onlyAudio=${onlyAudio}`,
-				{ method: "POST" },
+			const session = await api.streams.remux(
+				hash,
+				idx,
+				audioIdx,
+				startAt,
+				onlyAudio,
 			);
-			const data = await res.json();
-			hlsSessionId = data.session_id;
-			streamUrl = data.playlist_url;
+			hlsSessionId = session.session_id;
+			streamUrl = session.playlist_url;
 		} catch (e: any) {
 			error = e.message;
+		} finally {
+			hlsStarting = false;
 		}
 	}
 
 	function stopHlsSession() {
 		if (hlsSessionId) {
-			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(() => {});
+			api.hls.stop(hlsSessionId).catch(() => {});
 			hlsSessionId = null;
 		}
 	}
@@ -539,6 +551,7 @@
 			}))}
 			activeAudioTrack={activeAudioIdx}
 			onAudioSelect={(track) => switchAudio(track.id)}
+			chapters={fileChapters}
 			knownDuration={hlsSessionId ? mediaDuration : 0}
 			onSeekRestart={hlsSessionId ? seekRestart : undefined}
 			{streamStats}
@@ -552,6 +565,8 @@
 			onSubtitleSelect={selectSubtitleTrack}
 			onSubtitleOff={disableSubtitles}
 			backdrop={playerBackdrop}
+			{externalUrl}
+			onReveal={() => api.streams.reveal(infoHash as string, fileIdx)}
 			{startTime}
 			bind:this={playerRef}
 			bind:currentTime={playerTime}
@@ -573,6 +588,7 @@
 				? imageUrl(item.logo_path, "original")
 				: undefined}
 			backdrop={playerBackdrop}
+			{externalUrl}
 			tvMode={remote.mode === "tv"}
 			onClose={close}
 		/>

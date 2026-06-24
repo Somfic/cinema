@@ -17,8 +17,6 @@ use crate::config::Config;
 use crate::downloads::supervisor_guard::SupervisorGuard;
 use crate::tmdb;
 
-// ── Public types ─────────────────────────────────────────────────────────
-
 #[draad::ty]
 #[derive(sqlx::Type, PartialEq)]
 #[sqlx(type_name = "download_status", rename_all = "lowercase")]
