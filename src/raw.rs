@@ -19,7 +19,6 @@ use crate::hls;
 pub fn router() -> Router<AppContext> {
     Router::new()
         .route(crate::urls::STREAM, get(stream_file))
-        .route(crate::urls::STREAM_AUDIO, get(stream_audio_tracks))
         .route(crate::urls::HLS, get(hls_serve))
         .route(crate::urls::IMAGE, get(image_proxy))
         .route(crate::urls::FILE, get(serve_file))
@@ -195,44 +194,6 @@ async fn stream_file(
         .map(|s| s.to_string());
 
     serve_range_response(reader, total_size, range_header.as_deref(), "video/mp4")
-}
-
-async fn stream_audio_tracks(
-    State(ctx): State<AppContext>,
-    Path((info_hash, file_idx)): Path<(String, usize)>,
-) -> Result<axum::Json<serde_json::Value>, RawError> {
-    let engine = TorrentEngine::get();
-    let path = engine.file_path(&info_hash, file_idx)?;
-    let (tracks, subtitles, duration) = tokio::join!(
-        TorrentEngine::audio_tracks(&path),
-        TorrentEngine::subtitle_tracks(&path),
-        TorrentEngine::probe_duration(&path),
-    );
-
-    // Filter embedded subtitle tracks by configured languages
-    let subtitles = {
-        let allowed: Vec<&str> = ctx
-            .config
-            .subtitle_languages
-            .iter()
-            .map(|l| crate::subtitles::to_iso639_2(l))
-            .collect();
-        subtitles
-            .into_iter()
-            .filter(|s| {
-                s.language
-                    .as_deref()
-                    .map(|l| allowed.contains(&l))
-                    .unwrap_or(true) // keep tracks with unknown language
-            })
-            .collect::<Vec<_>>()
-    };
-
-    Ok(axum::Json(serde_json::json!({
-        "tracks": tracks,
-        "subtitles": subtitles,
-        "duration": duration,
-    })))
 }
 
 async fn hls_serve(

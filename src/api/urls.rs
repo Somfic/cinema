@@ -9,10 +9,6 @@ pub trait Urls {
     #[get("/api/stream/{info_hash}/{file_idx}")]
     fn stream(info_hash: String, file_idx: i64);
 
-    /// Audio tracks in a torrent.
-    #[get("/api/stream/{info_hash}/{file_idx}/audio")]
-    fn stream_audio(info_hash: String, file_idx: i64);
-
     /// An HLS playlist or segment for a transcode session.
     #[get("/api/hls/{session_id}/{file}")]
     fn hls(session_id: String, file: String);
