@@ -292,12 +292,17 @@ impl StreamsApi for AppContext {
     }
 
     async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error> {
+        // Block until the torrent is loaded and its metadata is known.
+        let engine = TorrentEngine::get();
+        engine.ensure_torrent(&info_hash, &self.config).await?;
+
         // Probe through the local HTTP stream route, not the on-disk file: a
         // still-downloading torrent is sparse on disk (missing pieces = holes),
         // so a direct ffprobe fails until the file is complete. The HTTP route
         // serves through the blocking, range-capable reader the transcode uses,
         // so ffprobe gets coherent bytes (and can seek to a trailing moov atom).
         let url = self.stream_url(&info_hash, file_idx);
+
         let (tracks, subtitles, duration, chapters) = tokio::join!(
             TorrentEngine::audio_tracks(&url),
             TorrentEngine::subtitle_tracks(&url),

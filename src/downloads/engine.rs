@@ -22,6 +22,7 @@ pub struct TorrentEngine {
     /// Keep a FileStream alive per (info_hash, file_idx) to maintain
     /// sequential piece prioritization from librqbit's streaming system.
     stream_handles: tokio::sync::Mutex<HashMap<(String, usize), TorrentFileReader>>,
+    validation_locks: std::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl TorrentEngine {
@@ -62,6 +63,7 @@ impl TorrentEngine {
                 cancel,
                 span,
                 stream_handles: tokio::sync::Mutex::new(HashMap::new()),
+                validation_locks: std::sync::Mutex::new(HashMap::new()),
             })
             .map_err(|_| crate::app::Error::Generic("Torrent engine already initialized".into()))?;
 
@@ -115,6 +117,30 @@ impl TorrentEngine {
         config: &Config,
     ) -> crate::app::Result<super::TorrentHandle> {
         // Fast path: torrent already in session
+        if let Ok(id) = TorrentIdOrHash::parse(info_hash)
+            && let Some(handle) = self.session.get(id)
+        {
+            return Ok(super::TorrentHandle { managed: handle });
+        }
+
+        // Create a one-validation-per-info-hash lock
+        let lock = {
+            let mut map = self.validation_locks.lock().unwrap();
+            map.retain(|_, weak| weak.strong_count() > 0); // Retain only active locks
+            match map.get(info_hash).and_then(|weak| weak.upgrade()) {
+                Some(existing) => existing,
+                None => {
+                    let lock = Arc::new(tokio::sync::Mutex::new(()));
+                    map.insert(String::from(info_hash), Arc::downgrade(&lock));
+                    lock
+                }
+            }
+        };
+
+        // Await the lock. Only one task actully performs the validation
+        let _guard = lock.lock().await;
+
+        // Re-check fast path: in case of a race, winner has already added the torrent
         if let Ok(id) = TorrentIdOrHash::parse(info_hash)
             && let Some(handle) = self.session.get(id)
         {
