@@ -1,5 +1,5 @@
 import { api } from "$lib/api";
-import type { MediaType } from "./schema/tmdb";
+import type { MediaType } from "./schema";
 
 export function imageUrl(path: string, size: string = "original"): string {
 	// URL contract lives in the draad `#[raw]` schema; the catch-all carries
@@ -13,7 +13,7 @@ export async function getDetails(type: MediaType, id: number) {
 }
 
 export async function playStream(infoHash: string, fileIdx: number) {
-	const res = await api.streams.start(infoHash, fileIdx);
+	const res = await api.streams.start(infoHash, fileIdx, null);
 	return { url: res.url, local: res.local };
 }
 

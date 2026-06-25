@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		type Download,
+		type MediaType,
 		type ResolutionEstimate,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
@@ -14,7 +15,7 @@
 		season = 0,
 		episode = 0,
 	}: {
-		mediaType: string;
+		mediaType: MediaType;
 		tmdbId: number;
 		title: string;
 		posterPath?: string;
@@ -35,10 +36,10 @@
 				download =
 					items.find(
 						(d) =>
-							d.media_type === mediaType &&
-							d.tmdb_id === tmdbId &&
-							d.season === season &&
-							d.episode === episode,
+							d.meta?.media_type === mediaType &&
+							d.meta.tmdb_id === tmdbId &&
+							d.meta.season === season &&
+							d.meta.episode === episode,
 					) ?? null;
 			})
 			.catch(() => {});
@@ -46,7 +47,7 @@
 
 	// Poll while downloading
 	$effect(() => {
-		if (download?.status !== "downloading" && download?.status !== "queued")
+		if (download?.status !== "Downloading" && download?.status !== "Queued")
 			return;
 		const interval = setInterval(() => {
 			api.downloads
@@ -55,10 +56,10 @@
 					download =
 						items.find(
 							(d) =>
-								d.media_type === mediaType &&
-								d.tmdb_id === tmdbId &&
-								d.season === season &&
-								d.episode === episode,
+								d.meta?.media_type === mediaType &&
+								d.meta.tmdb_id === tmdbId &&
+								d.meta.season === season &&
+								d.meta.episode === episode,
 						) ?? null;
 				})
 				.catch(() => {});
@@ -86,7 +87,7 @@
 
 	async function pickResolution(resolution: string) {
 		dropdownOpen = false;
-		await api.downloads.enqueue({
+		const id = await api.downloads.enqueue({
 			media_type: mediaType,
 			tmdb_id: tmdbId,
 			title,
@@ -97,16 +98,13 @@
 			info_hash: null,
 			file_idx: null,
 		});
-		download = {
-			status: "queued",
-			resolution,
-			downloaded_bytes: 0,
-		} as Download;
+		const downloads = await api.downloads.list();
+		download = downloads.find((download) => download.id === id) ?? null;
 	}
 
 	function handleClick() {
 		if (download) {
-			api.downloads.delete(download.id);
+			api.downloads.remove(download.id);
 			download = null;
 		}
 	}
@@ -118,18 +116,32 @@
 	);
 
 	const icon = $derived(
-		download?.status === "completed"
+		download?.status === "Completed"
 			? "HardDriveDownload"
-			: download?.status === "downloading" || download?.status === "queued"
+			: download?.status === "Downloading" || download?.status === "Queued"
 				? "LoaderCircle"
 				: "Download",
 	);
 
 	const menuItems = $derived<PopoverMenuEntry[]>(
 		loadingEstimates
-			? [{ kind: "item", label: "Loading...", disabled: true, onclick: () => {} }]
+			? [
+					{
+						kind: "item",
+						label: "Loading...",
+						disabled: true,
+						onclick: () => {},
+					},
+				]
 			: estimates.length === 0
-				? [{ kind: "item", label: "No streams found", disabled: true, onclick: () => {} }]
+				? [
+						{
+							kind: "item",
+							label: "No streams found",
+							disabled: true,
+							onclick: () => {},
+						},
+					]
 				: estimates.map((est) => ({
 						kind: "item" as const,
 						label: est.resolution,
@@ -143,8 +155,10 @@
 	<Button
 		variant="ghost"
 		{icon}
-		label={download.status === "downloading" && progressPct != null ? `${progressPct}%` : undefined}
-		loading={download.status === "downloading" || download.status === "queued"}
+		label={download.status === "Downloading" && progressPct != null
+			? `${progressPct}%`
+			: undefined}
+		loading={download.status === "Downloading" || download.status === "Queued"}
 		onclick={handleClick}
 	/>
 {:else}

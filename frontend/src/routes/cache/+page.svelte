@@ -146,7 +146,7 @@
 			if (target.kind === "orphan") {
 				await api.cache.orphan(target.info_hash);
 			} else if (target.id != null) {
-				await api.downloads.delete(target.id);
+				await api.downloads.remove(target.id);
 			}
 		} catch {
 			/* ignored — UI just refetches */
@@ -326,13 +326,13 @@
 									{#if it.resolution}
 										<Pill label={it.resolution} />
 									{/if}
-									{#if it.status && it.status !== "completed"}
+									{#if it.status && it.status !== "Completed"}
 										<Pill label={it.status} />
 									{/if}
 									{#if it.kind === "orphan"}
 										<Pill label="orphan" />
 									{/if}
-									{#if it.kind === "download" && it.status !== "completed" && it.total_bytes && it.downloaded_bytes != null && it.total_bytes > 0}
+									{#if it.kind === "download" && it.status !== "Completed" && it.total_bytes && it.downloaded_bytes != null && it.total_bytes > 0}
 										<Pill
 											label={`${Math.round((it.downloaded_bytes / it.total_bytes) * 100)}%`}
 										/>
