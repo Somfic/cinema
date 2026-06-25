@@ -7,16 +7,14 @@
 	import {
 		type MediaItem,
 		type Stream,
-		type SubtitleTrack,
-		type SubtitleCue,
 		type SearchResult,
 		type WatchHistoryItem,
-		type EmbeddedSubtitleTrack,
-		type Chapter,
+		type MediaType,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
-	import { getDetails, imageUrl, playStream } from "$lib/utils";
+	import { getDetails, imageUrl } from "$lib/utils";
 	import { remote } from "$lib/remote.svelte";
+	import { PlaybackSession } from "$lib/playback.svelte";
 
 	// This client is a remote-driven TV display.
 	const isTv = $derived(remote.mode === "tv");
@@ -26,7 +24,6 @@
 	import MediaInfo from "$lib/components/MediaInfo.svelte";
 	import SeasonBrowser from "$lib/components/SeasonBrowser.svelte";
 	import EpisodeDetail from "$lib/components/EpisodeDetail.svelte";
-	import type { MediaType } from "$lib/schema/tmdb";
 
 	// ── Core state ──
 	let item = $state<MediaItem | null>(null);
@@ -40,48 +37,20 @@
 
 	// ── Player state ──
 	let selectedStream = $state<Stream | null>(null);
-	let streamUrl = $state<string | null>(null);
-	let subtitleTracks = $state<SubtitleTrack[]>([]);
-	let activeCues = $state<SubtitleCue[]>([]);
-	let activeTrackUrl = $state<string | undefined>(undefined);
 	let similarItems = $state<SearchResult[]>([]);
 	let resumeEntry = $state<WatchHistoryItem | null>(null);
 	let playerTime = $state(0);
 	let playerDuration = $state(0);
 	let playerPaused = $state(true);
 	let playerStartTime = $state(0);
-	let loadingSubtitles = $state(false);
-	let playingLocal = $state(false);
 
-	interface AudioTrackInfo {
-		index: number;
-		stream_index: number;
-		name: string;
-		language: string | null;
-		codec: string;
-	}
-
-	const BROWSER_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "vorbis", "flac"]);
-	interface StreamStats {
-		progress_bytes: number;
-		total_bytes: number;
-		download_speed_mbps: number;
-		peers: number;
-		finished: boolean;
-	}
-	let streamStats = $state<StreamStats | null>(null);
-	let pieceMap = $state<number[]>([]);
-	// Both stats and the piece bitmap arrive via WS push.
-	let statsUnsub: (() => void) | undefined;
-	let piecesUnsub: (() => void) | undefined;
-
-	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
-	let fileChapters = $state<Chapter[]>([]);
-	let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
-	let activeAudioIdx = $state(0);
-	let mediaDuration = $state(0);
-	let hlsSessionId = $state<string | null>(null);
-	let transcoding = $state({ enabled: false, onlyAudio: false });
+	const session = new PlaybackSession({
+		item: () => item,
+		season: () => selectedSeason,
+		episode: () => selectedEpisode,
+		currentStream: () => selectedStream,
+		onError: (msg) => (error = msg),
+	});
 
 	// ── Derived ──
 	const slideIndex = $derived(
@@ -349,7 +318,7 @@
 	}
 
 	// ── Player ──
-	async function play(stream: Stream, fromResume = false) {
+	function play(stream: Stream, fromResume = false) {
 		if (!item) return;
 
 		// When acting as a remote, hand playback to the paired TV instead of
@@ -368,270 +337,25 @@
 
 		if (!fromResume) playerStartTime = 0;
 		selectedStream = stream;
-		streamUrl = null;
-		stopHlsSession();
 
 		const u = new URL(window.location.href);
 		u.searchParams.set("hash", stream.info_hash);
 		u.searchParams.set("file", String(stream.file_idx));
 		replaceState(u, {});
 
-		playStream(stream.info_hash, stream.file_idx)
-			.then(async (result) => {
-				playingLocal = result.local;
-				streamUrl = result.url;
-				fileAudioTracks = [];
-				fileChapters = [];
-				activeAudioIdx = 0;
-				pollAudioTracks(stream.info_hash, stream.file_idx);
-				if (!result.local) pollStreamStats(stream.info_hash, stream.file_idx);
-			})
-			.catch((e) => {
+		session
+			.start(stream)
+			.then(() => session.loadSubtitles())
+			.catch((e: Error) => {
 				error = e.message;
 				selectedStream = null;
 			});
-
-		loadSubtitles();
-	}
-
-	let audioPollTimer: ReturnType<typeof setInterval> | undefined;
-
-	function pollAudioTracks(infoHash: string, fileIdx: number) {
-		if (audioPollTimer) clearInterval(audioPollTimer);
-
-		const check = async () => {
-			try {
-				const data = await api.streams.audioTracks(infoHash, fileIdx);
-				// Discard results from a superseded stream: an episode/source
-				// switch may have happened while this request was in flight, and
-				// applying its data would write the previous file's chapters,
-				// audio tracks, and subtitles back over the new one.
-				if (
-					selectedStream?.info_hash !== infoHash ||
-					selectedStream?.file_idx !== fileIdx
-				)
-					return;
-				const tracks: AudioTrackInfo[] = data.tracks ?? [];
-				const subs: EmbeddedSubtitleTrack[] = data.subtitles ?? [];
-				if (data.duration) mediaDuration = data.duration;
-				if (data.chapters?.length) fileChapters = data.chapters;
-				if (tracks.length > 1) fileAudioTracks = tracks;
-				if (
-					!hlsSessionId &&
-					tracks[0] &&
-					!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
-				) {
-					fileAudioTracks = tracks;
-					transcoding.enabled = true;
-					transcoding.onlyAudio = true;
-					startHlsRemux(infoHash, fileIdx, 0, transcoding.onlyAudio);
-				}
-				if (subs.length > 0 && embeddedSubtitleTracks.length === 0) {
-					embeddedSubtitleTracks = subs;
-					// Prepend embedded tracks to subtitle list. The url is a
-					// synthetic id; embedded cues are fetched over RPC, not by URL.
-					const embedded: SubtitleTrack[] = subs.map((s) => ({
-						id: `embedded:${s.stream_index}`,
-						language: s.language ?? "und",
-						url: `embedded:${s.stream_index}`,
-						score: 1000, // embedded subs are perfectly synced
-					}));
-					subtitleTracks = [...embedded, ...subtitleTracks];
-					// Auto-select first embedded track if no track is active
-					if (!activeTrackUrl && embedded.length > 0) {
-						selectSubtitleTrack(embedded[0]);
-					}
-				}
-				// Stop polling once we have a duration; keep going if it hasn't
-				// resolved yet (e.g. an mp4 whose moov atom isn't downloaded).
-				if (mediaDuration > 0) {
-					clearInterval(audioPollTimer);
-					audioPollTimer = undefined;
-				}
-			} catch {}
-		};
-
-		check();
-		audioPollTimer = setInterval(check, 10_000);
-	}
-
-	function pollStreamStats(infoHash: string, fileIdx: number) {
-		stopStreamStats();
-		streamStats = null;
-		pieceMap = [];
-
-		statsUnsub = api.streamsEvents.onStats((p) => {
-			if (p.info_hash !== infoHash) return;
-			streamStats = {
-				progress_bytes: p.progress_bytes,
-				total_bytes: p.total_bytes,
-				download_speed_mbps: p.download_speed_mbps,
-				peers: p.peers,
-				finished: p.finished,
-			};
-		});
-
-		piecesUnsub = api.streamsEvents.onPieces((p) => {
-			if (p.info_hash !== infoHash || p.file_idx !== fileIdx) return;
-			pieceMap = p.pieces;
-		});
-	}
-
-	function stopStreamStats() {
-		if (statsUnsub) {
-			statsUnsub();
-			statsUnsub = undefined;
-		}
-		if (piecesUnsub) {
-			piecesUnsub();
-			piecesUnsub = undefined;
-		}
-		streamStats = null;
-		pieceMap = [];
-	}
-
-	async function switchAudio(idx: number) {
-		if (!selectedStream) return;
-		activeAudioIdx = idx;
-		await startHlsRemux(
-			selectedStream.info_hash,
-			selectedStream.file_idx,
-			idx,
-			transcoding.onlyAudio,
-			playerTime,
-		);
-	}
-
-	// Seek beyond the transcoded window: restart the HLS transcode at the target
-	// time. `-ss`/`-copyts` keep currentTime aligned to the absolute timeline,
-	// so the player resumes at the sought position once the new playlist loads.
-	async function seekRestart(time: number) {
-		if (!selectedStream) return;
-		await startHlsRemux(
-			selectedStream.info_hash,
-			selectedStream.file_idx,
-			activeAudioIdx,
-			transcoding.onlyAudio,
-			time,
-		);
-	}
-
-	async function toggleTranscoding(enabled: boolean, onlyAudio: boolean) {
-		if (!selectedStream) return;
-		if (enabled) {
-			await startHlsRemux(
-				selectedStream.info_hash,
-				selectedStream.file_idx,
-				activeAudioIdx,
-				onlyAudio,
-				playerTime,
-			);
-		} else {
-			stopHlsSession();
-			const result = await playStream(
-				selectedStream.info_hash,
-				selectedStream.file_idx,
-			);
-			streamUrl = result.url;
-		}
-	}
-
-	async function startHlsRemux(
-		infoHash: string,
-		fileIdx: number,
-		audioIdx: number,
-		onlyAudio: boolean,
-		startAt = 0,
-	) {
-		stopHlsSession();
-		streamUrl = null;
-		try {
-			const session = await api.streams.remux(
-				infoHash,
-				fileIdx,
-				audioIdx,
-				startAt,
-				onlyAudio,
-			);
-			hlsSessionId = session.session_id;
-			streamUrl = session.playlist_url;
-		} catch (e: any) {
-			error = e.message;
-		}
-	}
-
-	function stopHlsSession() {
-		if (hlsSessionId) {
-			api.hls.stop(hlsSessionId).catch(() => {});
-			hlsSessionId = null;
-		}
-	}
-
-	async function loadSubtitles() {
-		if (!item) return;
-		loadingSubtitles = true;
-		try {
-			if (item.media_type === "movie") {
-				subtitleTracks = await api.subtitles.movie(item.id);
-			} else if (selectedSeason !== null && selectedEpisode !== null) {
-				subtitleTracks = await api.subtitles.tv(
-					item.id,
-					selectedSeason,
-					selectedEpisode,
-				);
-			}
-			if (subtitleTracks.length > 0)
-				await selectSubtitleTrack(subtitleTracks[0]);
-		} catch {
-		} finally {
-			loadingSubtitles = false;
-		}
-	}
-
-	async function selectSubtitleTrack(track: SubtitleTrack) {
-		loadingSubtitles = true;
-		activeTrackUrl = track.url;
-		try {
-			if (track.id.startsWith("embedded:") && selectedStream) {
-				// Embedded cues are extracted on demand over RPC, keyed by the
-				// ffmpeg stream index encoded in the track id.
-				const streamIndex = Number(track.id.slice("embedded:".length));
-				activeCues = await api.streams.embeddedSubtitles(
-					selectedStream.info_hash,
-					selectedStream.file_idx,
-					streamIndex,
-				);
-			} else {
-				activeCues = await api.subtitles.cues(track.url);
-			}
-		} catch {
-			activeCues = [];
-		} finally {
-			loadingSubtitles = false;
-		}
-	}
-
-	function disableSubtitles() {
-		activeCues = [];
-		activeTrackUrl = undefined;
 	}
 
 	function stopPlaying() {
-		saveProgress();
-		if (audioPollTimer) {
-			clearInterval(audioPollTimer);
-			audioPollTimer = undefined;
-		}
-		stopStreamStats();
-		stopHlsSession();
+		session.saveProgress(playerTime, playerDuration);
+		session.stop();
 		selectedStream = null;
-		streamUrl = null;
-		subtitleTracks = [];
-		activeCues = [];
-		activeTrackUrl = undefined;
-		fileAudioTracks = [];
-		fileChapters = [];
-		embeddedSubtitleTracks = [];
 		const u = new URL(window.location.href);
 		u.searchParams.delete("hash");
 		u.searchParams.delete("file");
@@ -656,41 +380,29 @@
 	}
 
 	// ── Progress saving ──
-	function saveProgress() {
-		if (!item || !selectedStream || playerTime <= 0) return;
-		// For TV, don't save without season/episode
-		if (item.media_type === "tv" && (!selectedSeason || !selectedEpisode))
-			return;
-		api.watch.record({
-			media_type: item.media_type,
-			tmdb_id: item.id,
-			title: item.title,
-			poster_path: item.poster_path ?? null,
-			season: selectedSeason ?? null,
-			episode: selectedEpisode ?? null,
-			info_hash: selectedStream.info_hash,
-			file_idx: selectedStream.file_idx,
-			progress: playerTime,
-			duration: playerDuration,
-		});
-	}
-
 	// Save when paused
 	$effect(() => {
 		if (playerPaused && selectedStream && playerTime > 0) {
-			saveProgress();
+			session.saveProgress(playerTime, playerDuration);
 		}
 	});
 
 	// Save periodically every 30s while playing
 	$effect(() => {
 		if (!selectedStream) return;
-		const interval = setInterval(saveProgress, 30000);
+		const interval = setInterval(
+			() => session.saveProgress(playerTime, playerDuration),
+			30000,
+		);
 		return () => clearInterval(interval);
 	});
 
-	// Save on page leave
-	onDestroy(() => saveProgress());
+	// Save on page leave and tear down the session (audio poll timer, stats
+	// subscriptions, backend HLS session) so navigating away doesn't leak them.
+	onDestroy(() => {
+		session.saveProgress(playerTime, playerDuration);
+		session.stop();
+	});
 </script>
 
 <svelte:head>
@@ -792,28 +504,30 @@
 	<div class="player-overlay" class:active={selectedStream !== null}>
 		{#if selectedStream}
 			<VideoPlayer
-				src={streamUrl ?? ""}
-				subtitles={activeCues}
-				{streamStats}
-				{pieceMap}
+				src={session.streamUrl ?? ""}
+				subtitles={session.activeCues}
+				streamStats={session.streamStats}
+				pieceMap={session.pieceMap}
 				title={playerTitle}
 				topline={playerTopline}
 				titleImage={item?.logo_path
 					? imageUrl(item.logo_path, "original")
 					: undefined}
-				audioTracks={fileAudioTracks.map((t) => ({
+				audioTracks={session.fileAudioTracks.map((t) => ({
 					id: t.stream_index,
 					name: t.name,
 					lang: t.language ?? undefined,
 				}))}
-				activeAudioTrack={activeAudioIdx}
-				onAudioSelect={(track) => switchAudio(track.id)}
-				chapters={fileChapters}
-				knownDuration={hlsSessionId ? mediaDuration : 0}
-				onSeekRestart={hlsSessionId ? seekRestart : undefined}
-				{subtitleTracks}
-				{loadingSubtitles}
-				{activeTrackUrl}
+				activeAudioTrack={session.activeAudioIdx}
+				onAudioSelect={(track) => session.switchAudio(track.id, playerTime)}
+				chapters={session.fileChapters}
+				knownDuration={session.hlsSessionId ? session.mediaDuration : 0}
+				onSeekRestart={session.hlsSessionId
+					? (t) => session.seekRestart(t)
+					: undefined}
+				subtitleTracks={session.subtitleTracks}
+				loadingSubtitles={session.loadingSubtitles}
+				activeTrackUrl={session.activeTrackUrl}
 				accent={accentColor}
 				backdrop={activeEpisode?.stills?.[0]
 					? imageUrl(activeEpisode.stills[0], "original")
@@ -821,9 +535,10 @@
 						? imageUrl(item.backdrops[0], "original")
 						: undefined}
 				startTime={playerStartTime}
-				bind:transcoding
-				onTranscodingChange={toggleTranscoding}
-				streams={playingLocal ? [] : streams}
+				bind:transcoding={session.transcoding}
+				onTranscodingChange={(enabled, onlyAudio) =>
+					session.toggleTranscoding(enabled, onlyAudio, playerTime)}
+				streams={session.playingLocal ? [] : streams}
 				activeStreamHash={selectedStream?.info_hash}
 				externalUrl={api.urls.stream(
 					selectedStream.info_hash,
@@ -835,13 +550,13 @@
 						selectedStream.info_hash,
 						selectedStream.file_idx,
 					)}
-				onStreamSelect={playingLocal ? undefined : switchStream}
+				onStreamSelect={session.playingLocal ? undefined : switchStream}
 				bind:currentTime={playerTime}
 				bind:duration={playerDuration}
 				bind:paused={playerPaused}
 				onClose={stopPlaying}
-				onSubtitleSelect={selectSubtitleTrack}
-				onSubtitleOff={disableSubtitles}
+				onSubtitleSelect={(t) => session.selectSubtitleTrack(t)}
+				onSubtitleOff={() => session.disableSubtitles()}
 				autoplay
 			/>
 		{/if}
