@@ -1,6 +1,6 @@
 use crate::{
     app::{AppContext, Error},
-    downloads::DownloadStatus,
+    downloads::types::DownloadStatus,
     file_system, tmdb,
 };
 
@@ -38,7 +38,7 @@ pub struct CacheEntry {
 }
 
 pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error> {
-    let downloads = crate::downloads::find_all_downloads(&ctx.db).await?;
+    let downloads = crate::downloads::types::Download::find_all(&ctx.db).await?;
 
     let torrents = file_system::torrents_root(ctx);
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();

@@ -214,7 +214,7 @@ impl StreamsApi for AppContext {
         file_idx: i32,
         media: Option<StreamMediaContext>,
     ) -> Result<StartStream, Error> {
-        let media = media.map(|m| crate::downloads::MediaContext {
+        let media = media.map(|m| crate::downloads::types::MediaContext {
             media_type: m.media_type,
             tmdb_id: m.tmdb_id,
             title: m.title,
@@ -223,7 +223,7 @@ impl StreamsApi for AppContext {
             episode: m.episode,
             resolution: m.resolution,
         });
-        crate::downloads::ensure_download(
+        crate::downloads::types::Download::ensure_download(
             &self.db,
             &self.downloads,
             &info_hash,
@@ -249,8 +249,14 @@ impl StreamsApi for AppContext {
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error> {
-        crate::downloads::ensure_download(&self.db, &self.downloads, &info_hash, file_idx, None)
-            .await?;
+        crate::downloads::types::Download::ensure_download(
+            &self.db,
+            &self.downloads,
+            &info_hash,
+            file_idx,
+            None,
+        )
+        .await?;
         let (session_id, playlist_url) = crate::hls::start_session(
             &self.storage,
             &self.config,

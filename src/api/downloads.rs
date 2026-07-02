@@ -1,5 +1,5 @@
 use crate::app::{AppContext, Error};
-use crate::downloads::{Download, MediaContext};
+use crate::downloads::types::{Download, MediaContext};
 use crate::tmdb::{MediaType, TmdbClient};
 use crate::{streams as streams_mod, tmdb};
 
@@ -73,7 +73,7 @@ pub trait DownloadsApi {
 #[draad::api]
 impl DownloadsApi for AppContext {
     async fn list(&self) -> Result<Vec<Download>, Error> {
-        crate::downloads::find_all_downloads(&self.db).await
+        crate::downloads::types::Download::find_all(&self.db).await
     }
 
     async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, Error> {
@@ -113,7 +113,7 @@ impl DownloadsApi for AppContext {
             resolution: Some(body.resolution),
         };
 
-        let id = crate::downloads::ensure_download(
+        let id = crate::downloads::types::Download::ensure_download(
             &self.db,
             &self.downloads,
             &info_hash,
@@ -131,7 +131,7 @@ impl DownloadsApi for AppContext {
     async fn resume(&self, id: i32) -> Result<(), Error> {
         // Reset terminal/idle state so start treats it as a fresh launch.
         let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
-        crate::downloads::reset_for_restart(&mut tx, id).await?;
+        crate::downloads::types::Download::reset_for_restart(&mut tx, id).await?;
         tx.commit().await.map_err(Error::DatabaseError)?;
         self.downloads.start(id).await?;
         Ok(())

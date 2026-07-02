@@ -8,9 +8,9 @@ use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 mod engine;
 mod manager;
-
 mod supervisor;
 mod supervisor_guard;
+pub mod types;
 
 pub use engine::{AudioTrack, Chapter, EmbeddedSubtitleTrack, TorrentEngine};
 pub use manager::*;

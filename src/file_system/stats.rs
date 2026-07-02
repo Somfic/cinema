@@ -33,7 +33,7 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
     let hls_bytes = file_system::dir_size(&file_system::hls_root(ctx)).await;
 
     // Per-category torrent breakdown matches list_cache_items so the chart and list agree.
-    let downloads = crate::downloads::find_all_downloads(&ctx.db).await?;
+    let downloads = crate::downloads::types::Download::find_all(&ctx.db).await?;
 
     let torrents = file_system::torrents_root(ctx);
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
