@@ -7,44 +7,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 mod engine;
-pub(crate) mod manager; // This doesn't have to be public, but draad requires the path to resolve
+mod manager;
 
 mod supervisor;
 mod supervisor_guard;
 
-pub use engine::TorrentEngine;
+pub use engine::{AudioTrack, Chapter, EmbeddedSubtitleTrack, TorrentEngine};
 pub use manager::*;
-
-#[draad::ty]
-pub struct AudioTrack {
-    /// ffmpeg absolute stream index
-    pub index: usize,
-    /// audio-only index (0, 1, 2...)
-    pub stream_index: usize,
-    pub name: String,
-    pub language: Option<String>,
-    pub codec: String,
-}
-
-#[draad::ty]
-pub struct EmbeddedSubtitleTrack {
-    /// ffmpeg absolute stream index
-    pub index: usize,
-    /// subtitle-only index (0, 1, 2...)
-    pub stream_index: usize,
-    pub language: Option<String>,
-    pub name: String,
-    pub codec: String,
-}
-
-#[draad::ty]
-pub struct Chapter {
-    /// chapter start time in seconds
-    pub start: f64,
-    /// chapter end time in seconds
-    pub end: f64,
-    pub title: String,
-}
 
 /// Trait combining AsyncRead + AsyncSeek for torrent file streaming.
 trait AsyncReadSeek: AsyncRead + AsyncSeek + Send + Unpin {}

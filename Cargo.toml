@@ -9,11 +9,10 @@ path = "src/main.rs"
 
 [dependencies]
 # Draad
-draad = { git = "https://github.com/somfic/draad", tag = "v0.3.0", features = [
+draad = { git = "https://github.com/ultrazi0/draad", tag = "v0.4.0-pre.1", features = [
 	"runtime",
 ] }
 async-trait = "0.1"
-ts-rs = { version = "12", features = ["chrono", "chrono-impl"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "macros"] }

@@ -4,7 +4,7 @@ use crate::AppContext;
 use crate::app::Error;
 
 mod cache;
-pub(crate) mod stats; // This doesn't have to be public, but draad requires the path to resolve
+mod stats;
 
 pub use cache::{CacheEntry, clear_app_cache, delete_cache_orphan, list_cache_items};
 pub use stats::{DiskStats, get_cache_disk};

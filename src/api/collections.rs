@@ -1,7 +1,7 @@
-pub use crate::app::Error;
+use crate::app::Error;
 use crate::{app::AppContext, tmdb::MediaType};
 
-pub(crate) use crate::tmdb;
+use crate::tmdb;
 
 #[draad::ty]
 pub struct CollectionRequest {

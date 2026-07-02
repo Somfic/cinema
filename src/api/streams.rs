@@ -1,7 +1,6 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
+use crate::app::{AppContext, Error};
 use crate::downloads::TorrentEngine;
-pub use crate::streams::Stream;
+use crate::streams::Stream;
 use crate::tmdb::{self, MediaType, TmdbClient};
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
 

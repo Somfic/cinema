@@ -13,6 +13,37 @@ use crate::{config::Config, downloads::TorrentFileReader};
 
 static ENGINE: OnceLock<TorrentEngine> = OnceLock::new();
 
+#[draad::ty]
+pub struct AudioTrack {
+    /// ffmpeg absolute stream index
+    pub index: usize,
+    /// audio-only index (0, 1, 2...)
+    pub stream_index: usize,
+    pub name: String,
+    pub language: Option<String>,
+    pub codec: String,
+}
+
+#[draad::ty]
+pub struct EmbeddedSubtitleTrack {
+    /// ffmpeg absolute stream index
+    pub index: usize,
+    /// subtitle-only index (0, 1, 2...)
+    pub stream_index: usize,
+    pub language: Option<String>,
+    pub name: String,
+    pub codec: String,
+}
+
+#[draad::ty]
+pub struct Chapter {
+    /// chapter start time in seconds
+    pub start: f64,
+    /// chapter end time in seconds
+    pub end: f64,
+    pub title: String,
+}
+
 pub struct TorrentEngine {
     session: Arc<Session>,
     api: Api,

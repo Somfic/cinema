@@ -1,8 +1,5 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
-use crate::tmdb::{MediaType, TmdbClient};
-
-pub use crate::tmdb::{MediaItem, SearchResult};
+use crate::app::{AppContext, Error};
+use crate::tmdb::{MediaItem, MediaType, SearchResult, TmdbClient};
 
 #[draad::api(namespace = "media")]
 pub trait MediaApi {

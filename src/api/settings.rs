@@ -1,5 +1,4 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
+use crate::app::{AppContext, Error};
 
 #[draad::ty]
 pub struct YoutubeCookiesStatus {

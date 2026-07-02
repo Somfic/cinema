@@ -1,7 +1,5 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
-pub use crate::downloads::Download;
-use crate::downloads::MediaContext;
+use crate::app::{AppContext, Error};
+use crate::downloads::{Download, MediaContext};
 use crate::tmdb::{MediaType, TmdbClient};
 use crate::{streams as streams_mod, tmdb};
 

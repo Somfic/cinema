@@ -1,6 +1,6 @@
 use crate::app::{AppContext, Error};
 
-pub(crate) use crate::file_system;
+use crate::file_system;
 
 #[draad::api(namespace = "cache")]
 pub trait CacheApi {

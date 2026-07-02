@@ -1,7 +1,5 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
-pub use crate::tmdb::SearchResult;
-use crate::tmdb::TmdbClient;
+use crate::app::{AppContext, Error};
+use crate::tmdb::{SearchResult, TmdbClient};
 
 #[draad::api(namespace = "search")]
 pub trait SearchApi {

@@ -1,5 +1,5 @@
 use crate::app::AppContext;
-pub use crate::app::Error;
+use crate::app::Error;
 
 #[draad::api(namespace = "hls")]
 pub trait HlsApi {

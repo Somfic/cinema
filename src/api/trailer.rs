@@ -1,6 +1,5 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
-pub use crate::trailer::TrailerMeta;
+use crate::app::{AppContext, Error};
+use crate::trailer::TrailerMeta;
 
 #[draad::api(namespace = "trailer")]
 pub trait TrailerApi {

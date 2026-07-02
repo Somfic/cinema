@@ -10,7 +10,7 @@ use tracing::info;
 mod api;
 mod app;
 mod config;
-pub(crate) mod downloads;
+mod downloads;
 mod file_system;
 mod hls;
 mod logging;
@@ -25,7 +25,11 @@ mod ws;
 use app::{AppContext, Result};
 use config::Config;
 
-draad::include_generated!(crate::AppContext, draad::runtime::EventBus);
+draad::include_generated!(
+    crate::AppContext,
+    draad::runtime::EventBus,
+    custom_ts = "custom"
+);
 
 #[derive(Parser)]
 #[command(name = "cinema", about = "Cinema media server")]

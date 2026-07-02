@@ -1,5 +1,7 @@
-pub use crate::app::Error;
-use crate::{app::AppContext, tmdb};
+use crate::{
+    app::{AppContext, Error},
+    tmdb,
+};
 
 #[draad::ty]
 pub struct RecordWatch {
