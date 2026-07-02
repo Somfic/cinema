@@ -248,7 +248,7 @@
 		if (!item) return;
 		loadingStreams = true;
 		try {
-			streams = await api.streams.movie(item.id);
+			streams = await api.streams.movie(item.tmdb_id);
 			if (streams.length > 0) play(streams[0]);
 		} catch (e: any) {
 			error = e.message;
@@ -261,7 +261,7 @@
 		if (!item) return;
 		loadingStreams = true;
 		try {
-			streams = await api.streams.tv(item.id, season, episode);
+			streams = await api.streams.tv(item.tmdb_id, season, episode);
 			if (streams.length > 0) play(streams[0]);
 		} catch (e: any) {
 			error = e.message;
@@ -306,10 +306,10 @@
 		// Fetch streams in background so the stream switcher works
 		try {
 			if (item.media_type === "movie") {
-				streams = await api.streams.movie(item.id);
+				streams = await api.streams.movie(item.tmdb_id);
 			} else if (selectedSeason != null && selectedEpisode != null) {
 				streams = await api.streams.tv(
-					item.id,
+					item.tmdb_id,
 					selectedSeason,
 					selectedEpisode,
 				);
@@ -326,7 +326,7 @@
 		if (remote.mode === "remote" && remote.pairedId) {
 			remote.cast({
 				type: item.media_type,
-				id: item.id,
+				id: item.tmdb_id,
 				infoHash: stream.info_hash,
 				fileIdx: stream.file_idx,
 				season: item.media_type === "tv" ? selectedSeason : null,
@@ -489,7 +489,7 @@
 						season={activeSeason}
 						episode={activeEpisode}
 						showTitle={item.title}
-						tmdbId={item.id}
+						tmdbId={item.tmdb_id}
 						{resumeEntry}
 						{loadingStreams}
 						onselectepisode={selectEpisode}
@@ -546,10 +546,7 @@
 				)}
 				onReveal={() =>
 					selectedStream &&
-					api.streams.reveal(
-						selectedStream.info_hash,
-						selectedStream.file_idx,
-					)}
+					api.streams.reveal(selectedStream.info_hash, selectedStream.file_idx)}
 				onStreamSelect={session.playingLocal ? undefined : switchStream}
 				bind:currentTime={playerTime}
 				bind:duration={playerDuration}

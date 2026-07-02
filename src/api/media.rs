@@ -24,12 +24,12 @@ pub trait MediaApi {
 impl MediaApi for AppContext {
     async fn movie_details(&self, id: i64) -> Result<MediaItem, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        tmdb.details(MediaType::Movie, id).await
+        tmdb.details(MediaType::Movie, id, &self.db).await
     }
 
     async fn tv_details(&self, id: i64) -> Result<MediaItem, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        tmdb.details(MediaType::Tv, id).await
+        tmdb.details(MediaType::Tv, id, &self.db).await
     }
 
     async fn similar(&self, media_type: String, id: i64) -> Result<Vec<SearchResult>, Error> {

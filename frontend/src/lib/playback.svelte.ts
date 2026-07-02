@@ -122,12 +122,12 @@ export class PlaybackSession {
 		try {
 			let external: SubtitleTrack[] = [];
 			if (item.media_type === "movie") {
-				external = await api.subtitles.movie(item.id);
+				external = await api.subtitles.movie(item.tmdb_id);
 			} else {
 				const s = this.ctx.season();
 				const e = this.ctx.episode();
 				if (s !== null && e !== null) {
-					external = await api.subtitles.tv(item.id, s, e);
+					external = await api.subtitles.tv(item.tmdb_id, s, e);
 				}
 			}
 			// Preserve any embedded tracks that `#pollAudioTracks` may have
@@ -380,7 +380,7 @@ export class PlaybackSession {
 		api.watch
 			.record({
 				media_type: item.media_type,
-				tmdb_id: item.id,
+				tmdb_id: item.tmdb_id,
 				title: item.title,
 				poster_path: item.poster_path ?? null,
 				season: s ?? null,

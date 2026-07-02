@@ -2,125 +2,9 @@ use serde::Deserialize;
 
 use crate::config::Config;
 
-#[draad::ty]
-pub struct MediaItem {
-    pub id: i64,
-    pub imdb_id: Option<String>,
-    pub media_type: MediaType,
-    pub title: String,
-    pub overview: Option<String>,
-    pub tagline: Option<String>,
-    pub release_date: Option<String>,
-    pub runtime: Option<i64>,
-    pub rating: Option<f64>,
-    pub poster_path: Option<String>,
-    pub backdrops: Vec<String>,
-    pub genres: Vec<Genre>,
-    pub videos: Vec<Video>,
-    pub logo_path: Option<String>,
-    pub seasons: Option<Vec<Season>>,
-    pub cast: Vec<CastMember>,
-    pub directors: Vec<CrewMember>,
-    pub next_episode: Option<NextEpisode>,
-}
+mod types;
 
-#[draad::ty]
-pub struct NextEpisode {
-    pub season_number: i64,
-    pub episode_number: i64,
-    pub name: String,
-    pub air_date: Option<String>,
-    pub still_path: Option<String>,
-}
-
-#[draad::ty]
-pub struct CastMember {
-    pub id: i64,
-    pub name: String,
-    pub character: Option<String>,
-    pub profile_path: Option<String>,
-}
-
-#[draad::ty]
-pub struct CrewMember {
-    pub id: i64,
-    pub name: String,
-    pub job: String,
-    pub profile_path: Option<String>,
-}
-
-#[draad::ty]
-#[derive(Copy, PartialEq, Eq, Hash, sqlx::Type)]
-#[serde(rename_all = "lowercase")]
-#[sqlx(type_name = "media_type", rename_all = "lowercase")]
-pub enum MediaType {
-    Movie,
-    Tv,
-}
-
-impl TryFrom<String> for MediaType {
-    type Error = crate::app::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "movie" => Ok(MediaType::Movie),
-            "tv" => Ok(MediaType::Tv),
-            _ => Err(crate::app::Error::InvalidInput(format!(
-                "Incorrect media type: \"{value}\""
-            ))),
-        }
-    }
-}
-
-#[draad::ty]
-pub struct SearchResult {
-    pub id: i64,
-    pub media_type: MediaType,
-    pub title: String,
-    pub overview: Option<String>,
-    pub release_date: Option<String>,
-    pub poster_path: Option<String>,
-    pub backdrop_path: Option<String>,
-}
-
-#[draad::ty]
-pub struct Genre {
-    pub id: i64,
-    pub name: String,
-}
-
-#[draad::ty]
-pub struct Video {
-    pub key: String,
-    pub site: String,
-    pub name: String,
-    pub video_type: String,
-    /// Whether TMDB marks this as an official (studio-published) video.
-    pub official: bool,
-    /// Max resolution reported by TMDB (e.g. 360, 720, 1080, 2160).
-    pub size: i64,
-    /// ISO-8601 publish timestamp, used to prefer the most recent trailer.
-    pub published_at: Option<String>,
-}
-
-#[draad::ty]
-pub struct Season {
-    pub id: i64,
-    pub season_number: i64,
-    pub name: String,
-    pub episode_count: i64,
-    pub poster_path: Option<String>,
-    pub air_date: Option<String>,
-    pub episodes: Vec<Episode>,
-}
-
-#[draad::ty]
-pub struct Episode {
-    pub episode_number: i64,
-    pub name: String,
-    pub overview: Option<String>,
-    pub stills: Vec<String>,
-}
+pub use types::*;
 
 // --- Raw TMDB response types (private) ---
 
@@ -308,59 +192,54 @@ struct TmdbImage {
 
 // --- Conversions ---
 
-fn convert_videos(videos: Option<TmdbVideos>) -> Vec<Video> {
-    videos
-        .map(|v| {
-            v.results
-                .into_iter()
-                .map(|v| Video {
-                    key: v.key,
-                    site: v.site,
-                    name: v.name,
-                    video_type: v.video_type,
-                    official: v.official,
-                    size: v.size,
-                    published_at: v.published_at,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+impl From<TmdbVideos> for Vec<Video> {
+    fn from(value: TmdbVideos) -> Self {
+        value
+            .results
+            .into_iter()
+            .map(|v| Video {
+                key: v.key,
+                site: v.site,
+                name: v.name,
+                video_type: v.video_type,
+                official: v.official,
+                size: v.size,
+                published_at: v.published_at,
+            })
+            .collect()
+    }
 }
 
-fn convert_cast(credits: &Option<TmdbCredits>) -> Vec<CastMember> {
-    credits
-        .as_ref()
-        .map(|c| {
-            c.cast
-                .iter()
-                .take(20)
-                .map(|m| CastMember {
-                    id: m.id,
-                    name: m.name.clone(),
-                    character: m.character.clone(),
-                    profile_path: m.profile_path.clone(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+impl From<&TmdbCredits> for Vec<CastMember> {
+    fn from(value: &TmdbCredits) -> Self {
+        value
+            .cast
+            .iter()
+            .take(20)
+            .map(|m| CastMember {
+                id: m.id,
+                name: m.name.clone(),
+                character: m.character.clone(),
+                profile_path: m.profile_path.clone(),
+            })
+            .collect()
+    }
 }
 
-fn convert_directors(credits: &Option<TmdbCredits>) -> Vec<CrewMember> {
-    credits
-        .as_ref()
-        .map(|c| {
-            c.crew
-                .iter()
-                .filter(|m| m.job == "Director")
-                .map(|m| CrewMember {
-                    id: m.id,
-                    name: m.name.clone(),
-                    job: m.job.clone(),
-                    profile_path: m.profile_path.clone(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+impl From<&TmdbCredits> for Vec<CrewMember> {
+    fn from(value: &TmdbCredits) -> Self {
+        value
+            .crew
+            .iter()
+            .filter(|m| m.job == "Director")
+            .map(|m| CrewMember {
+                id: m.id,
+                name: m.name.clone(),
+                job: m.job.clone(),
+                profile_path: m.profile_path.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Pick the best poster: prefer English, then no-language, then highest resolution
@@ -456,49 +335,75 @@ fn pick_logo(images: &Option<TmdbImages>) -> Option<String> {
         .map(|l| l.file_path.clone())
 }
 
-impl From<TmdbMovie> for MediaItem {
-    fn from(m: TmdbMovie) -> Self {
-        MediaItem {
-            id: m.id,
-            imdb_id: m.imdb_id,
+impl TmdbMovie {
+    async fn into_media_item<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>>(
+        self,
+        conn: E,
+    ) -> crate::app::Result<MediaItem> {
+        let id = MediaItem::upsert_raw(
+            self.id,
+            MediaType::Movie,
+            &self.title,
+            self.poster_path.as_ref(),
+            conn,
+        )
+        .await?;
+
+        Ok(MediaItem {
+            id,
+            tmdb_id: self.id,
+            imdb_id: self.imdb_id,
             media_type: MediaType::Movie,
-            title: m.title,
-            overview: m.overview,
-            tagline: m.tagline.map(|t| t.trim_end_matches('.').to_string()),
-            release_date: m.release_date,
-            runtime: m.runtime,
-            rating: m.vote_average,
-            poster_path: pick_poster(&m.images, m.poster_path.as_deref()),
-            backdrops: pick_backdrops(&m.images, m.backdrop_path.as_deref()),
-            genres: m.genres,
-            videos: convert_videos(m.videos),
-            logo_path: pick_logo(&m.images),
+            title: self.title,
+            overview: self.overview,
+            tagline: self.tagline.map(|t| t.trim_end_matches('.').to_string()),
+            release_date: self.release_date,
+            runtime: self.runtime,
+            rating: self.vote_average,
+            poster_path: pick_poster(&self.images, self.poster_path.as_deref()),
+            backdrops: pick_backdrops(&self.images, self.backdrop_path.as_deref()),
+            genres: self.genres,
+            videos: self.videos.map(Into::into).unwrap_or_default(),
+            logo_path: pick_logo(&self.images),
             seasons: None,
-            cast: convert_cast(&m.credits),
-            directors: convert_directors(&m.credits),
+            cast: self.credits.as_ref().map(Into::into).unwrap_or_default(),
+            directors: self.credits.as_ref().map(Into::into).unwrap_or_default(),
             next_episode: None,
-        }
+        })
     }
 }
 
-impl From<TmdbTv> for MediaItem {
-    fn from(t: TmdbTv) -> Self {
-        MediaItem {
-            id: t.id,
-            imdb_id: t.external_ids.and_then(|e| e.imdb_id),
+impl TmdbTv {
+    async fn into_media_item<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>>(
+        self,
+        conn: E,
+    ) -> crate::app::Result<MediaItem> {
+        let id = MediaItem::upsert_raw(
+            self.id,
+            MediaType::Movie,
+            &self.name,
+            self.poster_path.as_ref(),
+            conn,
+        )
+        .await?;
+
+        Ok(MediaItem {
+            id,
+            tmdb_id: self.id,
+            imdb_id: self.external_ids.and_then(|e| e.imdb_id),
             media_type: MediaType::Tv,
-            title: t.name,
-            overview: t.overview,
-            tagline: t.tagline.map(|t| t.trim_end_matches('.').to_string()),
-            release_date: t.first_air_date,
-            runtime: t.episode_run_time.and_then(|r| r.first().copied()),
-            rating: t.vote_average,
-            poster_path: pick_poster(&t.images, t.poster_path.as_deref()),
-            backdrops: pick_backdrops(&t.images, t.backdrop_path.as_deref()),
-            genres: t.genres,
-            videos: convert_videos(t.videos),
-            logo_path: pick_logo(&t.images),
-            seasons: t.seasons.map(|s| {
+            title: self.name,
+            overview: self.overview,
+            tagline: self.tagline.map(|t| t.trim_end_matches('.').to_string()),
+            release_date: self.first_air_date,
+            runtime: self.episode_run_time.and_then(|r| r.first().copied()),
+            rating: self.vote_average,
+            poster_path: pick_poster(&self.images, self.poster_path.as_deref()),
+            backdrops: pick_backdrops(&self.images, self.backdrop_path.as_deref()),
+            genres: self.genres,
+            videos: self.videos.map(Into::into).unwrap_or_default(),
+            logo_path: pick_logo(&self.images),
+            seasons: self.seasons.map(|s| {
                 s.into_iter()
                     .filter(|s| s.season_number > 0) // Exclude "Specials" (season 0)
                     .map(|s| Season {
@@ -512,16 +417,16 @@ impl From<TmdbTv> for MediaItem {
                     })
                     .collect()
             }),
-            cast: convert_cast(&t.credits),
-            directors: convert_directors(&t.credits),
-            next_episode: t.next_episode_to_air.map(|n| NextEpisode {
+            cast: self.credits.as_ref().map(Into::into).unwrap_or_default(),
+            directors: self.credits.as_ref().map(Into::into).unwrap_or_default(),
+            next_episode: self.next_episode_to_air.map(|n| NextEpisode {
                 season_number: n.season_number,
                 episode_number: n.episode_number,
                 name: n.name,
                 air_date: n.air_date,
                 still_path: n.still_path,
             }),
-        }
+        })
     }
 }
 
@@ -625,11 +530,13 @@ impl TmdbClient {
         Ok(results)
     }
 
-    pub async fn details(&self, media_type: MediaType, id: i64) -> crate::app::Result<MediaItem> {
-        let type_str = match media_type {
-            MediaType::Movie => "movie",
-            MediaType::Tv => "tv",
-        };
+    pub async fn details<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>>(
+        &self,
+        media_type: MediaType,
+        id: i64,
+        conn: E,
+    ) -> crate::app::Result<MediaItem> {
+        let type_str: &str = media_type.into();
         let url = format!(
             "https://api.themoviedb.org/3/{}/{}?api_key={}&append_to_response=videos,images,external_ids,credits&include_image_language=en,null",
             type_str, id, self.api_key
@@ -638,8 +545,16 @@ impl TmdbClient {
         let body = res.text().await?;
 
         let mut item: MediaItem = match media_type {
-            MediaType::Movie => serde_json::from_str::<TmdbMovie>(&body)?.into(),
-            MediaType::Tv => serde_json::from_str::<TmdbTv>(&body)?.into(),
+            MediaType::Movie => {
+                serde_json::from_str::<TmdbMovie>(&body)?
+                    .into_media_item(conn)
+                    .await?
+            }
+            MediaType::Tv => {
+                serde_json::from_str::<TmdbTv>(&body)?
+                    .into_media_item(conn)
+                    .await?
+            }
         };
 
         // Fetch episode details for each season in parallel

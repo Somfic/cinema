@@ -23,7 +23,7 @@ pub trait SubtitlesApi {
 impl SubtitlesApi for AppContext {
     async fn movie(&self, id: i64) -> Result<Vec<SubtitleTrack>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let item = tmdb.details(MediaType::Movie, id).await?;
+        let item = tmdb.details(MediaType::Movie, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
@@ -33,7 +33,7 @@ impl SubtitlesApi for AppContext {
 
     async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<SubtitleTrack>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let item = tmdb.details(MediaType::Tv, id).await?;
+        let item = tmdb.details(MediaType::Tv, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;

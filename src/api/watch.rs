@@ -48,27 +48,12 @@ impl WatchApi for AppContext {
     async fn record(&self, watch: RecordWatch) -> Result<(), Error> {
         let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
 
-        let media_id: i32 = sqlx::query_scalar!(
-            r#"
-                INSERT INTO media_items (media_type, tmdb_id, title, poster_path)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    poster_path = EXCLUDED.poster_path,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING id
-            "#,
-            watch.media_type as tmdb::MediaType,
-            watch.tmdb_id,
-            watch.title,
-            watch.poster_path,
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(Error::DatabaseError)?;
+        let media_id =
+            crate::tmdb::MediaItem::ensure_exists(watch.tmdb_id, watch.media_type, &mut tx, self)
+                .await?;
 
         // Best-effort link to the download row used as the playback source.
-        let download_id: Option<i32> = if let Some(hash) = watch.info_hash.as_deref() {
+        let download_id = if let Some(hash) = watch.info_hash.as_deref() {
             sqlx::query_scalar!(
                 "SELECT id FROM downloads WHERE info_hash = $1 AND file_idx = $2 LIMIT 1",
                 hash,

@@ -20,9 +20,9 @@ pub struct EnqueueDownload {
     pub title: String,
     pub poster_path: Option<String>,
     #[serde(default)]
-    pub season: i32,
+    pub season: u32,
     #[serde(default)]
-    pub episode: i32,
+    pub episode: u32,
     pub resolution: String,
     pub info_hash: Option<String>,
     pub file_idx: Option<i32>,
@@ -84,17 +84,26 @@ impl DownloadsApi for AppContext {
                 // TODO: rewrite to remove this part - should work like /streams/start,
                 //  with only info_hash and an optional metadata
                 let tmdb = TmdbClient::new(&self.config, self.http.clone());
-                let item = tmdb.details(body.media_type, body.tmdb_id).await?;
+                let item = tmdb
+                    .details(body.media_type, body.tmdb_id, &self.db)
+                    .await?;
                 let imdb_id = item
                     .imdb_id
                     .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-                let path = if body.media_type == tmdb::MediaType::Tv {
-                    format!("series/{imdb_id}:{}:{}", body.season, body.episode)
-                } else {
-                    format!("movie/{imdb_id}")
+
+                let media_type = match body.media_type {
+                    MediaType::Movie => streams_mod::AggregationMediaType::Media { imdb_id },
+                    MediaType::Tv => streams_mod::AggregationMediaType::Tv {
+                        imdb_id,
+                        season: body.season,
+                        episode: body.episode,
+                    },
                 };
-                let all_streams =
-                    streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await;
+
+                let all_streams = media_type
+                    .aggregate(&self.http, &self.config.stream_sources)
+                    .await;
+
                 let stream = all_streams
                     .iter()
                     .find(|s| s.resolution.as_deref() == Some(&body.resolution))
@@ -114,8 +123,7 @@ impl DownloadsApi for AppContext {
         };
 
         let id = crate::downloads::types::Download::ensure_download(
-            &self.db,
-            &self.downloads,
+            self,
             &info_hash,
             file_idx,
             Some(&media),
@@ -152,18 +160,22 @@ impl DownloadsApi for AppContext {
     ) -> Result<Vec<ResolutionEstimate>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
         let mt = MediaType::try_from(media_type)?;
-        let item = tmdb.details(mt, tmdb_id).await?;
+        let item = tmdb.details(mt, tmdb_id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-        let path = if mt == MediaType::Tv {
-            format!("series/{imdb_id}:1:1")
-        } else {
-            format!("movie/{imdb_id}")
+        let media_type = match mt {
+            MediaType::Movie => streams_mod::AggregationMediaType::Media { imdb_id },
+            MediaType::Tv => streams_mod::AggregationMediaType::Tv {
+                imdb_id,
+                season: 1,
+                episode: 1,
+            },
         };
 
-        let all_streams =
-            streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await;
+        let all_streams = media_type
+            .aggregate(&self.http, &self.config.stream_sources)
+            .await;
 
         let mut seen =
             std::collections::HashMap::<String, (Option<u64>, Option<String>, i64)>::new();

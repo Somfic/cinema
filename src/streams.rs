@@ -53,41 +53,63 @@ pub struct Stream {
 
 // --- Aggregation ---
 
-pub async fn aggregate(client: &reqwest::Client, sources: &[String], path: &str) -> Vec<Stream> {
-    let futures: Vec<_> = sources
-        .iter()
-        .map(|source| fetch_source(client, source, path))
-        .collect();
+pub enum AggregationMediaType {
+    Media {
+        imdb_id: String,
+    },
+    Tv {
+        imdb_id: String,
+        season: u32,
+        episode: u32,
+    },
+}
 
-    let results = join_all(futures).await;
+impl AggregationMediaType {
+    pub async fn aggregate(self, client: &reqwest::Client, sources: &[String]) -> Vec<Stream> {
+        let path = match self {
+            AggregationMediaType::Media { imdb_id } => format!("movie/{imdb_id}"),
+            AggregationMediaType::Tv {
+                imdb_id,
+                season,
+                episode,
+            } => format!("series/{imdb_id}:{season}:{episode}"),
+        };
 
-    let mut by_hash: HashMap<String, Stream> = HashMap::new();
+        let futures: Vec<_> = sources
+            .iter()
+            .map(|source| fetch_source(client, source, &path))
+            .collect();
 
-    for (source_name, streams) in results.into_iter().flatten() {
-        for stream in streams {
-            by_hash
-                .entry(stream.info_hash.clone())
-                .and_modify(|existing| {
-                    // Keep the one with more seeders; merge source names
-                    if !existing.source.contains(&source_name) {
-                        existing.source = format!("{}, {}", existing.source, source_name);
-                    }
-                    if stream.seeders > existing.seeders {
-                        existing.seeders = stream.seeders;
-                        existing.score = compute_score(&*existing);
-                    }
-                })
-                .or_insert(stream);
+        let results = join_all(futures).await;
+
+        let mut by_hash: HashMap<String, Stream> = HashMap::new();
+
+        for (source_name, streams) in results.into_iter().flatten() {
+            for stream in streams {
+                by_hash
+                    .entry(stream.info_hash.clone())
+                    .and_modify(|existing| {
+                        // Keep the one with more seeders; merge source names
+                        if !existing.source.contains(&source_name) {
+                            existing.source = format!("{}, {}", existing.source, source_name);
+                        }
+                        if stream.seeders > existing.seeders {
+                            existing.seeders = stream.seeders;
+                            existing.score = compute_score(&*existing);
+                        }
+                    })
+                    .or_insert(stream);
+            }
         }
-    }
 
-    let mut streams: Vec<Stream> = by_hash.into_values().collect();
-    streams.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    streams
+        let mut streams: Vec<Stream> = by_hash.into_values().collect();
+        streams.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        streams
+    }
 }
 
 async fn fetch_source(

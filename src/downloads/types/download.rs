@@ -32,8 +32,8 @@ pub struct MediaContext {
     pub tmdb_id: i64,
     pub title: String,
     pub poster_path: Option<String>,
-    pub season: i32,
-    pub episode: i32,
+    pub season: u32,
+    pub episode: u32,
     pub resolution: Option<String>,
 }
 
@@ -197,26 +197,11 @@ impl Download {
     pub async fn upsert_meta(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         download_id: i32,
-        ctx: &MediaContext,
+        media: &MediaContext,
+        ctx: &crate::app::AppContext,
     ) -> crate::app::Result<()> {
-        let media_id: i32 = sqlx::query_scalar!(
-            r#"
-        INSERT INTO media_items (media_type, tmdb_id, title, poster_path)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
-            title = EXCLUDED.title,
-            poster_path = EXCLUDED.poster_path,
-            updated_at = CURRENT_TIMESTAMP
-        RETURNING id
-        "#,
-            ctx.media_type as tmdb::MediaType,
-            ctx.tmdb_id,
-            ctx.title,
-            ctx.poster_path,
-        )
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(Error::DatabaseError)?;
+        let media_id =
+            crate::tmdb::MediaItem::ensure_exists(media.tmdb_id, media.media_type, tx, ctx).await?;
 
         sqlx::query!(
             r#"
@@ -230,9 +215,9 @@ impl Download {
         "#,
             download_id,
             media_id,
-            ctx.season,
-            ctx.episode,
-            ctx.resolution,
+            media.season as i32,
+            media.episode as i32,
+            media.resolution,
         )
         .execute(&mut **tx)
         .await
@@ -265,25 +250,24 @@ impl Download {
     /// terminal state, and start it. Blocks until the supervisor is spawned
     /// (or returns a non-`Started` outcome). Returns the download id.
     pub async fn ensure_download(
-        db: &Pool,
-        handle: &crate::downloads::Handle,
+        ctx: &crate::app::AppContext,
         info_hash: &str,
         file_idx: i32,
         media: Option<&MediaContext>,
     ) -> crate::app::Result<i32> {
-        let mut tx = db.begin().await.map_err(Error::DatabaseError)?;
+        let mut tx = ctx.db.begin().await.map_err(Error::DatabaseError)?;
 
         let id = Self::upsert(&mut tx, info_hash, file_idx).await?;
 
-        if let Some(ctx) = media {
-            Self::upsert_meta(&mut tx, id, ctx).await?;
+        if let Some(media) = media {
+            Self::upsert_meta(&mut tx, id, media, ctx).await?;
         }
 
         Self::reset_for_restart(&mut tx, id).await?;
 
         tx.commit().await.map_err(Error::DatabaseError)?;
 
-        handle.start(id).await?;
+        ctx.downloads.start(id).await?;
 
         Ok(id)
     }

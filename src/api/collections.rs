@@ -119,24 +119,9 @@ impl CollectionsApi for AppContext {
     async fn add(&self, item: CollectionRequest) -> Result<(), Error> {
         let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
 
-        let media_id: i32 = sqlx::query_scalar!(
-            r#"
-                INSERT INTO media_items (media_type, tmdb_id, title, poster_path)
-                VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (media_type, tmdb_id) DO UPDATE SET
-                        title = EXCLUDED.title,
-                        poster_path = EXCLUDED.poster_path,
-                        updated_at = CURRENT_TIMESTAMP
-                RETURNING id
-            "#,
-            item.media_type as tmdb::MediaType,
-            item.tmdb_id,
-            item.title,
-            item.poster_path,
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(Error::DatabaseError)?;
+        let media_id =
+            crate::tmdb::MediaItem::ensure_exists(item.tmdb_id, item.media_type, &mut tx, self)
+                .await?;
 
         sqlx::query!(
             "

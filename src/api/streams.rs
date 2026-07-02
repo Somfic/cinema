@@ -27,9 +27,9 @@ pub struct StreamMediaContext {
     pub title: String,
     pub poster_path: Option<String>,
     #[serde(default)]
-    pub season: i32,
+    pub season: u32,
     #[serde(default)]
-    pub episode: i32,
+    pub episode: u32,
     pub resolution: Option<String>,
 }
 
@@ -80,7 +80,7 @@ pub trait StreamsApi {
 
     /// Aggregates available torrent streams for a specific TV episode.
     #[get]
-    async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<Stream>, Error>;
+    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error>;
 
     /// Starts a torrent (idempotent) and returns the playback URL.
     /// Always creates/updates a `downloads` row so the DB reflects the
@@ -190,22 +190,28 @@ fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), Error> {
 impl StreamsApi for AppContext {
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let item = tmdb.details(MediaType::Movie, id).await?;
+        let item = tmdb.details(MediaType::Movie, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found for this movie".into()))?;
-        let path = format!("movie/{imdb_id}");
-        Ok(streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await)
+        Ok(streams_mod::AggregationMediaType::Media { imdb_id }
+            .aggregate(&self.http, &self.config.stream_sources)
+            .await)
     }
 
-    async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<Stream>, Error> {
+    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let item = tmdb.details(MediaType::Tv, id).await?;
+        let item = tmdb.details(MediaType::Tv, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found for this show".into()))?;
-        let path = format!("series/{imdb_id}:{season}:{episode}");
-        Ok(streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await)
+        Ok(streams_mod::AggregationMediaType::Tv {
+            imdb_id,
+            season,
+            episode,
+        }
+        .aggregate(&self.http, &self.config.stream_sources)
+        .await)
     }
 
     async fn start(
@@ -224,8 +230,7 @@ impl StreamsApi for AppContext {
             resolution: m.resolution,
         });
         crate::downloads::types::Download::ensure_download(
-            &self.db,
-            &self.downloads,
+            self,
             &info_hash,
             file_idx,
             media.as_ref(),
@@ -249,14 +254,8 @@ impl StreamsApi for AppContext {
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error> {
-        crate::downloads::types::Download::ensure_download(
-            &self.db,
-            &self.downloads,
-            &info_hash,
-            file_idx,
-            None,
-        )
-        .await?;
+        crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx, None)
+            .await?;
         let (session_id, playlist_url) = crate::hls::start_session(
             &self.storage,
             &self.config,
