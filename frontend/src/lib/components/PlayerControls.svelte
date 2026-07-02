@@ -362,6 +362,49 @@
 		}
 	}
 
+	// Public trackers appended to the magnet so a desktop torrent client can find
+	// peers without DHT alone. Mirrors PUBLIC_TRACKERS in src/torrent.rs.
+	const MAGNET_TRACKERS = [
+		"udp://tracker.opentrackr.org:1337/announce",
+		"udp://open.stealth.si:80/announce",
+		"udp://tracker.torrent.eu.org:451/announce",
+		"udp://open.demonii.com:1337/announce",
+		"udp://explodie.org:6969/announce",
+		"udp://tracker.tiny-vps.com:6969/announce",
+		"udp://tracker.moeking.me:6969/announce",
+		"udp://tracker1.bt.moack.co.kr:80/announce",
+		"udp://tracker.theoks.net:6969/announce",
+		"udp://tracker.bittor.pw:1337/announce",
+		"udp://p4p.arenabg.com:1337/announce",
+		"http://tracker.files.fm:6969/announce",
+		"udp://tracker.dler.org:6969/announce",
+	];
+
+	function magnetUrl(): string {
+		if (!activeStreamHash) return "";
+		let magnet = `magnet:?xt=urn:btih:${activeStreamHash}`;
+		for (const tracker of MAGNET_TRACKERS) {
+			magnet += `&tr=${encodeURIComponent(tracker)}`;
+		}
+		return magnet;
+	}
+
+	let magnetCopied = $state(false);
+	let magnetCopiedTimer: ReturnType<typeof setTimeout>;
+
+	async function copyMagnet() {
+		const magnet = magnetUrl();
+		if (!magnet) return;
+		try {
+			await navigator.clipboard.writeText(magnet);
+			magnetCopied = true;
+			clearTimeout(magnetCopiedTimer);
+			magnetCopiedTimer = setTimeout(() => (magnetCopied = false), 1500);
+		} catch {
+			// Clipboard may be unavailable (insecure context) — ignore.
+		}
+	}
+
 	// Download an .m3u playlist pointing at the stream. Desktop VLC/mpv register
 	// as the .m3u handler, so opening the downloaded file launches the user's
 	// default player — the reliable cross-platform alternative to a `vlc://`
@@ -394,6 +437,18 @@
 						kind: "item" as const,
 						label: copied ? "Copied!" : "Copy stream link",
 						onclick: copyExternalUrl,
+					},
+				]
+			: []),
+		...(activeStreamHash
+			? [
+					{ kind: "header" as const, label: "Torrent" },
+					{
+						kind: "item" as const,
+						label: magnetCopied
+							? "Copied!"
+							: "Copy magnet link",
+						onclick: copyMagnet,
 					},
 				]
 			: []),
@@ -531,7 +586,7 @@
 		{/if}
 
 		<div class="controls-right">
-			{#if externalUrl || onReveal}
+			{#if externalUrl || onReveal || activeStreamHash}
 				<PopoverMenu items={externalMenuItems} align="right">
 					{#snippet trigger()}
 						<Button variant="ghost" icon="ExternalLink" />
