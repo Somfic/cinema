@@ -1,7 +1,7 @@
 use crate::app::{AppContext, Error};
 use crate::downloads::types::Download;
+use crate::streams as streams_mod;
 use crate::tmdb::{MediaType, TmdbClient};
-use crate::{streams as streams_mod, tmdb};
 
 /// Streaming progress for an active download. Emitted periodically by the
 /// download worker; subscribers should treat updates as best-effort.
@@ -15,15 +15,8 @@ pub struct DownloadProgress {
 
 #[draad::ty]
 pub struct EnqueueDownload {
-    pub media_type: tmdb::MediaType,
-    pub tmdb_id: i64,
-    #[serde(default)]
-    pub season: u32,
-    #[serde(default)]
-    pub episode: u32,
-    pub resolution: String,
-    pub info_hash: Option<String>,
-    pub file_idx: Option<i32>,
+    pub info_hash: String,
+    pub file_idx: i32,
 }
 
 #[draad::ty]
@@ -75,45 +68,12 @@ impl DownloadsApi for AppContext {
     }
 
     async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, Error> {
-        let (info_hash, file_idx) =
-            if let (Some(hash), Some(idx)) = (&body.info_hash, body.file_idx) {
-                (hash.clone(), idx)
-            } else {
-                // TODO: rewrite to remove this part - should work like /streams/start,
-                //  with only info_hash and an optional metadata
-                let tmdb = TmdbClient::new(&self.config, self.http.clone());
-                let item = tmdb
-                    .details(body.media_type, body.tmdb_id, &self.db)
-                    .await?;
-                let imdb_id = item
-                    .imdb_id
-                    .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-
-                let media_type = match body.media_type {
-                    MediaType::Movie => streams_mod::AggregationMediaType::Media {
-                        tmdb_id: body.tmdb_id,
-                        imdb_id,
-                    },
-                    MediaType::Tv => streams_mod::AggregationMediaType::Tv {
-                        tmdb_id: body.tmdb_id,
-                        imdb_id,
-                        season: body.season,
-                        episode: body.episode,
-                    },
-                };
-
-                let all_streams = media_type.aggregate(self).await;
-
-                let stream = all_streams
-                    .iter()
-                    .find(|s| s.resolution.as_deref() == Some(&body.resolution))
-                    .or_else(|| all_streams.first())
-                    .ok_or_else(|| Error::Generic("No streams found".into()))?;
-                (stream.info_hash.clone(), stream.file_idx)
-            };
-
-        let id =
-            crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
+        let id = crate::downloads::types::Download::ensure_download(
+            self,
+            &body.info_hash,
+            body.file_idx,
+        )
+        .await?;
         Ok(id)
     }
 
