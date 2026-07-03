@@ -19,7 +19,7 @@ pub struct CollectionItem {
     pub tmdb_id: i64,
     pub title: String,
     pub poster_path: Option<String>,
-    pub added_at: chrono::DateTime<chrono::Utc>,
+    pub added_at: time::OffsetDateTime,
     pub position: i64,
 }
 
@@ -42,7 +42,7 @@ pub struct CollectionDef {
     pub slug: String,
     pub title: String,
     pub kind: CollectionKind,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: time::OffsetDateTime,
     pub system: bool,
     pub hidden: bool,
 }

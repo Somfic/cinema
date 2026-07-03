@@ -29,7 +29,7 @@ pub struct WatchHistoryItem {
     pub file_idx: i64,
     pub progress: f64,
     pub duration: f64,
-    pub last_watched: chrono::DateTime<chrono::Utc>,
+    pub last_watched: time::OffsetDateTime,
 }
 
 #[draad::api(namespace = "watch")]
