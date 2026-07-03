@@ -121,17 +121,19 @@ async fn run() -> Result<()> {
     // Initialize core services
     let pool = app::create_pool(&config).await?;
     let storage = app::create_storage(&config).await?;
-    let events = draad::runtime::EventBus::new();
+    let event_bus = draad::runtime::EventBus::new();
+    let events = Events::new(event_bus.clone());
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let downloads_handle = downloads::Handle::new(pool.clone(), config.clone());
+    let downloads_handle = downloads::Handle::new(pool.clone(), events.clone(), config.clone());
 
     let ctx = AppContext {
         db: pool,
         storage,
         config: config.clone(),
+        event_bus,
         events,
         conns: draad::runtime::Conns::new(),
         clients: app::ClientRoster::new(),
@@ -156,7 +158,7 @@ async fn run() -> Result<()> {
 
     // stream stats
     {
-        let events = Events::new(ctx.events.clone());
+        let events = ctx.events.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(333)).await;

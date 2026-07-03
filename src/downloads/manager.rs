@@ -35,6 +35,7 @@ pub struct Handle(Arc<Inner>);
 
 struct Inner {
     db: Pool,
+    events: crate::Events,
     config: Arc<Config>,
     semaphore: Arc<Semaphore>,
     supervisors: std::sync::Mutex<HashMap<i32, CancellationToken>>,
@@ -44,11 +45,12 @@ struct Inner {
 }
 
 impl Handle {
-    pub fn new(db: Pool, config: Arc<Config>) -> Self {
+    pub fn new(db: Pool, events: crate::Events, config: Arc<Config>) -> Self {
         let permits = config.max_concurrent_downloads;
         let (refresh_tx, mut refresh_rx) = mpsc::channel::<()>(64);
         let inner = Arc::new(Inner {
             db,
+            events,
             config,
             semaphore: Arc::new(Semaphore::new(permits)),
             supervisors: std::sync::Mutex::new(HashMap::new()),
@@ -183,8 +185,9 @@ impl Handle {
 
             let inner = self.0.clone();
             let db = self.0.db.clone();
+            let events = self.0.events.clone();
             self.0.tracker.spawn(async move {
-                super::supervisor::Supervisor::new(db, id, torrent, cancel)
+                super::supervisor::Supervisor::new(db, events, id, torrent, cancel)
                     .await
                     .run()
                     .await;

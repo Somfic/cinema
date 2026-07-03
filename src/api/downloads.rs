@@ -1,17 +1,8 @@
 use crate::app::{AppContext, Error};
+use crate::downloads::DownloadProgress;
 use crate::downloads::types::Download;
 use crate::streams as streams_mod;
 use crate::tmdb::{MediaType, TmdbClient};
-
-/// Streaming progress for an active download. Emitted periodically by the
-/// download worker; subscribers should treat updates as best-effort.
-#[draad::ty]
-pub struct DownloadProgress {
-    pub id: i64,
-    pub downloaded_bytes: i64,
-    pub total_bytes: Option<i64>,
-    pub status: String,
-}
 
 #[draad::ty]
 pub struct EnqueueDownload {

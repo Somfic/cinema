@@ -14,6 +14,7 @@ pub mod types;
 
 pub use engine::{AudioTrack, Chapter, EmbeddedSubtitleTrack, TorrentEngine};
 pub use manager::*;
+pub use supervisor::DownloadProgress;
 
 /// Trait combining AsyncRead + AsyncSeek for torrent file streaming.
 trait AsyncReadSeek: AsyncRead + AsyncSeek + Send + Unpin {}

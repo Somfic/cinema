@@ -155,7 +155,8 @@ pub struct AppContext {
     pub db: Pool,
     pub storage: Storage,
     pub config: Arc<Config>,
-    pub events: draad::runtime::EventBus,
+    pub event_bus: draad::runtime::EventBus,
+    pub events: crate::Events,
     /// draad's registry of live WS connections — server→client addressing and
     /// the basis for the `Caller` / `conn: &Conn` injection.
     pub conns: draad::runtime::Conns,
