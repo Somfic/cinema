@@ -10,6 +10,7 @@
 		type SearchResult,
 		type WatchHistoryItem,
 		type MediaType,
+		type TranscodingOption,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
 	import { getDetails, imageUrl } from "$lib/utils";
@@ -301,6 +302,7 @@
 				file_idx: resumeEntry.file_idx,
 			} as Stream,
 			true,
+			{ startAt: playerStartTime, transcoding: resumeEntry.transcoding },
 		);
 
 		// Fetch streams in background so the stream switcher works
@@ -318,7 +320,11 @@
 	}
 
 	// ── Player ──
-	function play(stream: Stream, fromResume = false) {
+	function play(
+		stream: Stream,
+		fromResume = false,
+		startOptions?: { startAt?: number; transcoding?: TranscodingOption },
+	) {
 		if (!item) return;
 
 		// When acting as a remote, hand playback to the paired TV instead of
@@ -344,7 +350,7 @@
 		replaceState(u, {});
 
 		session
-			.start(stream)
+			.start(stream, startOptions)
 			.then(() => session.loadSubtitles())
 			.catch((e: Error) => {
 				error = e.message;

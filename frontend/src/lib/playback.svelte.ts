@@ -8,6 +8,7 @@ import type {
 	StreamStats,
 	SubtitleCue,
 	SubtitleTrack,
+	TranscodingOption,
 } from "$lib/schema";
 
 export interface PlaybackContext {
@@ -63,22 +64,38 @@ export class PlaybackSession {
 
 	// lifecycle
 
-	async start(stream: { info_hash: string; file_idx: number }): Promise<void> {
+	async start(
+		stream: { info_hash: string; file_idx: number },
+		options?: { startAt?: number; transcoding?: TranscodingOption },
+	): Promise<void> {
 		this.stopHlsSession();
 		this.#resetState();
-		const result = await playStream(stream.info_hash, stream.file_idx);
-		// Discard if the route switched streams while we awaited.
-		const cur = this.ctx.currentStream();
-		if (
-			!cur ||
-			cur.info_hash !== stream.info_hash ||
-			cur.file_idx !== stream.file_idx
-		)
-			return;
-		this.streamUrl = result.url;
-		this.playingLocal = result.local;
+
+		const { startAt = 0, transcoding } = options ?? {};
+
+		if (transcoding === "Enabled" || transcoding === "OnlyAudio") {
+			const onlyAudio = transcoding === "OnlyAudio";
+			this.transcoding.enabled = true;
+			this.transcoding.onlyAudio = onlyAudio;
+			await this.#startHlsRemux(stream.info_hash, stream.file_idx, 0, onlyAudio, startAt);
+			// #startHlsRemux clears hlsSessionId when the stream was superseded or errored.
+			if (!this.hlsSessionId) return;
+		} else {
+			const result = await playStream(stream.info_hash, stream.file_idx);
+			// Discard if the route switched streams while we awaited.
+			const cur = this.ctx.currentStream();
+			if (
+				!cur ||
+				cur.info_hash !== stream.info_hash ||
+				cur.file_idx !== stream.file_idx
+			)
+				return;
+			this.streamUrl = result.url;
+			this.playingLocal = result.local;
+		}
+
 		this.#pollAudioTracks(stream.info_hash, stream.file_idx);
-		if (!result.local)
+		if (!this.playingLocal)
 			this.#pollStreamStats(stream.info_hash, stream.file_idx);
 	}
 

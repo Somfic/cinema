@@ -2,7 +2,12 @@
 	import { onDestroy } from "svelte";
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
-	import { type MediaItem, type Stream, type MediaType } from "$lib/schema";
+	import {
+		type MediaItem,
+		type Stream,
+		type MediaType,
+		type TranscodingOption,
+	} from "$lib/schema";
 	import { api } from "$lib/api";
 	import { getDetails, imageUrl } from "$lib/utils";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
@@ -52,8 +57,7 @@
 		if (mediaType === "tv" && season !== null && episode !== null) {
 			const still = item?.seasons
 				?.find((s) => s.season_number === season)
-				?.episodes?.find((e) => e.episode_number === episode)
-				?.stills?.[0];
+				?.episodes?.find((e) => e.episode_number === episode)?.stills?.[0];
 			if (still) return imageUrl(still, "original");
 		}
 		return backdropUrls[0];
@@ -83,7 +87,14 @@
 	);
 
 	$effect(() => {
-		const detailsPromise = getDetails(mediaType, mediaId)
+		const type = mediaType;
+		const id = mediaId;
+		const s = season;
+		const e = episode;
+		const hash = infoHash as string;
+		const idx = fileIdx;
+
+		const detailsPromise = getDetails(type, id)
 			.then((res) => {
 				item = res;
 			})
@@ -91,11 +102,45 @@
 				error = e.message;
 			});
 
-		const streamPromise = session
-			.start({ info_hash: infoHash as string, file_idx: fileIdx })
-			.catch((e: Error) => {
-				error = e.message;
-			});
+		// Fetch watch history first so the session starts with the saved
+		// transcoding mode and seek position already applied.
+		const historyPromise = api.watch
+			.history()
+			.then((items) => {
+				const entry = items.find(
+					(w) =>
+						w.media_type === type &&
+						w.tmdb_id === id &&
+						(type === "movie" || (w.season === s && w.episode === e)) &&
+						w.progress > 0,
+				);
+				if (
+					entry &&
+					entry.duration > 0 &&
+					entry.progress < entry.duration - 30
+				) {
+					startTime = entry.progress;
+					return {
+						startAt: entry.progress,
+						transcoding: entry.transcoding as TranscodingOption,
+					};
+				}
+				return undefined;
+			})
+			.catch(
+				() =>
+					undefined as
+						| { startAt: number; transcoding: TranscodingOption }
+						| undefined,
+			);
+
+		const streamPromise = historyPromise.then((resumeOpts) =>
+			session
+				.start({ info_hash: hash, file_idx: idx }, resumeOpts)
+				.catch((e: Error) => {
+					error = e.message;
+				}),
+		);
 
 		Promise.all([detailsPromise, streamPromise]).then(() => {
 			session.loadSubtitles();
@@ -115,35 +160,6 @@
 				streams = [];
 			}
 		})();
-	});
-
-	// ── Resume + progress ──
-	// Resume from the last watched position for this title/episode.
-	$effect(() => {
-		const type = mediaType;
-		const id = mediaId;
-		const s = season;
-		const e = episode;
-		api.watch
-			.history()
-			.then((items) => {
-				const entry = items.find(
-					(w) =>
-						w.media_type === type &&
-						w.tmdb_id === id &&
-						(type === "movie" ||
-							(w.season === s && w.episode === e)) &&
-						w.progress > 0,
-				);
-				if (
-					entry &&
-					entry.duration > 0 &&
-					entry.progress < entry.duration - 30
-				) {
-					startTime = entry.progress;
-				}
-			})
-			.catch(() => {});
 	});
 
 	// Once playback reaches the resume point, stop re-applying it so a later
