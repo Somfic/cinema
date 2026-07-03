@@ -228,6 +228,9 @@ impl Handle {
             .execute(&self.0.db)
             .await
             .map_err(Error::DatabaseError)?;
+
+        self.emit_status_update(id, super::types::DownloadStatus::Paused);
+
         Ok(())
     }
 
@@ -249,6 +252,9 @@ impl Handle {
         .execute(&self.0.db)
         .await
         .map_err(Error::DatabaseError)?;
+
+        self.emit_status_update(id, super::types::DownloadStatus::Cancelled);
+
         Ok(())
     }
 
@@ -293,6 +299,16 @@ impl Handle {
                 }
             });
         }
+    }
+
+    fn emit_status_update(&self, id: i32, new_status: super::types::DownloadStatus) {
+        self.0
+            .events
+            .downloads
+            .emit_status_update(&crate::api::downloads::DownloadStatusUpdate {
+                download_id: id,
+                new_status,
+            });
     }
 }
 

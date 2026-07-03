@@ -18,6 +18,12 @@ pub struct ResolutionEstimate {
     pub streams_count: i64,
 }
 
+#[draad::ty]
+pub struct DownloadStatusUpdate {
+    pub download_id: i32,
+    pub new_status: crate::downloads::types::DownloadStatus,
+}
+
 #[draad::api(namespace = "downloads")]
 pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
@@ -156,4 +162,6 @@ impl DownloadsApi for AppContext {
 pub trait DownloadsEvents {
     /// Per-download bandwidth/status tick. Topic: `downloads_progress`.
     fn progress(payload: DownloadProgress);
+
+    fn status_update(payload: DownloadStatusUpdate);
 }

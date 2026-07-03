@@ -38,7 +38,8 @@
 
 	onMount(() => {
 		load();
-		unsub = api.downloadsEvents.onProgress((p) => {
+
+		const unsubOnProgress = api.downloadsEvents.onProgress((p) => {
 			if (pendingRemoves.has(p.download_id)) return;
 			const idx = downloads.findIndex((d) => d.id === p.download_id);
 			if (idx === -1) {
@@ -53,6 +54,26 @@
 				status: p.status,
 			};
 		});
+		const unsebOnStatusUpdate = api.downloadsEvents.onStatusUpdate(
+			(statusUpdate) => {
+				if (pendingRemoves.has(statusUpdate.download_id)) return;
+				const idx = downloads.findIndex(
+					(d) => d.id === statusUpdate.download_id,
+				);
+				if (idx === -1) {
+					load();
+					return;
+				}
+				downloads[idx] = {
+					...downloads[idx],
+					status: statusUpdate.new_status,
+				};
+			},
+		);
+		unsub = () => {
+			unsubOnProgress();
+			unsebOnStatusUpdate();
+		};
 	});
 
 	onDestroy(() => unsub?.());
