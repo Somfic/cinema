@@ -3,13 +3,11 @@
 	import { imageUrl } from "$lib/utils";
 	import { Text } from "glow";
 	import PlayCard from "./PlayCard.svelte";
-	import DownloadButton from "./DownloadButton.svelte";
 
 	let {
 		season,
 		episode,
 		showTitle,
-		tmdbId,
 		resumeEntry,
 		loadingStreams = false,
 		onselectepisode,
@@ -52,8 +50,7 @@
 			<button
 				class="episode-row"
 				class:active={ep.episode_number === episode.episode_number}
-				onclick={() =>
-					onselectepisode(season.season_number, ep.episode_number)}
+				onclick={() => onselectepisode(season.season_number, ep.episode_number)}
 			>
 				<img
 					class="ep-thumb"
@@ -61,9 +58,7 @@
 					alt=""
 				/>
 				<div class="ep-info">
-					<Text size="xs" variant="muted"
-						>Episode {ep.episode_number}</Text
-					>
+					<Text size="xs" variant="muted">Episode {ep.episode_number}</Text>
 					<Text size="sm" weight="semibold">{ep.name}</Text>
 				</div>
 			</button>
@@ -97,23 +92,13 @@
 						: undefined}
 				label="S{season.season_number} E{episode.episode_number}"
 				action={canResume ? "Continue" : (episode.name ?? "Play")}
-				remaining={remainingMin
-					? `${remainingMin} min left`
-					: undefined}
+				remaining={remainingMin ? `${remainingMin} min left` : undefined}
 				progress={progressPct}
 				loading={loadingStreams}
 				onclick={onplay}
 			/>
 		{/if}
 	</div>
-
-	<!-- <DownloadButton
-		mediaType="tv"
-		{tmdbId}
-		title={showTitle}
-		season={season.season_number}
-		episode={episode.episode_number}
-	/> -->
 </div>
 
 <style>

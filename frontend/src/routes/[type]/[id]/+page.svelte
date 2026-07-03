@@ -7,7 +7,6 @@
 	import {
 		type MediaItem,
 		type Stream,
-		type SearchResult,
 		type WatchHistoryItem,
 		type MediaType,
 		type TranscodingOption,
@@ -38,7 +37,6 @@
 
 	// ── Player state ──
 	let selectedStream = $state<Stream | null>(null);
-	let similarItems = $state<SearchResult[]>([]);
 	let resumeEntry = $state<WatchHistoryItem | null>(null);
 	let playerTime = $state(0);
 	let playerDuration = $state(0);
@@ -167,20 +165,12 @@
 		item = null;
 		streams = [];
 		error = null;
-		similarItems = [];
 		getDetails(type, id)
 			.then((res) => {
 				item = res;
 				if (selectedSeason !== null && selectedEpisode !== null) {
 					// Episode was selected via URL params — navigate to episode detail
 				}
-				// Fetch similar + watch history in background
-				api.media
-					.similar(type, id)
-					.then((items) => {
-						similarItems = items;
-					})
-					.catch(() => {});
 				api.watch
 					.history()
 					.then((items) => {
@@ -462,7 +452,6 @@
 			<MediaInfo
 				{item}
 				{loadingStreams}
-				{similarItems}
 				{resumeEntry}
 				playing={selectedStream !== null}
 				tvMode={isTv}

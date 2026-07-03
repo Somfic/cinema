@@ -1,24 +1,10 @@
 <script lang="ts">
-	import {
-		type MediaItem,
-		type SearchResult,
-		type WatchHistoryItem,
-	} from "$lib/schema";
+	import { type MediaItem, type WatchHistoryItem } from "$lib/schema";
 	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
-	import {
-		Button,
-		Icon,
-		Card,
-		Text,
-		Avatar,
-		Modal,
-		useModal,
-		Data,
-	} from "glow";
+	import { Button, Text, Avatar, Modal, useModal, Data } from "glow";
 	import type { IconName, DataItem } from "glow";
 	import PlayCard from "./PlayCard.svelte";
-	import DownloadButton from "./DownloadButton.svelte";
 
 	// Map TMDB genre names to glow (lucide) icons
 	const GENRE_ICONS: Record<string, IconName> = {
@@ -60,7 +46,6 @@
 		onwatch,
 		onselectseason,
 		onselectepisode,
-		similarItems = [],
 		resumeEntry,
 		onresume,
 		playing = false,
@@ -71,7 +56,6 @@
 		onwatch?: () => void;
 		onselectseason?: (seasonNumber: number) => void;
 		onselectepisode?: (season: number, episode: number) => void;
-		similarItems?: SearchResult[];
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
 		playing?: boolean;
@@ -127,10 +111,8 @@
 
 	let onWatchlist = $state(false);
 	let isFavorite = $state(false);
-	let isWatched = $state(false);
 	let watchlistLoading = $state(false);
 	let favoriteLoading = $state(false);
-	let watchedLoading = $state(false);
 
 	$effect(() => {
 		api.collections
@@ -147,9 +129,6 @@
 			.catch(() => {});
 		api.collections
 			.contains("watched", item.media_type, item.tmdb_id)
-			.then((res) => {
-				isWatched = res.in_collection;
-			})
 			.catch(() => {});
 	});
 
