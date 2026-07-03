@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
-	import { Button, ButtonGroup, Icon } from "glow";
+	import { Button, Icon } from "glow";
 	import { getGoBack, getFocusSearch } from "$lib/topbar.svelte";
 	import { remote } from "$lib/remote.svelte";
 
@@ -27,8 +27,6 @@
 	let isRoot = $derived(
 		page.url.pathname === "/" || page.url.pathname === base + "/",
 	);
-
-	let parentPath = $derived(base);
 
 	async function handleHome() {
 		if (isRoot) {
@@ -83,7 +81,7 @@
 </header>
 
 <style lang="scss">
-	@use "glow/src/lib/style/theme.scss" as *;
+	@use "glow/styles/theme" as *;
 
 	.top-bar {
 		display: flex;

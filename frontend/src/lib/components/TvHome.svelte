@@ -36,7 +36,7 @@
 </div>
 
 <style lang="scss">
-	@use "glow/src/lib/style/theme.scss" as *;
+	@use "glow/styles/theme" as *;
 
 	.tv-home {
 		position: fixed;

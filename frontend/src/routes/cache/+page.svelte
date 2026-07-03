@@ -433,7 +433,7 @@
 </Modal>
 
 <style lang="scss">
-	@use "glow/src/lib/style/theme.scss" as *;
+	@use "glow/styles/theme" as *;
 
 	.page {
 		padding: 1.5rem;
