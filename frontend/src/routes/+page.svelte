@@ -134,14 +134,16 @@
 	async function toggleResult(r: SearchResult) {
 		if (!addTarget) return;
 		const slug = addTarget.slug;
-		if (isAdded(r.media_type, r.id)) {
-			await api.collections.remove(slug, r.media_type, r.id).catch(() => {});
+		if (isAdded(r.media_type, r.tmdb_id)) {
+			await api.collections
+				.remove(slug, r.media_type, r.tmdb_id)
+				.catch(() => {});
 		} else {
 			await api.collections
 				.add({
 					collection: slug,
 					media_type: r.media_type,
-					tmdb_id: r.id,
+					tmdb_id: r.tmdb_id,
 					title: r.title,
 					poster_path: r.poster_path ?? null,
 				})
@@ -305,14 +307,14 @@
 			{/each}
 		{:else if results.length > 0}
 			<div class="grid">
-				{#each results as item (item.id + item.media_type)}
+				{#each results as item (item.tmdb_id + item.media_type)}
 					<div transition:fade={{ duration: 150 }}>
 						<PosterCard
 							posterPath={item.poster_path}
 							mediaType={item.media_type}
-							tmdbId={item.id}
+							tmdbId={item.tmdb_id}
 							onclick={() =>
-								(window.location.href = `/${item.media_type}/${item.id}`)}
+								(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
 						>
 							{#snippet bottomLeft()}
 								<Text size="xs" variant="muted">{item.title}</Text>
@@ -352,12 +354,12 @@
 			<div class="dlg-group">
 				<Text size="sm" variant="muted">Search results</Text>
 				<div class="grid">
-					{#each addResults as r (r.media_type + r.id)}
-						{@const added = isAdded(r.media_type, r.id)}
+					{#each addResults as r (r.media_type + r.tmdb_id)}
+						{@const added = isAdded(r.media_type, r.tmdb_id)}
 						<PosterCard
 							posterPath={r.poster_path}
 							mediaType={r.media_type}
-							tmdbId={r.id}
+							tmdbId={r.tmdb_id}
 							selected={added}
 							onclick={() => toggleResult(r)}
 						>

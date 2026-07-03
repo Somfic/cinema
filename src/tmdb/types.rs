@@ -80,7 +80,7 @@ impl From<MediaType> for &'static str {
 
 #[draad::ty]
 pub struct SearchResult {
-    pub id: i64,
+    pub tmdb_id: i64,
     pub media_type: MediaType,
     pub title: String,
     pub overview: Option<String>,

@@ -38,7 +38,7 @@ impl TmdbMultiSearchResult {
             _ => fallback_type?,
         };
         Some(SearchResult {
-            id: self.id,
+            tmdb_id: self.id,
             media_type,
             title: self.title.or(self.name).unwrap_or_default(),
             overview: self.overview,
@@ -493,7 +493,7 @@ impl TmdbClient {
         {
             for r in data.results {
                 if let Some(sr) = r.into_search_result(None) {
-                    seen.insert((sr.media_type, sr.id));
+                    seen.insert((sr.media_type, sr.tmdb_id));
                     results.push(sr);
                 }
             }
@@ -506,7 +506,7 @@ impl TmdbClient {
         {
             for r in data.results {
                 if let Some(sr) = r.into_search_result(Some(MediaType::Movie))
-                    && seen.insert((sr.media_type, sr.id))
+                    && seen.insert((sr.media_type, sr.tmdb_id))
                 {
                     results.push(sr);
                 }
@@ -520,7 +520,7 @@ impl TmdbClient {
         {
             for r in data.results {
                 if let Some(sr) = r.into_search_result(Some(MediaType::Tv))
-                    && seen.insert((sr.media_type, sr.id))
+                    && seen.insert((sr.media_type, sr.tmdb_id))
                 {
                     results.push(sr);
                 }

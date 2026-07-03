@@ -138,7 +138,7 @@
 			.add({
 				collection: selected.slug,
 				media_type: r.media_type,
-				tmdb_id: r.id,
+				tmdb_id: r.tmdb_id,
 				title: r.title,
 				poster_path: r.poster_path ?? null,
 			})
@@ -153,11 +153,7 @@
 			.remove(selected.slug, item.media_type, item.tmdb_id)
 			.catch(() => {});
 		items = items.filter(
-			(i) =>
-				!(
-					i.media_type === item.media_type &&
-					i.tmdb_id === item.tmdb_id
-				),
+			(i) => !(i.media_type === item.media_type && i.tmdb_id === item.tmdb_id),
 		);
 	}
 
@@ -273,15 +269,12 @@
 			{#each defs as def (def.slug)}
 				<div class="def" class:active={selected?.slug === def.slug}>
 					<span class="def-handle">⠿</span>
-					<button
-						class="def-name"
-						onclick={() => selectCollection(def)}
-					>
+					<button class="def-name" onclick={() => selectCollection(def)}>
 						<Text size="sm">{def.title}</Text>
 						<Text size="xs" variant="muted">
-							{def.kind === "ordered"
-								? "Fixed order"
-								: "Manual"}{def.system ? " · System" : ""}
+							{def.kind === "ordered" ? "Fixed order" : "Manual"}{def.system
+								? " · System"
+								: ""}
 						</Text>
 					</button>
 					{#if def.system}
@@ -318,18 +311,11 @@
 				layout="horizontal"
 				align="center"
 			>
-				<ToggleInput
-					checked={newOrdered}
-					onChange={(c) => (newOrdered = c)}
-				/>
+				<ToggleInput checked={newOrdered} onChange={(c) => (newOrdered = c)} />
 			</Field>
 		</FieldRow>
 		<div class="row-end">
-			<Button
-				label="Create"
-				variant="primary"
-				onclick={createCollection}
-			/>
+			<Button label="Create" variant="primary" onclick={createCollection} />
 		</div>
 	</SettingsSection>
 
@@ -337,10 +323,9 @@
 		{#if selected.slug === CONTINUE_SLUG}
 			<SettingsSection title={selected.title} variant="card">
 				<Text size="sm" variant="muted">
-					Auto-managed from playback - titles appear here as you watch
-					and disappear when finished. Use the toggle in the list to
-					show or hide this row, and drag it to reposition it among
-					the other collections.
+					Auto-managed from playback - titles appear here as you watch and
+					disappear when finished. Use the toggle in the list to show or hide
+					this row, and drag it to reposition it among the other collections.
 				</Text>
 			</SettingsSection>
 		{:else}
@@ -417,21 +402,17 @@
 				/>
 				{#if results.length > 0}
 					<div class="grid">
-						{#each results as r (r.media_type + r.id)}
+						{#each results as r (r.media_type + r.tmdb_id)}
 							<Card
 								media={{
-									src: r.poster_path
-										? imageUrl(r.poster_path, "w342")
-										: "",
+									src: r.poster_path ? imageUrl(r.poster_path, "w342") : "",
 									aspectRatio: "2/3",
 								}}
 								mediaLayout="overlay"
 								onclick={() => addItem(r)}
 							>
 								{#snippet bottomLeft()}
-									<Text size="xs" variant="muted"
-										>{r.title}</Text
-									>
+									<Text size="xs" variant="muted">{r.title}</Text>
 								{/snippet}
 							</Card>
 						{/each}
@@ -455,8 +436,7 @@
 				<Text size="sm">
 					Using
 					<Code>CINEMA_YTDLP_COOKIES</Code>
-					({cookiesStatus.env_path}). Env var takes precedence over
-					uploads.
+					({cookiesStatus.env_path}). Env var takes precedence over uploads.
 				</Text>
 			{:else if cookiesStatus.source === "file"}
 				<Text size="sm">
