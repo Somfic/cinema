@@ -12,11 +12,6 @@ export async function getDetails(type: MediaType, id: number) {
 	return api.media.tvDetails(id);
 }
 
-export async function playStream(infoHash: string, fileIdx: number) {
-	const res = await api.streams.start(infoHash, fileIdx);
-	return { url: res.url, local: res.local };
-}
-
 export function formatBytes(bytes: number): string {
 	if (bytes >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(2)} TB`;
 	if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;

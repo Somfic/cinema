@@ -314,7 +314,6 @@
 	});
 
 	function close() {
-		session.stop();
 		goto(`/${mediaType}/${mediaId}`);
 	}
 </script>

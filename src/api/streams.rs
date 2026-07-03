@@ -72,6 +72,11 @@ pub trait StreamsApi {
     #[post]
     async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error>;
 
+    /// Stops a torrent stream. Is equivalent to pausing the download,
+    /// but does not require the download id.
+    #[post]
+    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), Error>;
+
     /// Reveals the on-disk file for a torrent stream in the server's file
     /// manager. Only meaningful when the server runs on the user's own machine
     /// (the self-hosted local case).
@@ -206,6 +211,21 @@ impl StreamsApi for AppContext {
         crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
+    }
+
+    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), Error> {
+        let id = crate::downloads::types::Download::find_id_by_info_hash_and_file_idx(
+            &self.db, &info_hash, file_idx,
+        )
+        .await?;
+
+        let Some(id) = id else {
+            return Err(crate::app::Error::NotFound(format!(
+                "No download found for {info_hash} ({file_idx})"
+            )));
+        };
+
+        self.downloads.pause(id).await
     }
 
     async fn reveal(&self, info_hash: String, file_idx: i64) -> Result<(), Error> {

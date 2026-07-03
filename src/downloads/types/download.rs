@@ -93,7 +93,7 @@ impl From<DownloadRow> for Download {
 }
 
 impl Download {
-    pub async fn find_all(db: &Pool) -> crate::app::Result<Vec<Download>> {
+    pub async fn find_all(db: &Pool) -> crate::app::Result<Vec<Self>> {
         let rows = sqlx::query_as!(
             DownloadRow,
             r#"
@@ -125,7 +125,26 @@ impl Download {
         .fetch_all(db)
         .await
         .map_err(Error::DatabaseError)?;
-        Ok(rows.into_iter().map(Download::from).collect())
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    pub async fn find_id_by_info_hash_and_file_idx(
+        db: &Pool,
+        info_hash: &str,
+        file_idx: i32,
+    ) -> crate::app::Result<Option<i32>> {
+        let id = sqlx::query_scalar!(
+            r#"
+                SELECT id FROM downloads WHERE info_hash = $1 AND file_idx = $2
+            "#,
+            info_hash,
+            file_idx
+        )
+        .fetch_optional(db)
+        .await
+        .map_err(Error::DatabaseError)?;
+
+        Ok(id)
     }
 
     /// Upsert a `(info_hash, file_idx)` row, returning its id. Does not touch

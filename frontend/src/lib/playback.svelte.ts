@@ -1,5 +1,4 @@
 import { api } from "$lib/api";
-import { playStream } from "$lib/utils";
 import type {
 	AudioTrack,
 	Chapter,
@@ -52,6 +51,7 @@ export class PlaybackSession {
 	#audioPollTimer: ReturnType<typeof setInterval> | undefined;
 	#statsUnsub: (() => void) | undefined;
 	#piecesUnsub: (() => void) | undefined;
+	#currentlyPlaying: { info_hash: string; file_idx: number } | null = null;
 
 	constructor(private ctx: PlaybackContext) { }
 
@@ -63,6 +63,7 @@ export class PlaybackSession {
 	): Promise<void> {
 		this.stopHlsSession();
 		this.#resetState();
+		await this.#stopStream();
 
 		const { startAt = 0, transcoding } = options ?? {};
 
@@ -74,7 +75,7 @@ export class PlaybackSession {
 			// #startHlsRemux clears hlsSessionId when the stream was superseded or errored.
 			if (!this.hlsSessionId) return;
 		} else {
-			const result = await playStream(stream.info_hash, stream.file_idx);
+			const result = await api.streams.start(stream.info_hash, stream.file_idx);
 			// Discard if the route switched streams while we awaited.
 			const cur = this.ctx.currentStream();
 			if (
@@ -85,6 +86,7 @@ export class PlaybackSession {
 				return;
 			this.streamUrl = result.url;
 			this.playingLocal = result.local;
+			this.#currentlyPlaying = stream;
 		}
 
 		this.#pollAudioTracks(stream.info_hash, stream.file_idx);
@@ -97,9 +99,22 @@ export class PlaybackSession {
 			clearInterval(this.#audioPollTimer);
 			this.#audioPollTimer = undefined;
 		}
+		this.#stopStream();
 		this.#stopStreamStats();
 		this.stopHlsSession();
 		this.#resetState();
+	}
+
+	async #stopStream() {
+		if (this.#currentlyPlaying) {
+			try {
+				await api.streams.stop(this.#currentlyPlaying.info_hash, this.#currentlyPlaying.file_idx);
+			} catch {
+				// do nothing
+			} finally {
+				this.#currentlyPlaying = null;
+			}
+		}
 	}
 
 	// Reset all per-stream display state. Called from both `start()` (so a
@@ -318,7 +333,7 @@ export class PlaybackSession {
 			);
 		} else {
 			this.stopHlsSession();
-			const result = await playStream(stream.info_hash, stream.file_idx);
+			const result = await api.streams.start(stream.info_hash, stream.file_idx);
 			this.streamUrl = result.url;
 		}
 	}
@@ -332,6 +347,9 @@ export class PlaybackSession {
 	): Promise<void> {
 		this.stopHlsSession();
 		this.streamUrl = null;
+		if (this.#currentlyPlaying && (this.#currentlyPlaying.info_hash !== hash || this.#currentlyPlaying.file_idx !== idx)) {
+			await this.#stopStream();
+		}
 		try {
 			const session = await api.streams.remux(
 				hash,
@@ -350,6 +368,10 @@ export class PlaybackSession {
 			}
 			this.hlsSessionId = session.session_id;
 			this.streamUrl = session.playlist_url;
+			this.#currentlyPlaying = {
+				info_hash: hash,
+				file_idx: idx
+			}
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : String(e);
 			this.ctx.onError?.(msg);
