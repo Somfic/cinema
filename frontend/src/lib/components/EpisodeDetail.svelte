@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Season, Episode, WatchHistoryItem } from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
-	import { Text } from "glow";
+	import { Text, Button } from "glow";
 	import PlayCard from "./PlayCard.svelte";
 
 	let {
@@ -12,6 +12,7 @@
 		loadingStreams = false,
 		onselectepisode,
 		onplay,
+		ondownload,
 	}: {
 		season: Season;
 		episode: Episode;
@@ -21,6 +22,7 @@
 		loadingStreams?: boolean;
 		onselectepisode: (season: number, episode: number) => void;
 		onplay?: () => void;
+		ondownload?: (season: number, episode: number) => void;
 	} = $props();
 
 	const canResume = $derived(
@@ -57,9 +59,29 @@
 					src={ep.stills[0] ? imageUrl(ep.stills[0], "w185") : ""}
 					alt=""
 				/>
-				<div class="ep-info">
-					<Text size="xs" variant="muted">Episode {ep.episode_number}</Text>
-					<Text size="sm" weight="semibold">{ep.name}</Text>
+				<div
+					style="display: flex; align-items: center; justify-content: space-between; flex-grow: 1; gap: 0.25rem"
+				>
+					<div class="ep-info">
+						<Text size="xs" variant="muted">Episode {ep.episode_number}</Text>
+						<Text size="sm" weight="semibold">{ep.name}</Text>
+					</div>
+					<span
+						role="none"
+						onclick={(event) => event.stopPropagation()}
+						onkeydown={(event) => {
+							event.stopPropagation();
+							event.preventDefault();
+						}}
+					>
+						<Button
+							variant="ghost"
+							icon="Download"
+							onclick={() => {
+								ondownload?.(season.season_number, ep.episode_number);
+							}}
+						></Button>
+					</span>
 				</div>
 			</button>
 		{/each}

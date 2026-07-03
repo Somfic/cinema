@@ -48,6 +48,7 @@
 		onselectepisode,
 		resumeEntry,
 		onresume,
+		ondownload,
 		playing = false,
 		tvMode = false,
 	}: {
@@ -58,6 +59,7 @@
 		onselectepisode?: (season: number, episode: number) => void;
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
+		ondownload?: () => void;
 		playing?: boolean;
 		tvMode?: boolean;
 	} = $props();
@@ -320,12 +322,14 @@
 				/>
 			{/if}
 		{/if}
-		<!-- <DownloadButton
-			mediaType={item.media_type}
-			tmdbId={item.id}
-			title={item.title}
-			posterPath={item.poster_path ?? null}
-		/> -->
+		{#if !tvMode && ondownload && item.media_type === "movie"}
+			<Button
+				variant="ghost"
+				icon="Download"
+				tooltip="Download"
+				onclick={ondownload}
+			/>
+		{/if}
 	</div>
 
 	{#if !tvMode && item.media_type === "movie" && (movieResume ? onresume : onwatch)}

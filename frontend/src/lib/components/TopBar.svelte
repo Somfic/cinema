@@ -4,6 +4,7 @@
 	import { Button, Icon } from "glow";
 	import { getGoBack, getFocusSearch } from "$lib/topbar.svelte";
 	import { remote } from "$lib/remote.svelte";
+	import DownloadsPopover from "./DownloadsPopover.svelte";
 
 	// Cast affordance (mobile only).
 	function handleCast() {
@@ -75,6 +76,7 @@
 				/>
 			</div>
 		{/if}
+		<DownloadsPopover />
 		<Button icon="HardDrive" variant="ghost" onclick={() => goto("/cache")} />
 		<Button icon="Settings" variant="ghost" onclick={() => goto("/settings")} />
 	</div>
