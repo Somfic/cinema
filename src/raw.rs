@@ -182,8 +182,7 @@ async fn stream_file(
     engine.ensure_torrent(&info_hash, &ctx.config).await?;
     engine.select_file(&info_hash, file_idx).await?;
     // Record the active stream in the DB so the manager picks it up too.
-    crate::downloads::types::Download::ensure_download(&ctx, &info_hash, file_idx as i32, None)
-        .await?;
+    crate::downloads::types::Download::ensure_download(&ctx, &info_hash, file_idx as i32).await?;
     let reader = engine.stream(&info_hash, file_idx)?;
     let total_size = reader.len;
 

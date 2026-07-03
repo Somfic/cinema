@@ -10,15 +10,11 @@
 	let {
 		mediaType,
 		tmdbId,
-		title,
-		posterPath,
 		season = 0,
 		episode = 0,
 	}: {
 		mediaType: MediaType;
 		tmdbId: number;
-		title: string;
-		posterPath?: string;
 		season?: number;
 		episode?: number;
 	} = $props();
@@ -36,8 +32,8 @@
 				download =
 					items.find(
 						(d) =>
-							d.meta?.media_type === mediaType &&
-							d.meta.tmdb_id === tmdbId &&
+							d.meta?.media_item?.media_type === mediaType &&
+							d.meta.media_item.tmdb_id === tmdbId &&
 							d.meta.season === season &&
 							d.meta.episode === episode,
 					) ?? null;
@@ -56,8 +52,8 @@
 					download =
 						items.find(
 							(d) =>
-								d.meta?.media_type === mediaType &&
-								d.meta.tmdb_id === tmdbId &&
+								d.meta?.media_item?.media_type === mediaType &&
+								d.meta.media_item.tmdb_id === tmdbId &&
 								d.meta.season === season &&
 								d.meta.episode === episode,
 						) ?? null;
@@ -90,8 +86,6 @@
 		const id = await api.downloads.enqueue({
 			media_type: mediaType,
 			tmdb_id: tmdbId,
-			title,
-			poster_path: posterPath ?? null,
 			season,
 			episode,
 			resolution,

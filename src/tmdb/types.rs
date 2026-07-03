@@ -133,7 +133,7 @@ impl MediaItem {
         tmdb_id: i64,
         media_type: MediaType,
         title: &String,
-        poster_path: Option<&String>,
+        poster_path: Option<&str>,
         conn: E,
     ) -> crate::app::Result<i32> {
         sqlx::query_scalar!(
@@ -154,20 +154,6 @@ impl MediaItem {
         .fetch_one(conn)
         .await
         .map_err(crate::app::Error::DatabaseError)
-    }
-
-    pub async fn upsert<'c, E: sqlx::Executor<'c, Database = sqlx::Postgres>>(
-        &self,
-        conn: E,
-    ) -> crate::app::Result<i32> {
-        Self::upsert_raw(
-            self.tmdb_id,
-            self.media_type,
-            &self.title,
-            self.poster_path.as_ref(),
-            conn,
-        )
-        .await
     }
 
     pub async fn ensure_exists(

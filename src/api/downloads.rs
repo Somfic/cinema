@@ -1,5 +1,5 @@
 use crate::app::{AppContext, Error};
-use crate::downloads::types::{Download, MediaContext};
+use crate::downloads::types::Download;
 use crate::tmdb::{MediaType, TmdbClient};
 use crate::{streams as streams_mod, tmdb};
 
@@ -17,8 +17,6 @@ pub struct DownloadProgress {
 pub struct EnqueueDownload {
     pub media_type: tmdb::MediaType,
     pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
     #[serde(default)]
     pub season: u32,
     #[serde(default)]
@@ -92,17 +90,19 @@ impl DownloadsApi for AppContext {
                     .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
 
                 let media_type = match body.media_type {
-                    MediaType::Movie => streams_mod::AggregationMediaType::Media { imdb_id },
+                    MediaType::Movie => streams_mod::AggregationMediaType::Media {
+                        tmdb_id: body.tmdb_id,
+                        imdb_id,
+                    },
                     MediaType::Tv => streams_mod::AggregationMediaType::Tv {
+                        tmdb_id: body.tmdb_id,
                         imdb_id,
                         season: body.season,
                         episode: body.episode,
                     },
                 };
 
-                let all_streams = media_type
-                    .aggregate(&self.http, &self.config.stream_sources)
-                    .await;
+                let all_streams = media_type.aggregate(self).await;
 
                 let stream = all_streams
                     .iter()
@@ -112,23 +112,8 @@ impl DownloadsApi for AppContext {
                 (stream.info_hash.clone(), stream.file_idx)
             };
 
-        let media = MediaContext {
-            media_type: body.media_type,
-            tmdb_id: body.tmdb_id,
-            title: body.title,
-            poster_path: body.poster_path,
-            season: body.season,
-            episode: body.episode,
-            resolution: Some(body.resolution),
-        };
-
-        let id = crate::downloads::types::Download::ensure_download(
-            self,
-            &info_hash,
-            file_idx,
-            Some(&media),
-        )
-        .await?;
+        let id =
+            crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
         Ok(id)
     }
 
@@ -165,17 +150,16 @@ impl DownloadsApi for AppContext {
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
         let media_type = match mt {
-            MediaType::Movie => streams_mod::AggregationMediaType::Media { imdb_id },
+            MediaType::Movie => streams_mod::AggregationMediaType::Media { tmdb_id, imdb_id },
             MediaType::Tv => streams_mod::AggregationMediaType::Tv {
+                tmdb_id,
                 imdb_id,
                 season: 1,
                 episode: 1,
             },
         };
 
-        let all_streams = media_type
-            .aggregate(&self.http, &self.config.stream_sources)
-            .await;
+        let all_streams = media_type.aggregate(self).await;
 
         let mut seen =
             std::collections::HashMap::<String, (Option<u64>, Option<String>, i64)>::new();

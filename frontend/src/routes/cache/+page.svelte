@@ -45,8 +45,23 @@
 	let filteredItems = $derived(
 		[...items]
 			.filter((it) => {
-				if (filter === "all") return true;
-				return it.category === filter;
+				switch (filter) {
+					case "movies": {
+						return it.download?.meta?.media_item?.media_type === "movie";
+					}
+					case "tv": {
+						return it.download?.meta?.media_item?.media_type === "tv";
+					}
+					case "hls": {
+						return it.kind === "hls";
+					}
+					case "orphan": {
+						return it.kind === "orphan";
+					}
+					default: {
+						return true;
+					}
+				}
 			})
 			.sort((a, b) => b.disk_bytes - a.disk_bytes),
 	);
@@ -145,8 +160,8 @@
 		try {
 			if (target.kind === "orphan") {
 				await api.cache.orphan(target.info_hash);
-			} else if (target.id != null) {
-				await api.downloads.remove(target.id);
+			} else if (target.download != null) {
+				await api.downloads.remove(target.download.id);
 			}
 		} catch {
 			/* ignored — UI just refetches */
@@ -168,10 +183,15 @@
 		if (it.kind === "orphan") {
 			return `Orphaned (${it.info_hash.slice(0, 12)}…)`;
 		}
-		let t = it.title ?? "Untitled";
-		if (it.media_type === "tv" && it.season && it.episode) {
-			const s = String(it.season).padStart(2, "0");
-			const e = String(it.episode).padStart(2, "0");
+		const downloadMeta = it.download?.meta;
+		let t = downloadMeta?.media_item?.title ?? "Untitled";
+		if (
+			downloadMeta?.media_item?.media_type === "tv" &&
+			downloadMeta.season &&
+			downloadMeta.episode
+		) {
+			const s = String(downloadMeta.season).padStart(2, "0");
+			const e = String(downloadMeta.episode).padStart(2, "0");
 			t = `${t} · S${s}E${e}`;
 		}
 		return t;
@@ -311,11 +331,17 @@
 				<Text size="sm">Nothing here.</Text>
 			{:else}
 				<ul class="list">
-					{#each filteredItems as it (it.kind + "-" + (it.id ?? it.info_hash))}
+					{#each filteredItems as it (it.kind + "-" + (it.download?.id ?? it.info_hash))}
 						<li class="row">
 							<div class="thumb">
-								{#if it.poster_path}
-									<img src={imageUrl(it.poster_path, "w200")} alt="" />
+								{#if it.download?.meta?.media_item?.poster_path}
+									<img
+										src={imageUrl(
+											it.download.meta.media_item.poster_path,
+											"w200",
+										)}
+										alt=""
+									/>
 								{:else}
 									<div class="thumb-placeholder"></div>
 								{/if}
@@ -323,18 +349,18 @@
 							<div class="meta">
 								<Text size="sm">{rowTitle(it)}</Text>
 								<div class="pills">
-									{#if it.resolution}
-										<Pill label={it.resolution} />
+									{#if it.download?.meta?.resolution}
+										<Pill label={it.download.meta.resolution} />
 									{/if}
-									{#if it.status && it.status !== "Completed"}
-										<Pill label={it.status} />
+									{#if it.download?.status && it.download.status !== "Completed"}
+										<Pill label={it.download.status} />
 									{/if}
 									{#if it.kind === "orphan"}
 										<Pill label="orphan" />
 									{/if}
-									{#if it.kind === "download" && it.status !== "Completed" && it.total_bytes && it.downloaded_bytes != null && it.total_bytes > 0}
+									{#if it.kind === "download" && it.download?.status !== "Completed" && it.download?.total_bytes && it.download.downloaded_bytes != null && it.download.total_bytes > 0}
 										<Pill
-											label={`${Math.round((it.downloaded_bytes / it.total_bytes) * 100)}%`}
+											label={`${Math.round((it.download.downloaded_bytes / it.download.total_bytes) * 100)}%`}
 										/>
 									{/if}
 								</div>

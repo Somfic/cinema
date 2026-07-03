@@ -51,33 +51,48 @@ pub struct Stream {
     pub score: f64,
 }
 
-// --- Aggregation ---
-
 pub enum AggregationMediaType {
     Media {
+        tmdb_id: i64,
         imdb_id: String,
     },
     Tv {
+        tmdb_id: i64,
         imdb_id: String,
         season: u32,
         episode: u32,
     },
 }
 
+impl From<&AggregationMediaType> for crate::tmdb::MediaType {
+    fn from(value: &AggregationMediaType) -> Self {
+        match value {
+            AggregationMediaType::Media { .. } => crate::tmdb::MediaType::Movie,
+            AggregationMediaType::Tv { .. } => crate::tmdb::MediaType::Tv,
+        }
+    }
+}
+
 impl AggregationMediaType {
-    pub async fn aggregate(self, client: &reqwest::Client, sources: &[String]) -> Vec<Stream> {
-        let path = match self {
-            AggregationMediaType::Media { imdb_id } => format!("movie/{imdb_id}"),
+    pub async fn aggregate(self, ctx: &crate::app::AppContext) -> Vec<Stream> {
+        let path = match &self {
+            AggregationMediaType::Media {
+                tmdb_id: _,
+                imdb_id,
+            } => format!("movie/{imdb_id}"),
             AggregationMediaType::Tv {
+                tmdb_id: _,
                 imdb_id,
                 season,
                 episode,
             } => format!("series/{imdb_id}:{season}:{episode}"),
         };
 
-        let futures: Vec<_> = sources
+        let futures: Vec<_> = ctx
+            .config
+            .stream_sources
             .iter()
-            .map(|source| fetch_source(client, source, &path))
+            .map(|source| fetch_source(&ctx.http, source, &path))
             .collect();
 
         let results = join_all(futures).await;
@@ -108,6 +123,67 @@ impl AggregationMediaType {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        let mut tx = match ctx
+            .db
+            .begin()
+            .await
+            .map_err(crate::app::Error::DatabaseError)
+        {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    "Could not acquire the transaction for inserting media items"
+                );
+                return streams;
+            }
+        };
+
+        let tmdb_id = match &self {
+            AggregationMediaType::Media { tmdb_id, .. } => *tmdb_id,
+            AggregationMediaType::Tv { tmdb_id, .. } => *tmdb_id,
+        };
+        let media_type = crate::tmdb::MediaType::from(&self);
+        let meta_rows: Vec<_> = streams
+            .iter()
+            .map(|stream| {
+                let (season, episode) = match &self {
+                    AggregationMediaType::Media { .. } => (None, None),
+                    AggregationMediaType::Tv {
+                        tmdb_id: _,
+                        imdb_id: _,
+                        season,
+                        episode,
+                    } => (Some(*season as i32), Some(*episode as i32)),
+                };
+
+                crate::downloads::types::DownloadMetaRow {
+                    info_hash: &stream.info_hash,
+                    file_idx: stream.file_idx,
+                    season,
+                    episode,
+                    resolution: stream.resolution.as_ref(),
+                }
+            })
+            .collect();
+
+        let meta_ctx = crate::downloads::types::DownloadMetaContext {
+            tmdb_id,
+            media_type,
+            rows: meta_rows,
+        };
+
+        if let Err(err) =
+            crate::downloads::types::DownloadMeta::upsert(&mut tx, meta_ctx, ctx).await
+        {
+            tracing::warn!(?err, "Could not insert download metadata")
+        }
+
+        if let Err(err) = tx.commit().await {
+            tracing::warn!(?err, "Could not commit the insertion of download metadata")
+        }
+
         streams
     }
 }

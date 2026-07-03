@@ -16,28 +16,6 @@ pub enum DownloadStatus {
 }
 
 #[draad::ty]
-pub struct DownloadMeta {
-    pub media_type: tmdb::MediaType,
-    pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
-    pub season: i64,
-    pub episode: i64,
-    pub resolution: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MediaContext {
-    pub media_type: tmdb::MediaType,
-    pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
-    pub season: u32,
-    pub episode: u32,
-    pub resolution: Option<String>,
-}
-
-#[draad::ty]
 pub struct Download {
     pub id: i32,
     pub info_hash: String,
@@ -49,12 +27,13 @@ pub struct Download {
     pub error: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub meta: Option<DownloadMeta>,
+    pub meta: Option<super::DownloadMeta>,
 }
 
 /// Flat row mapped from the LEFT JOIN'd select; collapsed to [`Download`] via `From`.
 #[derive(Debug)]
 struct DownloadRow {
+    // download itself
     id: i32,
     info_hash: String,
     file_idx: i32,
@@ -65,26 +44,38 @@ struct DownloadRow {
     error: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     completed_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    // download meta
+    meta_exists: bool,
+    season: Option<i32>,
+    episode: Option<i32>,
+    resolution: Option<String>,
+
+    // download media item
     media_type: Option<tmdb::MediaType>,
     tmdb_id: Option<i64>,
     title: Option<String>,
     poster_path: Option<String>,
-    season: Option<i32>,
-    episode: Option<i32>,
-    resolution: Option<String>,
 }
 
 impl From<DownloadRow> for Download {
     fn from(r: DownloadRow) -> Self {
-        let meta = r.media_type.map(|mt| DownloadMeta {
-            media_type: mt,
-            tmdb_id: r.tmdb_id.unwrap_or(0),
-            title: r.title.unwrap_or_default(),
-            poster_path: r.poster_path,
-            season: r.season.unwrap_or(0) as i64,
-            episode: r.episode.unwrap_or(0) as i64,
-            resolution: r.resolution,
-        });
+        let meta = if r.meta_exists {
+            Some(super::DownloadMeta {
+                media_item: r.media_type.map(|media_type| super::DownloadMetaMediaItem {
+                    media_type,
+                    title: r.title.unwrap_or_default(),
+                    poster_path: r.poster_path,
+                    tmdb_id: r.tmdb_id.unwrap_or(0),
+                }),
+                season: r.season,
+                episode: r.episode,
+                resolution: r.resolution,
+            })
+        } else {
+            None
+        };
+
         Download {
             id: r.id,
             info_hash: r.info_hash,
@@ -106,69 +97,35 @@ impl Download {
         let rows = sqlx::query_as!(
             DownloadRow,
             r#"
-        SELECT
-            d.id,
-            d.info_hash,
-            d.file_idx,
-            d.name,
-            d.total_bytes,
-            d.downloaded_bytes,
-            d.status as "status: DownloadStatus",
-            d.error,
-            d.created_at,
-            d.completed_at,
-            mi.media_type as "media_type?: tmdb::MediaType",
-            mi.tmdb_id as "tmdb_id?",
-            mi.title as "title?",
-            mi.poster_path as "poster_path?",
-            dm.season as "season?",
-            dm.episode as "episode?",
-            dm.resolution as "resolution?"
-        FROM downloads d
-        LEFT JOIN download_meta dm ON dm.download_id = d.id
-        LEFT JOIN media_items mi ON mi.id = dm.media_id
-        ORDER BY d.created_at DESC
-        "#
+                SELECT
+                    d.id,
+                    d.info_hash,
+                    d.file_idx,
+                    d.name,
+                    d.total_bytes,
+                    d.downloaded_bytes,
+                    d.status as "status: DownloadStatus",
+                    d.error,
+                    d.created_at,
+                    d.completed_at,
+                    dm.info_hash IS NOT NULL as "meta_exists!: bool",
+                    mi.media_type as "media_type?: tmdb::MediaType",
+                    mi.tmdb_id as "tmdb_id?",
+                    mi.title as "title?",
+                    mi.poster_path as "poster_path?",
+                    dm.season as "season?",
+                    dm.episode as "episode?",
+                    dm.resolution as "resolution?"
+                FROM downloads d
+                LEFT JOIN download_meta dm ON dm.info_hash = d.info_hash AND dm.file_idx = d.file_idx
+                LEFT JOIN media_items mi ON mi.id = dm.media_id
+                ORDER BY d.created_at DESC
+            "#
         )
         .fetch_all(db)
         .await
         .map_err(Error::DatabaseError)?;
         Ok(rows.into_iter().map(Download::from).collect())
-    }
-
-    pub async fn find_by_id(id: i32, db: &Pool) -> crate::app::Result<Option<Download>> {
-        let row = sqlx::query_as!(
-            DownloadRow,
-            r#"
-        SELECT
-            d.id,
-            d.info_hash,
-            d.file_idx,
-            d.name,
-            d.total_bytes,
-            d.downloaded_bytes,
-            d.status as "status: DownloadStatus",
-            d.error,
-            d.created_at,
-            d.completed_at,
-            mi.media_type as "media_type?: tmdb::MediaType",
-            mi.tmdb_id as "tmdb_id?",
-            mi.title as "title?",
-            mi.poster_path as "poster_path?",
-            dm.season as "season?",
-            dm.episode as "episode?",
-            dm.resolution as "resolution?"
-        FROM downloads d
-        LEFT JOIN download_meta dm ON dm.download_id = d.id
-        LEFT JOIN media_items mi ON mi.id = dm.media_id
-        WHERE d.id = $1
-        "#,
-            id
-        )
-        .fetch_optional(db)
-        .await
-        .map_err(Error::DatabaseError)?;
-        Ok(row.map(Download::from))
     }
 
     /// Upsert a `(info_hash, file_idx)` row, returning its id. Does not touch
@@ -180,49 +137,17 @@ impl Download {
     ) -> crate::app::Result<i32> {
         sqlx::query_scalar!(
             r#"
-        INSERT INTO downloads (info_hash, file_idx)
-        VALUES ($1, $2)
-        ON CONFLICT (info_hash, file_idx) DO UPDATE SET info_hash = EXCLUDED.info_hash
-        RETURNING id
-        "#,
+                INSERT INTO downloads (info_hash, file_idx)
+                VALUES ($1, $2)
+                ON CONFLICT (info_hash, file_idx) DO UPDATE SET info_hash = EXCLUDED.info_hash
+                RETURNING id
+            "#,
             info_hash,
             file_idx
         )
         .fetch_one(&mut **tx)
         .await
         .map_err(Error::DatabaseError)
-    }
-
-    /// Upsert media_items + download_meta linking media context to a download.
-    pub async fn upsert_meta(
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        download_id: i32,
-        media: &MediaContext,
-        ctx: &crate::app::AppContext,
-    ) -> crate::app::Result<()> {
-        let media_id =
-            crate::tmdb::MediaItem::ensure_exists(media.tmdb_id, media.media_type, tx, ctx).await?;
-
-        sqlx::query!(
-            r#"
-        INSERT INTO download_meta (download_id, media_id, season, episode, resolution)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (download_id) DO UPDATE SET
-            media_id = EXCLUDED.media_id,
-            season = EXCLUDED.season,
-            episode = EXCLUDED.episode,
-            resolution = EXCLUDED.resolution
-        "#,
-            download_id,
-            media_id,
-            media.season as i32,
-            media.episode as i32,
-            media.resolution,
-        )
-        .execute(&mut **tx)
-        .await
-        .map_err(Error::DatabaseError)?;
-        Ok(())
     }
 
     /// Reset a download from a terminal/idle state so it can be re-started.
@@ -233,11 +158,11 @@ impl Download {
     ) -> crate::app::Result<()> {
         sqlx::query!(
             r#"
-        UPDATE downloads
-        SET status = 'queued',
-            error = NULL
-        WHERE id = $1 AND status IN ('paused', 'cancelled', 'failed')
-        "#,
+                UPDATE downloads
+                SET status = 'queued',
+                    error = NULL
+                WHERE id = $1 AND status IN ('paused', 'cancelled', 'failed')
+            "#,
             id
         )
         .execute(&mut **tx)
@@ -253,15 +178,10 @@ impl Download {
         ctx: &crate::app::AppContext,
         info_hash: &str,
         file_idx: i32,
-        media: Option<&MediaContext>,
     ) -> crate::app::Result<i32> {
         let mut tx = ctx.db.begin().await.map_err(Error::DatabaseError)?;
 
         let id = Self::upsert(&mut tx, info_hash, file_idx).await?;
-
-        if let Some(media) = media {
-            Self::upsert_meta(&mut tx, id, media, ctx).await?;
-        }
 
         Self::reset_for_restart(&mut tx, id).await?;
 

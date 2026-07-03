@@ -41,11 +41,16 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
     let mut tv_bytes: u64 = 0;
     let mut tracked_bytes: u64 = 0;
 
-    for dl in downloads {
-        let size = file_system::dir_size(&torrents.join(&dl.info_hash)).await;
-        seen_hashes.insert(dl.info_hash.to_lowercase());
+    for download in downloads {
+        let size = file_system::dir_size(&torrents.join(&download.info_hash)).await;
+        seen_hashes.insert(download.info_hash.to_lowercase());
         tracked_bytes = tracked_bytes.saturating_add(size);
-        match dl.meta.as_ref().map(|m| m.media_type) {
+        match download
+            .meta
+            .as_ref()
+            .and_then(|m| m.media_item.as_ref())
+            .map(|m| m.media_type)
+        {
             Some(crate::tmdb::MediaType::Movie) => movies_bytes = movies_bytes.saturating_add(size),
             Some(crate::tmdb::MediaType::Tv) => tv_bytes = tv_bytes.saturating_add(size),
             None => {}

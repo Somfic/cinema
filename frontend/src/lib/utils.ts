@@ -13,7 +13,7 @@ export async function getDetails(type: MediaType, id: number) {
 }
 
 export async function playStream(infoHash: string, fileIdx: number) {
-	const res = await api.streams.start(infoHash, fileIdx, null);
+	const res = await api.streams.start(infoHash, fileIdx);
 	return { url: res.url, local: res.local };
 }
 

@@ -344,7 +344,7 @@ impl TmdbMovie {
             self.id,
             MediaType::Movie,
             &self.title,
-            self.poster_path.as_ref(),
+            self.poster_path.as_deref(),
             conn,
         )
         .await?;
@@ -380,9 +380,9 @@ impl TmdbTv {
     ) -> crate::app::Result<MediaItem> {
         let id = MediaItem::upsert_raw(
             self.id,
-            MediaType::Movie,
+            MediaType::Tv,
             &self.name,
-            self.poster_path.as_ref(),
+            self.poster_path.as_deref(),
             conn,
         )
         .await?;

@@ -1,7 +1,7 @@
 use crate::app::{AppContext, Error};
 use crate::downloads::TorrentEngine;
 use crate::streams::Stream;
-use crate::tmdb::{self, MediaType, TmdbClient};
+use crate::tmdb::{MediaType, TmdbClient};
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
 
 #[draad::ty]
@@ -14,23 +14,6 @@ pub struct StartStream {
 pub struct RemuxSession {
     pub session_id: String,
     pub playlist_url: String,
-}
-
-// TODO: replace with just media_id
-/// Optional media context for a stream start. When provided, the download
-/// row's media metadata is populated synchronously, so the UI doesn't need
-/// to wait for the async TMDB resolver.
-#[draad::ty]
-pub struct StreamMediaContext {
-    pub media_type: tmdb::MediaType,
-    pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
-    #[serde(default)]
-    pub season: u32,
-    #[serde(default)]
-    pub episode: u32,
-    pub resolution: Option<String>,
 }
 
 #[draad::ty]
@@ -87,12 +70,7 @@ pub trait StreamsApi {
     /// active engine state. When `media` is provided, also populates
     /// `download_meta` synchronously.
     #[post]
-    async fn start(
-        &self,
-        info_hash: String,
-        file_idx: i32,
-        media: Option<StreamMediaContext>,
-    ) -> Result<StartStream, Error>;
+    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error>;
 
     /// Reveals the on-disk file for a torrent stream in the server's file
     /// manager. Only meaningful when the server runs on the user's own machine
@@ -194,9 +172,15 @@ impl StreamsApi for AppContext {
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found for this movie".into()))?;
-        Ok(streams_mod::AggregationMediaType::Media { imdb_id }
-            .aggregate(&self.http, &self.config.stream_sources)
-            .await)
+
+        let streams = streams_mod::AggregationMediaType::Media {
+            tmdb_id: id,
+            imdb_id,
+        }
+        .aggregate(self)
+        .await;
+
+        Ok(streams)
     }
 
     async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error> {
@@ -205,37 +189,21 @@ impl StreamsApi for AppContext {
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found for this show".into()))?;
-        Ok(streams_mod::AggregationMediaType::Tv {
+
+        let streams = streams_mod::AggregationMediaType::Tv {
+            tmdb_id: id,
             imdb_id,
             season,
             episode,
         }
-        .aggregate(&self.http, &self.config.stream_sources)
-        .await)
+        .aggregate(self)
+        .await;
+
+        Ok(streams)
     }
 
-    async fn start(
-        &self,
-        info_hash: String,
-        file_idx: i32,
-        media: Option<StreamMediaContext>,
-    ) -> Result<StartStream, Error> {
-        let media = media.map(|m| crate::downloads::types::MediaContext {
-            media_type: m.media_type,
-            tmdb_id: m.tmdb_id,
-            title: m.title,
-            poster_path: m.poster_path,
-            season: m.season,
-            episode: m.episode,
-            resolution: m.resolution,
-        });
-        crate::downloads::types::Download::ensure_download(
-            self,
-            &info_hash,
-            file_idx,
-            media.as_ref(),
-        )
-        .await?;
+    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error> {
+        crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
     }
@@ -254,8 +222,7 @@ impl StreamsApi for AppContext {
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error> {
-        crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx, None)
-            .await?;
+        crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
         let (session_id, playlist_url) = crate::hls::start_session(
             &self.storage,
             &self.config,

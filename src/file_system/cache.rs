@@ -1,40 +1,27 @@
 use crate::{
     app::{AppContext, Error},
-    downloads::types::DownloadStatus,
-    file_system, tmdb,
+    file_system,
 };
 
 #[draad::ty]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     Download,
+    // TODO: HLS is not implemented. The idea is that users can "pretranscode" files (like
+    // queueing a download), which will get this type
+    Hls,
     Orphan,
 }
 
-// TODO: replace strings with enums (reuse enums also in downloads.rs)
 #[draad::ty]
 pub struct CacheEntry {
     /// "download" for tracked downloads, "orphan" for stray torrent dirs.
     kind: EntryKind,
-    /// downloads.id; null for orphans.
-    id: Option<i32>,
     info_hash: String,
-    title: Option<String>,
-    poster_path: Option<String>,
-    /// "movie" | "tv" for tracked downloads.
-    media_type: Option<tmdb::MediaType>,
-    /// "movies" | "tv" | "orphan" — used by the UI for grouping/filtering.
-    category: String,
-    season: Option<i64>,
-    episode: Option<i64>,
-    resolution: Option<String>,
-    /// queued | downloading | completed | failed | cancelled for tracked items.
-    status: Option<DownloadStatus>,
+    /// the corresponding download entry. None for orphans
+    download: Option<crate::downloads::types::Download>,
     /// Actual on-disk size of the torrent directory.
     disk_bytes: u64,
-    total_bytes: Option<i64>,
-    downloaded_bytes: Option<i64>,
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error> {
@@ -44,35 +31,16 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<CacheEntry> = Vec::with_capacity(downloads.len());
 
-    for dl in downloads {
-        let dir = torrents.join(&dl.info_hash);
+    for download in downloads {
+        let dir = torrents.join(&download.info_hash);
         let disk_bytes = file_system::dir_size(&dir).await;
-        seen_hashes.insert(dl.info_hash.to_lowercase());
-
-        // TODO: replace with enum
-        let category = match dl.meta.as_ref().map(|m| m.media_type) {
-            Some(tmdb::MediaType::Movie) => "movies",
-            Some(tmdb::MediaType::Tv) => "tv",
-            None => "other",
-        }
-        .to_string();
+        seen_hashes.insert(download.info_hash.to_lowercase());
 
         entries.push(CacheEntry {
             kind: EntryKind::Download,
-            id: Some(dl.id),
-            info_hash: dl.info_hash,
-            title: dl.meta.as_ref().map(|m| m.title.clone()).or(dl.name),
-            poster_path: dl.meta.as_ref().and_then(|m| m.poster_path.clone()),
-            media_type: dl.meta.as_ref().map(|m| m.media_type),
-            category,
-            season: dl.meta.as_ref().map(|m| m.season),
-            episode: dl.meta.as_ref().map(|m| m.episode),
-            resolution: dl.meta.as_ref().and_then(|m| m.resolution.clone()),
-            status: Some(dl.status),
+            info_hash: download.info_hash.clone(),
+            download: Some(download),
             disk_bytes,
-            total_bytes: dl.total_bytes,
-            downloaded_bytes: Some(dl.downloaded_bytes),
-            created_at: Some(dl.created_at),
         });
     }
 
@@ -92,20 +60,9 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
             let disk_bytes = file_system::dir_size(&entry.path()).await;
             entries.push(CacheEntry {
                 kind: EntryKind::Orphan,
-                id: None,
                 info_hash: name,
-                title: None,
-                poster_path: None,
-                media_type: None,
-                category: "orphan".into(),
-                season: None,
-                episode: None,
-                resolution: None,
-                status: None,
+                download: None,
                 disk_bytes,
-                total_bytes: None,
-                downloaded_bytes: None,
-                created_at: None,
             });
         }
     }

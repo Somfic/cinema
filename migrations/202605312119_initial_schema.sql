@@ -1,6 +1,13 @@
-CREATE TYPE media_type AS ENUM ('movie', 'tv');
-CREATE TYPE download_status AS ENUM ('queued', 'downloading', 'paused', 'completed', 'cancelled', 'failed');
-CREATE TYPE collection_kind AS ENUM ('manual', 'ordered');
+DO
+$$
+    BEGIN
+        CREATE TYPE media_type AS ENUM ('movie', 'tv');
+        CREATE TYPE download_status AS ENUM ('queued', 'downloading', 'paused', 'completed', 'cancelled', 'failed');
+        CREATE TYPE collection_kind AS ENUM ('manual', 'ordered');
+    EXCEPTION
+        WHEN duplicate_object THEN null;
+    END
+$$;
 
 CREATE TABLE IF NOT EXISTS media_items
 (
@@ -32,11 +39,15 @@ CREATE TABLE IF NOT EXISTS downloads
 
 CREATE TABLE IF NOT EXISTS download_meta
 (
-    download_id INTEGER PRIMARY KEY REFERENCES downloads (id) ON DELETE CASCADE,
-    media_id    INTEGER NOT NULL REFERENCES media_items (id) ON DELETE CASCADE,
-    season      INTEGER NOT NULL DEFAULT 0,
-    episode     INTEGER NOT NULL DEFAULT 0,
-    resolution  VARCHAR(15)
+    info_hash  VARCHAR(63) NOT NULL,
+    file_idx   INTEGER     NOT NULL,
+
+    media_id   INTEGER     NOT NULL REFERENCES media_items (id) ON DELETE CASCADE,
+    season     INTEGER     NOT NULL DEFAULT 0,
+    episode    INTEGER     NOT NULL DEFAULT 0,
+    resolution VARCHAR(15),
+
+    PRIMARY KEY (info_hash, file_idx)
 );
 
 CREATE TABLE IF NOT EXISTS watch_history
