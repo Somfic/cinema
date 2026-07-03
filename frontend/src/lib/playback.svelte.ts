@@ -381,14 +381,13 @@ export class PlaybackSession {
 			.record({
 				media_type: item.media_type,
 				tmdb_id: item.tmdb_id,
-				title: item.title,
-				poster_path: item.poster_path ?? null,
 				season: s ?? null,
 				episode: e ?? null,
 				info_hash: stream.info_hash,
 				file_idx: stream.file_idx,
 				progress: playerTime,
 				duration: playerDuration,
+				transcoding: this.transcoding.onlyAudio ? "OnlyAudio" : this.transcoding.enabled ? "Enabled" : "Disabled",
 			})
 			.catch(() => { });
 	}

@@ -4,6 +4,7 @@ $$
         CREATE TYPE media_type AS ENUM ('movie', 'tv');
         CREATE TYPE download_status AS ENUM ('queued', 'downloading', 'paused', 'completed', 'cancelled', 'failed');
         CREATE TYPE collection_kind AS ENUM ('manual', 'ordered');
+        CREATE TYPE transcoding_option AS ENUM ('enabled', 'only-audio', 'disabled');
     EXCEPTION
         WHEN duplicate_object THEN null;
     END
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS watch_history
     episode      INTEGER                  NOT NULL DEFAULT 0,
     progress     REAL                     NOT NULL DEFAULT 0,
     duration     REAL                     NOT NULL DEFAULT 0,
+    transcoding  transcoding_option       NOT NULL DEFAULT 'disabled',
     last_watched TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -5,16 +5,26 @@ use crate::{
 
 #[draad::ty]
 pub struct RecordWatch {
-    pub media_type: tmdb::MediaType,
     pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
-    pub season: Option<i32>,
-    pub episode: Option<i32>,
+    pub media_type: tmdb::MediaType,
+
     pub info_hash: Option<String>,
     pub file_idx: Option<i32>,
+
+    pub season: Option<i32>,
+    pub episode: Option<i32>,
     pub progress: Option<f32>,
     pub duration: Option<f32>,
+    pub transcoding: TranscodingOption,
+}
+
+#[draad::ty]
+#[derive(sqlx::Type)]
+#[sqlx(type_name = "transcoding_option", rename_all = "kebab-case")]
+pub enum TranscodingOption {
+    Enabled,
+    OnlyAudio,
+    Disabled,
 }
 
 #[draad::ty]
@@ -29,6 +39,7 @@ pub struct WatchHistoryItem {
     pub file_idx: i64,
     pub progress: f64,
     pub duration: f64,
+    pub transcoding: TranscodingOption,
     pub last_watched: time::OffsetDateTime,
 }
 
@@ -69,14 +80,15 @@ impl WatchApi for AppContext {
         sqlx::query!(
             "
                 INSERT INTO watch_history
-                    (media_id, download_id, season, episode, progress, duration)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (media_id, download_id, season, episode, progress, duration, transcoding)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (media_id) DO UPDATE SET
                     download_id  = EXCLUDED.download_id,
                     season       = EXCLUDED.season,
                     episode      = EXCLUDED.episode,
                     progress     = EXCLUDED.progress,
                     duration     = EXCLUDED.duration,
+                    transcoding  = EXCLUDED.transcoding,
                     last_watched = CURRENT_TIMESTAMP
             ",
             media_id,
@@ -85,6 +97,7 @@ impl WatchApi for AppContext {
             watch.episode.unwrap_or(0),
             watch.progress.unwrap_or(0.0),
             watch.duration.unwrap_or(0.0),
+            watch.transcoding as TranscodingOption,
         )
         .execute(&mut *tx)
         .await
@@ -108,6 +121,7 @@ impl WatchApi for AppContext {
                 COALESCE(d.file_idx, 0) as "file_idx!",
                 wh.progress,
                 wh.duration,
+                wh.transcoding as "transcoding: TranscodingOption",
                 wh.last_watched
             FROM watch_history wh
             JOIN media_items mi ON mi.id = wh.media_id
