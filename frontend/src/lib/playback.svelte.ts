@@ -19,8 +19,6 @@ export interface PlaybackContext {
 	onError?: (message: string) => void;
 }
 
-const BROWSER_SAFE_AUDIO = new Set(["aac", "mp3", "opus", "vorbis", "flac"]);
-
 /**
  * Shared playback orchestration: subtitle loading, audio-track polling,
  * stream-stats subscriptions, HLS remux lifecycle, transcoding toggle, and
@@ -51,11 +49,6 @@ export class PlaybackSession {
 	streamStats = $state<StreamStats | null>(null);
 	pieceMap = $state<number[]>([]);
 
-	// True while a remux request is in flight. The backend blocks until the
-	// first HLS segment exists (up to the startup timeout), so without this
-	// guard the audio-track poll can fire a second startHlsRemux before the
-	// first resolves, spawning duplicate ffmpeg sessions for the same file.
-	#hlsStarting = false;
 	#audioPollTimer: ReturnType<typeof setInterval> | undefined;
 	#statsUnsub: (() => void) | undefined;
 	#piecesUnsub: (() => void) | undefined;
@@ -213,17 +206,6 @@ export class PlaybackSession {
 				if (data.chapters?.length) this.fileChapters = data.chapters as Chapter[];
 				if (tracks.length === 0) return; // keep polling
 				if (tracks.length > 1) this.fileAudioTracks = tracks;
-				if (
-					!this.hlsSessionId &&
-					!this.#hlsStarting &&
-					tracks[0] &&
-					!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
-				) {
-					this.fileAudioTracks = tracks;
-					this.transcoding.enabled = true;
-					this.transcoding.onlyAudio = true;
-					this.#startHlsRemux(hash, idx, 0, this.transcoding.onlyAudio);
-				}
 				if (subs.length > 0 && this.embeddedSubtitleTracks.length === 0) {
 					this.embeddedSubtitleTracks = subs;
 					// Prepend embedded tracks to the subtitle list. The url is
@@ -350,7 +332,6 @@ export class PlaybackSession {
 	): Promise<void> {
 		this.stopHlsSession();
 		this.streamUrl = null;
-		this.#hlsStarting = true;
 		try {
 			const session = await api.streams.remux(
 				hash,
@@ -372,8 +353,6 @@ export class PlaybackSession {
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : String(e);
 			this.ctx.onError?.(msg);
-		} finally {
-			this.#hlsStarting = false;
 		}
 	}
 
