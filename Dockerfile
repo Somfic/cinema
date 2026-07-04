@@ -29,7 +29,10 @@ RUN bun run --cwd frontend build
 
 FROM debian:bookworm-slim
 
-# yt-dlp nightly
+# yt-dlp nightly + the bgutil PO-token provider plugin. The plugin (client side)
+# pairs with the `pot-provider` sidecar in docker-compose.yml: it fetches
+# proof-of-origin tokens so YouTube stops blocking datacenter requests. Dropping
+# the release zip into a yt-dlp plugin dir needs no Python runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     ffmpeg \
@@ -37,6 +40,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp \
+    && mkdir -p /etc/yt-dlp/plugins \
+    && curl -fsSL https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/latest/download/bgutil-ytdlp-pot-provider.zip \
+    -o /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip \
     && apt-get purge -y curl \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

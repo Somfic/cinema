@@ -3,7 +3,7 @@
 //! routes alongside `rpc_router()`.
 
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
@@ -25,9 +25,17 @@ pub fn router() -> Router<AppContext> {
         .route(crate::urls::TRAILER, get(serve_trailer))
 }
 
+#[derive(serde::Deserialize)]
+struct TrailerQuery {
+    /// Optional IMDb id of the title, used to fall back to IMDb-hosted trailers
+    /// when YouTube resolution fails.
+    imdb: Option<String>,
+}
+
 async fn serve_trailer(
     State(ctx): State<AppContext>,
     Path(key): Path<String>,
+    Query(query): Query<TrailerQuery>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, RawError> {
     // Already downloaded: range-serve the cached file (supports seeking).
@@ -56,7 +64,7 @@ async fn serve_trailer(
 
     // First request: stream the fragmented mp4 as ffmpeg produces it, teeing the
     // bytes into the cache so later requests hit the fast path above.
-    let stream = crate::trailer::start_stream(&ctx.storage, &key).await?;
+    let stream = crate::trailer::start_stream(&ctx.storage, &key, query.imdb.as_deref()).await?;
     let crate::trailer::TrailerStream {
         mut child,
         stdout,

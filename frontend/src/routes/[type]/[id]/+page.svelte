@@ -164,14 +164,31 @@
 		}
 	});
 
+	// Reveal the loading glow only once loading has lasted >500ms — most titles
+	// load near-instantly, so flashing the glow every time is jarring. Until then
+	// the glow stays black (indistinguishable from the dark background); when it
+	// flips true the Glow's own `transition` morphs black → the loading palette
+	// for us, and if the title loads first it morphs straight to its colors.
+	let loadingSlow = $state(false);
+	$effect(() => {
+		if (item) {
+			loadingSlow = false;
+			return;
+		}
+		loadingSlow = false;
+		const t = setTimeout(() => (loadingSlow = true), 500);
+		return () => clearTimeout(t);
+	});
+
 	// ── Glow backdrop palette ──
 	// A dark→vibrant ramp built from the extracted backdrop colors: the darkened
 	// dominant as the base/gap, the vibrant accent (dimmed → full → lightened) as
 	// the flowing light. Kept dim so text over it stays readable.
 	//
-	// While the title is still loading there are no extracted colors yet (they're
-	// the near-black/near-white defaults, which read as an invisible glow), so
-	// fall back to a vivid cinema-purple palette for the loading screen.
+	// While loading there are no extracted colors yet, so use black (invisible)
+	// for the first 500ms, then a vivid cinema-purple palette for a slow load.
+	const BLACK = "#000000";
+	const BLACK_COLORS = [BLACK, BLACK, BLACK, BLACK, BLACK];
 	const DEFAULT_GLOW_BG = "#0a0616";
 	const DEFAULT_GLOW_COLORS = [
 		"#1a0033",
@@ -181,7 +198,7 @@
 		"#c4b5fd",
 	];
 	const glowBg = $derived(
-		item ? rgbToHex(backdropColor, 1.4) : DEFAULT_GLOW_BG,
+		item ? rgbToHex(backdropColor, 1.4) : loadingSlow ? DEFAULT_GLOW_BG : BLACK,
 	);
 	const glowColors = $derived(
 		item
@@ -191,7 +208,9 @@
 					rgbToHex(accentColor, 1.2),
 					rgbToHex(accentColor, 1.7),
 				]
-			: DEFAULT_GLOW_COLORS,
+			: loadingSlow
+				? DEFAULT_GLOW_COLORS
+				: BLACK_COLORS,
 	);
 
 	// Perceptual brightness (luma, 0–1) of the accent color.

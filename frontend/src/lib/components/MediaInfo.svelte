@@ -367,6 +367,7 @@
 		<PlayCard
 			image={movieBackdrop}
 			{trailerKeys}
+			imdbId={item.imdb_id}
 			active={!playing}
 			label={item.title}
 			action={movieResume
@@ -385,6 +386,7 @@
 		<PlayCard
 			image={tvImage}
 			{trailerKeys}
+			imdbId={item.imdb_id}
 			active={!playing}
 			label={tvLabel}
 			action={tvAction}

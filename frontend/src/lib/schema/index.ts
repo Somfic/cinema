@@ -13,8 +13,8 @@ export type CreateCollection = { slug: string, title: string, kind: string, };
 export type ReorderItem = { media_type: string, tmdb_id: number, };
 
 /**
- * / Streaming progress for an active download. Emitted periodically by the
- * / download worker; subscribers should treat updates as best-effort.
+ * Streaming progress for an active download. Emitted periodically by the
+ * download worker; subscribers should treat updates as best-effort.
  */
 export type DownloadProgress = { id: number, downloaded_bytes: number, total_bytes: number | null, status: string, };
 
@@ -25,52 +25,52 @@ export type ResolutionEstimate = { resolution: string, size_bytes: number | null
 export type Download = { id: number, media_type: string, tmdb_id: number, title: string, poster_path: string | null, season: number, episode: number, resolution: string | null, info_hash: string, file_idx: number, file_path: string, total_bytes: number | null, downloaded_bytes: number, status: string, error: string | null, created_at: string, completed_at: string | null, };
 
 /**
- * / One connected WebSocket client, as seen by every other client. The full
- * / roster is broadcast on the `remote_presence` topic whenever it changes, so a
- * / phone can discover TVs to pair with and a TV can detect a remote pairing to
- * / it. There is no auth/user concept on the server — pairing is presence-based
- * / and assumes a trusted local network.
+ * One connected WebSocket client, as seen by every other client. The full
+ * roster is broadcast on the `remote_presence` topic whenever it changes, so a
+ * phone can discover TVs to pair with and a TV can detect a remote pairing to
+ * it. There is no auth/user concept on the server — pairing is presence-based
+ * and assumes a trusted local network.
  */
 export type ClientPresence = { 
 /**
- * / Per-window client id, browser-generated and held in `sessionStorage`
- * / (unique per tab, stable across reloads).
+ * Per-window client id, browser-generated and held in `sessionStorage`
+ * (unique per tab, stable across reloads).
  */
 id: string, 
 /**
- * / Human label shown in the pairing UI (e.g. "Chrome · macOS").
+ * Human label shown in the pairing UI (e.g. "Chrome · macOS").
  */
 label: string, 
 /**
- * / Coarse device class from viewport width: `phone` | `tablet` | `desktop`.
+ * Coarse device class from viewport width: `phone` | `tablet` | `desktop`.
  */
 kind: string, 
 /**
- * / Viewport width in CSS pixels. Used for relative sizing — with a
- * / single-user assumption, the smaller of two clients is the candidate
- * / remote and the larger is the TV.
+ * Viewport width in CSS pixels. Used for relative sizing — with a
+ * single-user assumption, the smaller of two clients is the candidate
+ * remote and the larger is the TV.
  */
 width: number, 
 /**
- * / Current role: `browser` | `tv` | `remote`.
+ * Current role: `browser` | `tv` | `remote`.
  */
 mode: string, 
 /**
- * / When this client is a `remote`, the id of the TV it controls.
+ * When this client is a `remote`, the id of the TV it controls.
  */
 paired_to: string | null, };
 
 export type YoutubeCookiesStatus = { 
 /**
- * / `"none"`, `"file"`, or `"env"` — which cookies source yt-dlp is using.
+ * `"none"`, `"file"`, or `"env"` — which cookies source yt-dlp is using.
  */
 source: string, 
 /**
- * / Size of the stored cookies file (only set when `source == "file"`).
+ * Size of the stored cookies file (only set when `source == "file"`).
  */
 size: number | null, 
 /**
- * / Path the env override points at (only set when `source == "env"`).
+ * Path the env override points at (only set when `source == "env"`).
  */
 env_path: string | null, };
 
@@ -81,17 +81,17 @@ export type RemuxSession = { session_id: string, playlist_url: string, };
 export type StreamStats = { progress_bytes: number, total_bytes: number, download_speed_mbps: number, peers: number, finished: boolean, };
 
 /**
- * / Periodic per-torrent stats broadcast over WebSocket. Carries the
- * / `info_hash` so subscribers can filter to the stream they care about
- * / (a single topic fans out updates for every active torrent)
+ * Periodic per-torrent stats broadcast over WebSocket. Carries the
+ * `info_hash` so subscribers can filter to the stream they care about
+ * (a single topic fans out updates for every active torrent)
  */
 export type StreamStatsUpdate = { info_hash: string, progress_bytes: number, total_bytes: number, download_speed_mbps: number, peers: number, finished: boolean, };
 
 export type AudioTracks = { tracks: AudioTrack[], subtitles: EmbeddedSubtitleTrack[], duration: number | null, chapters: Chapter[], };
 
 /**
- * / Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
- * / 0..=255 each. Emitted only for files currently being streamed.
+ * Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
+ * 0..=255 each. Emitted only for files currently being streamed.
  */
 export type PiecesUpdate = { info_hash: string, file_idx: number, pieces: number[], };
 
@@ -99,17 +99,17 @@ export type Stream = { info_hash: string, file_idx: number, name: string, title:
 
 export type SubtitleTrack = { id: string, language: string, url: string, 
 /**
- * / Higher score = more likely to be in sync
+ * Higher score = more likely to be in sync
  */
 score: number, };
 
 export type SubtitleCue = { 
 /**
- * / Start time in seconds
+ * Start time in seconds
  */
 start: number, 
 /**
- * / End time in seconds
+ * End time in seconds
  */
 end: number, text: string, };
 
@@ -129,15 +129,15 @@ export type Genre = { id: number, name: string, };
 
 export type Video = { key: string, site: string, name: string, video_type: string, 
 /**
- * / Whether TMDB marks this as an official (studio-published) video.
+ * Whether TMDB marks this as an official (studio-published) video.
  */
 official: boolean, 
 /**
- * / Max resolution reported by TMDB (e.g. 360, 720, 1080, 2160).
+ * Max resolution reported by TMDB (e.g. 360, 720, 1080, 2160).
  */
 size: number, 
 /**
- * / ISO-8601 publish timestamp, used to prefer the most recent trailer.
+ * ISO-8601 publish timestamp, used to prefer the most recent trailer.
  */
 published_at: string | null, };
 
@@ -147,35 +147,35 @@ export type Episode = { episode_number: number, name: string, overview: string |
 
 export type AudioTrack = { 
 /**
- * / ffmpeg absolute stream index
+ * ffmpeg absolute stream index
  */
 index: number, 
 /**
- * / audio-only index (0, 1, 2...)
+ * audio-only index (0, 1, 2...)
  */
 stream_index: number, name: string, language: string | null, codec: string, };
 
 export type EmbeddedSubtitleTrack = { 
 /**
- * / ffmpeg absolute stream index
+ * ffmpeg absolute stream index
  */
 index: number, 
 /**
- * / subtitle-only index (0, 1, 2...)
+ * subtitle-only index (0, 1, 2...)
  */
 stream_index: number, language: string | null, name: string, codec: string, };
 
 export type Chapter = { 
 /**
- * / chapter start time in seconds
+ * chapter start time in seconds
  */
 start: number, 
 /**
- * / chapter end time in seconds
+ * chapter end time in seconds
  */
 end: number, title: string, };
 
-/** / Display metadata for a cached trailer. */
+/** Display metadata for a cached trailer. */
 export type TrailerMeta = { aspect: number, };
 
 export type RecordWatch = { media_type: string, tmdb_id: number, title: string, poster_path: string | null, season: number | null, episode: number | null, info_hash: string | null, file_idx: number | null, progress: number | null, duration: number | null, };
@@ -186,7 +186,7 @@ export class CollectionsApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Adds an item to a named collection
+	 * Adds an item to a named collection
 	 * @throws {RpcError<Error>}
 	 */
 	add(item: CollectionRequest): Promise<void> {
@@ -194,7 +194,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Removes an item from a collection
+	 * Removes an item from a collection
 	 * @throws {RpcError<Error>}
 	 */
 	remove(collection: string, media_type: string, id: number): Promise<void> {
@@ -202,7 +202,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Lists items in a single collection, ordered by position then added time
+	 * Lists items in a single collection, ordered by position then added time
 	 * @throws {RpcError<Error>}
 	 */
 	get(collection: string): Promise<CollectionItem[]> {
@@ -210,7 +210,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Whether the given item is in the given collection
+	 * Whether the given item is in the given collection
 	 * @throws {RpcError<Error>}
 	 */
 	contains(collection: string, media_type: string, id: number): Promise<CollectionStatus> {
@@ -218,7 +218,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Lists every collection definition (user + system), ordered by position
+	 * Lists every collection definition (user + system), ordered by position
 	 * @throws {RpcError<Error>}
 	 */
 	listDefs(): Promise<CollectionDef[]> {
@@ -226,7 +226,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Creates (or upserts) a collection definition
+	 * Creates (or upserts) a collection definition
 	 * @throws {RpcError<Error>}
 	 */
 	createDef(def: CreateCollection): Promise<void> {
@@ -234,8 +234,8 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Deletes a collection definition and all its items. System defs can't
-	 * / be deleted
+	 * Deletes a collection definition and all its items. System defs can't
+	 * be deleted
 	 * @throws {RpcError<Error>}
 	 */
 	deleteDef(slug: string): Promise<void> {
@@ -243,7 +243,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Hides/unhides a collection from the UI without deleting its items
+	 * Hides/unhides a collection from the UI without deleting its items
 	 * @throws {RpcError<Error>}
 	 */
 	setVisibility(slug: string, hidden: boolean): Promise<void> {
@@ -251,7 +251,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Reorders the list of collection definitions
+	 * Reorders the list of collection definitions
 	 * @throws {RpcError<Error>}
 	 */
 	reorderDefs(slugs: string[]): Promise<void> {
@@ -259,7 +259,7 @@ export class CollectionsApi {
 	}
 
 	/**
-	 * / Reorders items within a single collection
+	 * Reorders items within a single collection
 	 * @throws {RpcError<Error>}
 	 */
 	reorder(collection: string, items: ReorderItem[]): Promise<void> {
@@ -271,7 +271,7 @@ export class DownloadsApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Lists every download ever queued, newest first
+	 * Lists every download ever queued, newest first
 	 * @throws {RpcError<Error>}
 	 */
 	list(): Promise<Download[]> {
@@ -279,7 +279,7 @@ export class DownloadsApi {
 	}
 
 	/**
-	 * / Cancels an in-progress download and removes its row + files from disk
+	 * Cancels an in-progress download and removes its row + files from disk
 	 * @throws {RpcError<Error>}
 	 */
 	delete(id: number): Promise<void> {
@@ -287,8 +287,8 @@ export class DownloadsApi {
 	}
 
 	/**
-	 * / Queues a download. If `info_hash`/`file_idx` are omitted, picks the
-	 * / best stream matching the requested resolution
+	 * Queues a download. If `info_hash`/`file_idx` are omitted, picks the
+	 * best stream matching the requested resolution
 	 * @throws {RpcError<Error>}
 	 */
 	enqueue(request: EnqueueDownload): Promise<void> {
@@ -296,7 +296,7 @@ export class DownloadsApi {
 	}
 
 	/**
-	 * / Bandwidth/size estimates per available resolution
+	 * Bandwidth/size estimates per available resolution
 	 * @throws {RpcError<Error>}
 	 */
 	estimate(media_type: string, tmdb_id: number): Promise<ResolutionEstimate[]> {
@@ -308,7 +308,7 @@ export class HlsApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Stops an HLS transcoding session and tears down its ffmpeg process
+	 * Stops an HLS transcoding session and tears down its ffmpeg process
 	 * @throws {RpcError<Error>}
 	 */
 	stop(session_id: string): Promise<void> {
@@ -320,7 +320,7 @@ export class MediaApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Full TMDB details for a movie
+	 * Full TMDB details for a movie
 	 * @throws {RpcError<Error>}
 	 */
 	movieDetails(id: number): Promise<MediaItem> {
@@ -328,7 +328,7 @@ export class MediaApi {
 	}
 
 	/**
-	 * / Full TMDB details for a TV show
+	 * Full TMDB details for a TV show
 	 * @throws {RpcError<Error>}
 	 */
 	tvDetails(id: number): Promise<MediaItem> {
@@ -336,7 +336,7 @@ export class MediaApi {
 	}
 
 	/**
-	 * / Items similar to the given movie/TV id
+	 * Items similar to the given movie/TV id
 	 * @throws {RpcError<Error>}
 	 */
 	similar(media_type: string, id: number): Promise<SearchResult[]> {
@@ -344,7 +344,7 @@ export class MediaApi {
 	}
 
 	/**
-	 * / Currently-trending movies + TV
+	 * Currently-trending movies + TV
 	 * @throws {RpcError<Error>}
 	 */
 	trending(): Promise<SearchResult[]> {
@@ -356,10 +356,10 @@ export class RemoteApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Returns the caller's own presence and pushes it back down their socket
-	 * / (`remote_self`). Demonstrates injecting the live connection into an HTTP
-	 * / handler — the `conn` arg is server-filled, so the generated TS is just
-	 * / `whoami(): Promise<ClientPresence>`. 409s if the caller has no live socket.
+	 * Returns the caller's own presence and pushes it back down their socket
+	 * (`remote_self`). Demonstrates injecting the live connection into an HTTP
+	 * handler — the `conn` arg is server-filled, so the generated TS is just
+	 * `whoami(): Promise<ClientPresence>`. 409s if the caller has no live socket.
 	 * @throws {RpcError<Error>}
 	 */
 	whoami(): Promise<ClientPresence> {
@@ -371,7 +371,7 @@ export class SearchApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Full-text search across TMDB titles
+	 * Full-text search across TMDB titles
 	 * @throws {RpcError<Error>}
 	 */
 	search(q: string): Promise<SearchResult[]> {
@@ -383,7 +383,7 @@ export class SettingsApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Returns the active yt-dlp cookies source.
+	 * Returns the active yt-dlp cookies source.
 	 * @throws {RpcError<Error>}
 	 */
 	youtubeCookiesStatus(): Promise<YoutubeCookiesStatus> {
@@ -391,8 +391,8 @@ export class SettingsApi {
 	}
 
 	/**
-	 * / Stores a Netscape-format `cookies.txt` body in the data dir so yt-dlp
-	 * / can use it on subsequent trailer requests.
+	 * Stores a Netscape-format `cookies.txt` body in the data dir so yt-dlp
+	 * can use it on subsequent trailer requests.
 	 * @throws {RpcError<Error>}
 	 */
 	setYoutubeCookies(content: string): Promise<YoutubeCookiesStatus> {
@@ -400,7 +400,7 @@ export class SettingsApi {
 	}
 
 	/**
-	 * / Removes the stored cookies file (the env override, if any, still wins).
+	 * Removes the stored cookies file (the env override, if any, still wins).
 	 * @throws {RpcError<Error>}
 	 */
 	clearYoutubeCookies(): Promise<YoutubeCookiesStatus> {
@@ -412,7 +412,7 @@ export class StreamsApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Aggregates available torrent streams for a movie.
+	 * Aggregates available torrent streams for a movie.
 	 * @throws {RpcError<Error>}
 	 */
 	movie(id: number): Promise<Stream[]> {
@@ -420,7 +420,7 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Aggregates available torrent streams for a specific TV episode.
+	 * Aggregates available torrent streams for a specific TV episode.
 	 * @throws {RpcError<Error>}
 	 */
 	tv(id: number, season: number, episode: number): Promise<Stream[]> {
@@ -428,7 +428,7 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Starts a torrent (idempotent) and returns the playback URL.
+	 * Starts a torrent (idempotent) and returns the playback URL.
 	 * @throws {RpcError<Error>}
 	 */
 	start(info_hash: string, file_idx: number): Promise<StartStream> {
@@ -436,9 +436,9 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Reveals the on-disk file for a torrent stream in the server's file
-	 * / manager. Only meaningful when the server runs on the user's own machine
-	 * / (the self-hosted local case).
+	 * Reveals the on-disk file for a torrent stream in the server's file
+	 * manager. Only meaningful when the server runs on the user's own machine
+	 * (the self-hosted local case).
 	 * @throws {RpcError<Error>}
 	 */
 	reveal(info_hash: string, file_idx: number): Promise<void> {
@@ -446,8 +446,8 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Starts an HLS remux/transcode session for a file and returns its
-	 * / playlist URL (feed to hls.js). Callers stop the previous session first.
+	 * Starts an HLS remux/transcode session for a file and returns its
+	 * playlist URL (feed to hls.js). Callers stop the previous session first.
 	 * @throws {RpcError<Error>}
 	 */
 	remux(info_hash: string, file_idx: number, audio: number, t: number, only_audio: boolean): Promise<RemuxSession> {
@@ -455,7 +455,7 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Current torrent download stats for a stream.
+	 * Current torrent download stats for a stream.
 	 * @throws {RpcError<Error>}
 	 */
 	stats(info_hash: string): Promise<StreamStats> {
@@ -463,7 +463,7 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Per-piece availability bitmap (200 buckets) for a given file in a torrent.
+	 * Per-piece availability bitmap (200 buckets) for a given file in a torrent.
 	 * @throws {RpcError<Error>}
 	 */
 	pieces(info_hash: string, file_idx: number): Promise<number[]> {
@@ -471,7 +471,7 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Embedded audio + subtitle tracks + duration for a downloaded file.
+	 * Embedded audio + subtitle tracks + duration for a downloaded file.
 	 * @throws {RpcError<Error>}
 	 */
 	audioTracks(info_hash: string, file_idx: number): Promise<AudioTracks> {
@@ -479,7 +479,7 @@ export class StreamsApi {
 	}
 
 	/**
-	 * / Extracts cues from an embedded subtitle track in the source file.
+	 * Extracts cues from an embedded subtitle track in the source file.
 	 * @throws {RpcError<Error>}
 	 */
 	embeddedSubtitles(info_hash: string, file_idx: number, stream_index: number): Promise<SubtitleCue[]> {
@@ -491,7 +491,7 @@ export class SubtitlesApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / External subtitle tracks (OpenSubtitles etc.) for a movie
+	 * External subtitle tracks (OpenSubtitles etc.) for a movie
 	 * @throws {RpcError<Error>}
 	 */
 	movie(id: number): Promise<SubtitleTrack[]> {
@@ -499,7 +499,7 @@ export class SubtitlesApi {
 	}
 
 	/**
-	 * / External subtitle tracks for a specific TV episode
+	 * External subtitle tracks for a specific TV episode
 	 * @throws {RpcError<Error>}
 	 */
 	tv(id: number, season: number, episode: number): Promise<SubtitleTrack[]> {
@@ -507,7 +507,7 @@ export class SubtitlesApi {
 	}
 
 	/**
-	 * / Fetches and parses cues from an SRT URL
+	 * Fetches and parses cues from an SRT URL
 	 * @throws {RpcError<Error>}
 	 */
 	cues(url: string): Promise<SubtitleCue[]> {
@@ -519,8 +519,8 @@ export class TrailerApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Display metadata (aspect ratio) for a cached trailer, used to size the
-	 * / player before the video's intrinsic dimensions are known.
+	 * Display metadata (aspect ratio) for a cached trailer, used to size the
+	 * player before the video's intrinsic dimensions are known.
 	 * @throws {RpcError<Error>}
 	 */
 	meta(key: string): Promise<TrailerMeta> {
@@ -532,7 +532,7 @@ export class WatchApi {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Inserts the current playback position for a piece of media
+	 * Inserts the current playback position for a piece of media
 	 * @throws {RpcError<Error>}
 	 */
 	record(watch: RecordWatch): Promise<void> {
@@ -540,7 +540,7 @@ export class WatchApi {
 	}
 
 	/**
-	 * / Returns the 20 most-recently-watched items
+	 * Returns the 20 most-recently-watched items
 	 * @throws {RpcError<Error>}
 	 */
 	history(): Promise<WatchHistoryItem[]> {
@@ -551,7 +551,7 @@ export class WatchApi {
 export class DownloadsEvents {
 	constructor(private rpc: Rpc) {}
 
-	/** / Per-download bandwidth/status tick. Topic: `downloads_progress`. */
+	/** Per-download bandwidth/status tick. Topic: `downloads_progress`. */
 	onProgress(handler: (payload: DownloadProgress) => void): UnlistenFn {
 		return this.rpc.listen<DownloadProgress>("downloads/progress", handler);
 	}
@@ -561,9 +561,9 @@ export class RemoteEvents {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Full roster of connected clients, re-broadcast on every
-	 * / connect / disconnect / role change. Topic: `remote_presence`.
-	 * / Subscribers diff it client-side to drive pairing.
+	 * Full roster of connected clients, re-broadcast on every
+	 * connect / disconnect / role change. Topic: `remote_presence`.
+	 * Subscribers diff it client-side to drive pairing.
 	 */
 	onPresence(handler: (payload: ClientPresence[]) => void): UnlistenFn {
 		return this.rpc.listen<ClientPresence[]>("remote/presence", handler);
@@ -574,17 +574,17 @@ export class StreamsEvents {
 	constructor(private rpc: Rpc) {}
 
 	/**
-	 * / Per-torrent download stats, emitted every ~2s for each active torrent.
-	 * / Topic: `streams_stats`. Subscribers filter by `info_hash`.
+	 * Per-torrent download stats, emitted every ~2s for each active torrent.
+	 * Topic: `streams_stats`. Subscribers filter by `info_hash`.
 	 */
 	onStats(handler: (payload: StreamStatsUpdate) => void): UnlistenFn {
 		return this.rpc.listen<StreamStatsUpdate>("streams/stats", handler);
 	}
 
 	/**
-	 * / Per-file piece bitmap, emitted every ~2s for each file currently
-	 * / being streamed. Topic: `streams_pieces`. Subscribers filter by
-	 * / `(info_hash, file_idx)`.
+	 * Per-file piece bitmap, emitted every ~2s for each file currently
+	 * being streamed. Topic: `streams_pieces`. Subscribers filter by
+	 * `(info_hash, file_idx)`.
 	 */
 	onPieces(handler: (payload: PiecesUpdate) => void): UnlistenFn {
 		return this.rpc.listen<PiecesUpdate>("streams/pieces", handler);
@@ -593,30 +593,30 @@ export class StreamsEvents {
 
 export class Urls {
 
-	/** / Range-served video bytes for a torrent file. */
+	/** Range-served video bytes for a torrent file. */
 	stream(infoHash: string, fileIdx: number): string {
 		return `/api/stream/${encodeURIComponent(infoHash)}/${fileIdx}`;
 	}
 
-	/** / An HLS playlist or segment for a transcode session. */
+	/** An HLS playlist or segment for a transcode session. */
 	hls(sessionId: string, file: string): string {
 		return `/api/hls/${encodeURIComponent(sessionId)}/${encodeURIComponent(file)}`;
 	}
 
 	/**
-	 * / Cached/proxied TMDB image. `{*path}` is `{size}{tmdb_path}` (holds a
-	 * / slash), so it's interpolated raw rather than URL-encoded.
+	 * Cached/proxied TMDB image. `{*path}` is `{size}{tmdb_path}` (holds a
+	 * slash), so it's interpolated raw rather than URL-encoded.
 	 */
 	image(path: string): string {
 		return `/api/image/${path}`;
 	}
 
-	/** / Range-served file from storage. */
+	/** Range-served file from storage. */
 	file(path: string): string {
 		return `/api/files/${path}`;
 	}
 
-	/** / Trailer video bytes for a YouTube key. */
+	/** Trailer video bytes for a YouTube key. */
 	trailer(key: string): string {
 		return `/api/trailer/${encodeURIComponent(key)}`;
 	}

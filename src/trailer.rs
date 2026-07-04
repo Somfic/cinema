@@ -16,6 +16,10 @@ const FORMAT: &str =
 const DETECT_FORMAT: &str =
     "worstvideo[ext=mp4][height>=240]/worstvideo[ext=mp4]/worst[ext=mp4]/worst";
 
+// IMDb serves progressive (muxed) mp4s off Amazon's CDN rather than the
+// separate video/audio streams YouTube exposes, so the format filter is simpler.
+const IMDB_FORMAT: &str = "best[ext=mp4][height<=1080]/best[height<=1080]/best";
+
 fn cache_dir(storage: &Storage) -> PathBuf {
     storage.join("cache/trailers")
 }
@@ -57,6 +61,19 @@ fn apply_cookies(cmd: &mut tokio::process::Command, storage: &Storage) {
     cmd.arg("--cookies-from-browser").arg(browser);
 }
 
+/// Point yt-dlp at a bgutil PO-token provider when one is configured. YouTube
+/// increasingly requires a proof-of-origin token from datacenter IPs; the
+/// provider (a sidecar server) mints them and the bundled yt-dlp plugin fetches
+/// them automatically. No-op when `CINEMA_YTDLP_POT_BASE_URL` is unset.
+fn apply_pot(cmd: &mut tokio::process::Command) {
+    if let Ok(url) = std::env::var("CINEMA_YTDLP_POT_BASE_URL")
+        && !url.is_empty()
+    {
+        cmd.arg("--extractor-args")
+            .arg(format!("youtubepot-bgutilhttp:base_url={url}"));
+    }
+}
+
 /// Display metadata for a cached trailer.
 #[draad::ty]
 #[derive(Copy)]
@@ -77,6 +94,13 @@ fn is_valid_key(key: &str) -> bool {
         && key
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// IMDb title ids are `tt` followed by 7+ digits (e.g. `tt0468569`).
+fn is_valid_imdb_id(id: &str) -> bool {
+    (9..=12).contains(&id.len())
+        && id.starts_with("tt")
+        && id.as_bytes()[2..].iter().all(u8::is_ascii_digit)
 }
 
 pub async fn ensure_cached(storage: &Storage, key: &str) -> Result<PathBuf> {
@@ -118,6 +142,7 @@ pub async fn ensure_cached(storage: &Storage, key: &str) -> Result<PathBuf> {
         "--quiet",
     ]);
     apply_cookies(&mut cmd, storage);
+    apply_pot(&mut cmd);
     cmd.arg("-o").arg(&tmp_path).arg(&url).kill_on_drop(true);
 
     let result = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output()).await;
@@ -171,14 +196,35 @@ pub struct TrailerStream {
     pub final_path: PathBuf,
 }
 
-pub async fn start_stream(storage: &Storage, key: &str) -> Result<TrailerStream> {
+pub async fn start_stream(
+    storage: &Storage,
+    key: &str,
+    imdb_id: Option<&str>,
+) -> Result<TrailerStream> {
     if !is_valid_key(key) {
         return Err(Error::NotFound("invalid trailer key".into()));
     }
     let dir = cache_dir(storage);
     tokio::fs::create_dir_all(&dir).await?;
 
-    let urls = resolve_urls(storage, key, FORMAT).await?;
+    // YouTube is the primary source but frequently blocks anonymous/datacenter
+    // requests. When it fails and we know the title's IMDb id, fall back to the
+    // trailer IMDb hosts on Amazon's CDN (no bot-blocking). The cache stays keyed
+    // by the YouTube `key`, so later requests hit the fast path regardless.
+    let urls = match resolve_urls(storage, key, FORMAT).await {
+        Ok(urls) => urls,
+        Err(yt_err) => match imdb_id.filter(|id| is_valid_imdb_id(id)) {
+            Some(id) => {
+                tracing::warn!("youtube trailer {key} failed ({yt_err}); trying imdb {id}");
+                resolve_imdb_urls(storage, id).await.map_err(|imdb_err| {
+                    Error::Generic(format!(
+                        "youtube failed ({yt_err}); imdb fallback failed ({imdb_err})"
+                    ))
+                })?
+            }
+            None => return Err(yt_err),
+        },
+    };
 
     let mut cmd = tokio::process::Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "error"]);
@@ -222,19 +268,35 @@ pub async fn start_stream(storage: &Storage, key: &str) -> Result<TrailerStream>
 
 async fn resolve_urls(storage: &Storage, key: &str, format: &str) -> Result<Vec<String>> {
     let url = format!("https://www.youtube.com/watch?v={key}");
+    resolve_media_urls(storage, &url, format, true, &format!("trailer {key}")).await
+}
+
+/// Resolve a source page to direct media URLs via `yt-dlp -g`. Cookies and the
+/// PO-token provider only apply to YouTube; IMDb is public and passing
+/// `--cookies-from-browser` in a headless environment would make yt-dlp error.
+async fn resolve_media_urls(
+    storage: &Storage,
+    page_url: &str,
+    format: &str,
+    youtube: bool,
+    label: &str,
+) -> Result<Vec<String>> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args(["-f", format, "--no-playlist", "-g"]);
-    apply_cookies(&mut cmd, storage);
-    cmd.arg(&url).kill_on_drop(true);
+    if youtube {
+        apply_cookies(&mut cmd, storage);
+        apply_pot(&mut cmd);
+    }
+    cmd.arg(page_url).kill_on_drop(true);
 
     let output = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output())
         .await
-        .map_err(|_| Error::Generic("yt-dlp -g timed out".into()))?
+        .map_err(|_| Error::Generic(format!("yt-dlp -g timed out for {label}")))?
         .map_err(|e| Error::Generic(format!("failed to spawn yt-dlp: {e}")))?;
 
     if !output.status.success() {
         return Err(Error::Generic(format!(
-            "yt-dlp -g failed for trailer {key}: {}",
+            "yt-dlp -g failed for {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
@@ -247,10 +309,83 @@ async fn resolve_urls(storage: &Storage, key: &str, format: &str) -> Result<Vec<
         .collect();
     if urls.is_empty() {
         return Err(Error::Generic(format!(
-            "yt-dlp returned no media URL for trailer {key}"
+            "yt-dlp returned no media URL for {label}"
         )));
     }
     Ok(urls)
+}
+
+/// Resolve a title's IMDb trailer to direct media URLs: scrape the title page for
+/// its primary video id (`vi…`), then hand that IMDb video page to yt-dlp.
+async fn resolve_imdb_urls(storage: &Storage, imdb_id: &str) -> Result<Vec<String>> {
+    let vi = imdb_trailer_video_id(imdb_id).await?;
+    let url = format!("https://www.imdb.com/video/{vi}/");
+    resolve_media_urls(storage, &url, IMDB_FORMAT, false, &format!("imdb {imdb_id} {vi}")).await
+}
+
+/// Find a title's trailer video id (`vi…`) via IMDb's suggestion API. This lives
+/// on a CDN host (`*.media-imdb.com`) that returns plain JSON, unlike the main
+/// `imdb.com` site which bot-walls datacenter requests. Prefers a video whose
+/// label mentions "trailer", else the first (the primary/hero video).
+async fn imdb_trailer_video_id(imdb_id: &str) -> Result<String> {
+    let url =
+        format!("https://v3.sg.media-imdb.com/suggestion/t/{imdb_id}.json?includeVideos=1");
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|e| Error::Generic(format!("failed to build http client: {e}")))?;
+
+    let resp: ImdbSuggestion = tokio::time::timeout(Duration::from_secs(15), async {
+        client.get(&url).send().await?.error_for_status()?.json().await
+    })
+    .await
+    .map_err(|_| Error::Generic(format!("imdb suggestion timed out for {imdb_id}")))?
+    .map_err(|e| Error::Generic(format!("imdb suggestion failed for {imdb_id}: {e}")))?;
+
+    let item = resp
+        .d
+        .iter()
+        .find(|i| i.id == imdb_id)
+        .ok_or_else(|| Error::Generic(format!("imdb suggestion had no entry for {imdb_id}")))?;
+    let pick = item
+        .v
+        .iter()
+        .find(|v| v.l.to_ascii_lowercase().contains("trailer"))
+        .or_else(|| item.v.first())
+        .ok_or_else(|| Error::Generic(format!("imdb has no videos for {imdb_id}")))?;
+
+    // Guard against a malformed id flowing into a yt-dlp URL.
+    if !(pick.id.starts_with("vi") && pick.id.len() > 2 && pick.id[2..].bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(Error::Generic(format!(
+            "imdb returned malformed video id {}",
+            pick.id
+        )));
+    }
+    Ok(pick.id.clone())
+}
+
+#[derive(serde::Deserialize)]
+struct ImdbSuggestion {
+    #[serde(default)]
+    d: Vec<ImdbSuggestItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct ImdbSuggestItem {
+    id: String,
+    #[serde(default)]
+    v: Vec<ImdbSuggestVideo>,
+}
+
+#[derive(serde::Deserialize)]
+struct ImdbSuggestVideo {
+    id: String,
+    #[serde(default)]
+    l: String,
 }
 
 pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {

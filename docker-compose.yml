@@ -1,0 +1,27 @@
+# Runs cinema alongside a bgutil PO-token provider. YouTube increasingly blocks
+# anonymous/datacenter requests unless yt-dlp presents a proof-of-origin token;
+# the provider mints them and the yt-dlp plugin baked into the cinema image
+# (see Dockerfile) fetches them automatically via CINEMA_YTDLP_POT_BASE_URL.
+services:
+  cinema:
+    image: ghcr.io/somfic/cinema
+    # Or build locally instead of pulling the published image:
+    # build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "6881:6881"
+    volumes:
+      - ./data:/app/data
+    environment:
+      CINEMA_TMDB_API_KEY: ${CINEMA_TMDB_API_KEY}
+      # Reach the sidecar over the compose network. Pairs with the bundled plugin.
+      CINEMA_YTDLP_POT_BASE_URL: http://pot-provider:4416
+    depends_on:
+      - pot-provider
+
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: unless-stopped
+    # Port 4416 is only consumed by cinema over the internal network; the token
+    # server never needs to be published to the host.
