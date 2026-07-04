@@ -49,6 +49,7 @@ pub struct Stream {
     pub size_bytes: Option<u64>,
     pub size_display: Option<String>,
     pub score: f64,
+    pub download: Option<crate::downloads::types::SimpleDownload>,
 }
 
 pub enum AggregationMediaType {
@@ -92,7 +93,7 @@ impl AggregationMediaType {
             .config
             .stream_sources
             .iter()
-            .map(|source| fetch_source(&ctx.http, source, &path))
+            .map(|source| fetch_source(&ctx.http, &ctx.db, source, &path))
             .collect();
 
         let results = join_all(futures).await;
@@ -190,6 +191,7 @@ impl AggregationMediaType {
 
 async fn fetch_source(
     client: &reqwest::Client,
+    db: &crate::app::Pool,
     source: &str,
     path: &str,
 ) -> Option<(String, Vec<Stream>)> {
@@ -217,7 +219,7 @@ async fn fetch_source(
         }
     };
 
-    let streams: Vec<Stream> = body
+    let mut streams: Vec<Stream> = body
         .streams
         .into_iter()
         .filter_map(|raw| {
@@ -260,11 +262,32 @@ async fn fetch_source(
                 size_bytes,
                 size_display,
                 score: 0.0,
+                download: None,
             };
             stream.score = compute_score(&stream);
             Some(stream)
         })
         .collect();
+
+    let downloads = crate::downloads::types::SimpleDownload::find_by_info_hash_and_file_idx(
+        db,
+        streams
+            .iter()
+            .map(|stream| (stream.info_hash.as_str(), stream.file_idx))
+            .collect(),
+    )
+    .await;
+
+    match downloads {
+        Ok(mut downloads) => {
+            for stream in &mut streams {
+                stream.download = downloads.remove(&(stream.info_hash.clone(), stream.file_idx));
+            }
+        }
+        Err(err) => {
+            tracing::warn!(?err, "Could not populate downloads for streams")
+        }
+    };
 
     Some((source_name, streams))
 }

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     app::{Error, Pool},
     tmdb,
@@ -16,10 +18,24 @@ pub enum DownloadStatus {
 }
 
 #[draad::ty]
+pub struct SimpleDownload {
+    id: i32,
+    info_hash: String,
+    file_idx: i32,
+    name: Option<String>,
+    total_bytes: Option<i64>,
+    downloaded_bytes: i64,
+    status: DownloadStatus,
+    error: Option<String>,
+    created_at: time::OffsetDateTime,
+    completed_at: Option<time::OffsetDateTime>,
+}
+
+#[draad::ty]
 pub struct Download {
     pub id: i32,
     pub info_hash: String,
-    pub file_idx: i64,
+    pub file_idx: i32,
     pub name: Option<String>,
     pub total_bytes: Option<i64>,
     pub downloaded_bytes: i64,
@@ -79,7 +95,7 @@ impl From<DownloadRow> for Download {
         Download {
             id: r.id,
             info_hash: r.info_hash,
-            file_idx: r.file_idx as i64,
+            file_idx: r.file_idx,
             name: r.name,
             total_bytes: r.total_bytes,
             downloaded_bytes: r.downloaded_bytes,
@@ -209,5 +225,47 @@ impl Download {
         ctx.downloads.start(id).await?;
 
         Ok(id)
+    }
+}
+
+impl SimpleDownload {
+    pub async fn find_by_info_hash_and_file_idx(
+        db: &Pool,
+        keys: Vec<(&str, i32)>,
+    ) -> crate::app::Result<HashMap<(String, i32), Self>> {
+        let (info_hashes, file_indexes): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
+
+        let rows = sqlx::query_as!(
+            SimpleDownload,
+            r#"
+                SELECT
+                    d.id,
+                    d.info_hash,
+                    d.file_idx,
+                    d.name,
+                    d.total_bytes,
+                    d.downloaded_bytes,
+                    d.status as "status: DownloadStatus",
+                    d.error,
+                    d.created_at,
+                    d.completed_at
+                FROM downloads d
+                WHERE (d.info_hash, d.file_idx) IN (
+                    SELECT * FROM UNNEST($1::text[], $2::int4[])
+                )
+            "#,
+            &info_hashes as &[&str],
+            &file_indexes
+        )
+        .fetch_all(db)
+        .await
+        .map_err(Error::DatabaseError)?;
+
+        let map = rows
+            .into_iter()
+            .map(|val| ((val.info_hash.clone(), val.file_idx), val))
+            .collect();
+
+        Ok(map)
     }
 }
