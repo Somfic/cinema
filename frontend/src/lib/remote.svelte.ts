@@ -12,7 +12,7 @@
 import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { toast } from "glow";
-import type { ClientPresence } from "$lib/schema";
+import type { ClientPresence, Stream } from "$lib/schema";
 import { announce, conn, listen, onOpen, publish, type UnlistenFn } from "$lib/schema/rpc";
 
 export type Mode = "browser" | "tv" | "remote";
@@ -22,24 +22,24 @@ export type DeviceKind = "phone" | "tablet" | "desktop";
  *  navigation commands (`play_media`, `back`) itself. */
 export interface RemoteCommand {
 	kind:
-		| "play_pause"
-		| "play"
-		| "pause"
-		| "seek"
-		| "seek_by"
-		| "volume"
-		| "mute"
-		| "fullscreen"
-		| "back"
-		| "navigate"
-		| "play_media"
-		| "disconnect"
-		| "select_stream"
-		| "select_audio"
-		| "select_subtitle"
-		| "subtitle_off"
-		| "set_subtitle_offset"
-		| "set_transcoding";
+	| "play_pause"
+	| "play"
+	| "pause"
+	| "seek"
+	| "seek_by"
+	| "volume"
+	| "mute"
+	| "fullscreen"
+	| "back"
+	| "navigate"
+	| "play_media"
+	| "disconnect"
+	| "select_stream"
+	| "select_audio"
+	| "select_subtitle"
+	| "subtitle_off"
+	| "set_subtitle_offset"
+	| "set_transcoding";
 	seconds?: number;
 	volume?: number;
 	href?: string;
@@ -49,17 +49,6 @@ export interface RemoteCommand {
 	offset?: number;
 	enabled?: boolean;
 	onlyAudio?: boolean;
-}
-
-/** A selectable torrent stream, as surfaced in the source menu. */
-export interface RemoteStream {
-	info_hash: string;
-	resolution?: string | null;
-	source?: string;
-	codec?: string | null;
-	audio?: string | null;
-	source_type?: string | null;
-	size_display?: string | null;
 }
 
 export interface RemoteAudioTrack {
@@ -99,7 +88,7 @@ export interface TvState {
 	muted: boolean;
 	/** Whether a video is actually loaded (vs. an idle TV on a menu). */
 	playing: boolean;
-	streams?: RemoteStream[];
+	streams?: Stream[];
 	activeStreamHash?: string;
 	audioTracks?: RemoteAudioTrack[];
 	activeAudioTrack?: number;
@@ -156,18 +145,18 @@ function defaultLabel(): string {
 	const ua = navigator.userAgent;
 	const browserName =
 		/Edg\//.test(ua) ? "Edge"
-		: /OPR\//.test(ua) ? "Opera"
-		: /Firefox\//.test(ua) ? "Firefox"
-		: /Chrome\//.test(ua) ? "Chrome"
-		: /Safari\//.test(ua) ? "Safari"
-		: "Browser";
+			: /OPR\//.test(ua) ? "Opera"
+				: /Firefox\//.test(ua) ? "Firefox"
+					: /Chrome\//.test(ua) ? "Chrome"
+						: /Safari\//.test(ua) ? "Safari"
+							: "Browser";
 	const os =
 		/iPhone|iPad|iPod/.test(ua) ? "iOS"
-		: /Android/.test(ua) ? "Android"
-		: /Mac OS X/.test(ua) ? "macOS"
-		: /Windows/.test(ua) ? "Windows"
-		: /Linux/.test(ua) ? "Linux"
-		: "";
+			: /Android/.test(ua) ? "Android"
+				: /Mac OS X/.test(ua) ? "macOS"
+					: /Windows/.test(ua) ? "Windows"
+						: /Linux/.test(ua) ? "Linux"
+							: "";
 	return os ? `${browserName} · ${os}` : browserName;
 }
 
@@ -221,7 +210,7 @@ class RemoteStore {
 	/** The phone currently controlling this TV (TV side), if any. */
 	controller = $derived(
 		this.peers.find((p) => p.paired_to === this.selfId && p.mode === "remote") ??
-			null,
+		null,
 	);
 
 	/** The TV this remote is paired with (remote side). */

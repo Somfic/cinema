@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Download, DownloadStatus } from "$lib/schema";
+	import type { Download } from "$lib/schema";
 	import { api } from "$lib/api";
-	import { formatBytes, progress } from "$lib/utils";
+	import { DOWNLOAD_STATUS_LABEL, formatBytes, progress } from "$lib/utils";
 	import { Button, Popover, Text, toast } from "glow";
 	import { onDestroy, onMount } from "svelte";
 
@@ -140,15 +140,6 @@
 			pendingRemoves.delete(d.id);
 		}
 	}
-
-	const STATUS_LABEL: Record<DownloadStatus, string> = {
-		Queued: "Queued",
-		Downloading: "Downloading",
-		Paused: "Paused",
-		Completed: "Done",
-		Failed: "Failed",
-		Cancelled: "Cancelled",
-	};
 </script>
 
 <Popover align="right">
@@ -193,7 +184,7 @@
 											class:chip--done={d.status === "Completed"}
 											class:chip--failed={d.status === "Failed"}
 										>
-											{STATUS_LABEL[d.status] ?? d.status}
+											{DOWNLOAD_STATUS_LABEL[d.status] ?? d.status}
 										</span>
 									</div>
 								</div>

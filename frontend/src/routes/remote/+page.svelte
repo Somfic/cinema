@@ -131,7 +131,8 @@
 		<Button
 			variant="ghost"
 			icon="Minus"
-			onclick={() => remote.send({ kind: "set_subtitle_offset", offset: -0.25 })}
+			onclick={() =>
+				remote.send({ kind: "set_subtitle_offset", offset: -0.25 })}
 		/>
 		<span class="offset-value">
 			{offsetDisplay > 0 ? "+" : ""}{offsetDisplay.toFixed(1)}s
@@ -144,7 +145,10 @@
 	</div>
 {/snippet}
 
-<div class="remote-page" style:--art={tv?.poster ? `url(${tv.poster})` : "none"}>
+<div
+	class="remote-page"
+	style:--art={tv?.poster ? `url(${tv.poster})` : "none"}
+>
 	<div class="art-bg"></div>
 	<div class="scrim"></div>
 
@@ -226,8 +230,10 @@
 			onSetVolume={(v) => remote.send({ kind: "volume", volume: v })}
 			onToggleMute={() => remote.send({ kind: "mute" })}
 			onToggleFullscreen={() => remote.send({ kind: "fullscreen" })}
-			onStreamSelect={(s) => remote.send({ kind: "select_stream", hash: s.info_hash })}
-			onAudioSelect={(t) => remote.send({ kind: "select_audio", audioId: t.id })}
+			onStreamSelect={(s) =>
+				remote.send({ kind: "select_stream", hash: s.info_hash })}
+			onAudioSelect={(t) =>
+				remote.send({ kind: "select_audio", audioId: t.id })}
 			onSubtitleSelect={(t) =>
 				remote.send({ kind: "select_subtitle", subtitleUrl: t.url })}
 			onSubtitleOff={() => remote.send({ kind: "subtitle_off" })}

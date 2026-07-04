@@ -261,15 +261,7 @@
 			volume: playerVolume,
 			muted: playerVolume === 0,
 			playing: !!session.streamUrl,
-			streams: streams.map((s) => ({
-				info_hash: s.info_hash,
-				resolution: s.resolution,
-				source: s.source,
-				codec: s.codec,
-				audio: s.audio,
-				source_type: s.source_type,
-				size_display: s.size_display,
-			})),
+			streams,
 			activeStreamHash: infoHash,
 			audioTracks: session.fileAudioTracks.map((t) => ({
 				id: t.stream_index,

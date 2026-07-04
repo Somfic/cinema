@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { MediaType, Stream } from "$lib/schema";
 	import { api } from "$lib/api";
-	import { Button, Modal, Spinner, Text, toast } from "glow";
+	import { Button, Icon, Modal, Spinner, Text, toast, tooltip } from "glow";
 
 	let {
 		open = $bindable(false),
@@ -80,6 +80,14 @@
 		};
 	});
 
+	const RETRIABLE_STATUSES = new Set(["Failed", "Cancelled"]);
+
+	function canEnqueue(stream: Stream): boolean {
+		return (
+			stream.download == null || RETRIABLE_STATUSES.has(stream.download.status)
+		);
+	}
+
 	async function enqueue(stream: Stream) {
 		const key = `${stream.info_hash}:${stream.file_idx}`;
 		if (enqueueing === key) return;
@@ -155,13 +163,49 @@
 												</Text>
 											{/if}
 										</div>
-										<Button
-											variant="ghost"
-											icon="Download"
-											loading={enqueueing === key}
-											disabled={enqueueing !== null}
-											onclick={() => enqueue(stream)}
-										></Button>
+										{#if canEnqueue(stream)}
+											<Button
+												variant="ghost"
+												icon="Download"
+												loading={enqueueing === key}
+												disabled={enqueueing !== null}
+												onclick={() => enqueue(stream)}
+											></Button>
+										{:else if stream.download?.status === "Queued"}
+											<span
+												style="padding: 0.5rem;"
+												use:tooltip={{ content: "Queued", position: "bottom" }}
+											>
+												<Icon name="Hourglass" color="rgb(251, 191, 36)" />
+											</span>
+										{:else if stream.download?.status === "Downloading"}
+											<span
+												style="padding: 0.5rem;"
+												use:tooltip={{
+													content: "Downloading",
+													position: "bottom",
+												}}
+											>
+												<Spinner />
+											</span>
+										{:else if stream.download?.status === "Paused"}
+											<span
+												style="padding: 0.5rem;"
+												use:tooltip={{ content: "Paused", position: "bottom" }}
+											>
+												<Icon name="Pause" color="rgb(251, 191, 36)" />
+											</span>
+										{:else if stream.download?.status === "Completed"}
+											<span
+												style="padding: 0.5rem;"
+												use:tooltip={{
+													content: "Completed",
+													position: "bottom",
+												}}
+											>
+												<Icon name="Check" color="rgb(74, 222, 128)" />
+											</span>
+										{/if}
 									</div>
 								</div>
 							{/each}

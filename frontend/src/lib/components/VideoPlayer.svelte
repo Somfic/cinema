@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from "svelte";
 	import { fade } from "svelte/transition";
-	import type { Chapter } from "$lib/schema";
+	import type { Chapter, Stream } from "$lib/schema";
 	import Hls from "hls.js";
 	import { Button, Icon } from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
@@ -27,9 +27,6 @@
 		url: string;
 		score: number;
 	}
-
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	type StreamOption = any;
 
 	let {
 		src,
@@ -78,7 +75,7 @@
 		topline?: string;
 		titleImage?: string;
 		subtitleTracks?: SubtitleTrack[];
-		streams?: StreamOption[];
+		streams?: Stream[];
 		activeStreamHash?: string;
 		audioTracks?: AudioTrack[];
 		activeAudioTrack?: number;
@@ -86,7 +83,7 @@
 		onClose?: () => void;
 		onSubtitleSelect?: (track: SubtitleTrack) => void;
 		onSubtitleOff?: () => void;
-		onStreamSelect?: (stream: StreamOption) => void;
+		onStreamSelect?: (stream: Stream) => void;
 		onAudioSelect?: (track: AudioTrack) => void;
 		/** Seek target fell outside the transcoded window — restart the HLS
 		 *  transcode at this time instead of a native seek. */

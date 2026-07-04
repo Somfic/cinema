@@ -1,5 +1,5 @@
 import { api } from "$lib/api";
-import type { MediaType } from "./schema";
+import type { DownloadStatus, MediaType } from "./schema";
 
 export function imageUrl(path: string, size: string = "original"): string {
 	// URL contract lives in the draad `#[raw]` schema; the catch-all carries
@@ -28,3 +28,12 @@ export function progress(download: { total_bytes: number | null, downloaded_byte
 	if (!download.total_bytes) return null;
 	return Math.min(100, round((download.downloaded_bytes / download.total_bytes) * 100, precision));
 }
+
+export const DOWNLOAD_STATUS_LABEL: Record<DownloadStatus, string> = {
+	Queued: "Queued",
+	Downloading: "Downloading",
+	Paused: "Paused",
+	Completed: "Downloaded",
+	Failed: "Failed",
+	Cancelled: "Cancelled",
+};

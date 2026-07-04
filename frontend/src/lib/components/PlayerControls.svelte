@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from "svelte";
-	import type { Chapter } from "$lib/schema";
+	import type { Chapter, Stream } from "$lib/schema";
 	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
+	import { DOWNLOAD_STATUS_LABEL } from "$lib/utils";
 
 	interface AudioTrack {
 		id: number;
@@ -13,8 +14,6 @@
 		language: string;
 		url: string;
 	}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	type StreamOption = any;
 
 	let {
 		currentTime,
@@ -62,7 +61,7 @@
 		loading?: boolean;
 		volume: number;
 		muted: boolean;
-		streams?: StreamOption[];
+		streams?: Stream[];
 		activeStreamHash?: string;
 		audioTracks?: AudioTrack[];
 		activeAudioTrack?: number;
@@ -89,7 +88,7 @@
 		onSetVolume: (value: number) => void;
 		onToggleMute: () => void;
 		onToggleFullscreen?: () => void;
-		onStreamSelect?: (stream: StreamOption) => void;
+		onStreamSelect?: (stream: Stream) => void;
 		onAudioSelect?: (track: AudioTrack) => void;
 		onSubtitleSelect?: (track: SubtitleTrack) => void;
 		onSubtitleOff?: () => void;
@@ -185,8 +184,7 @@
 	}
 
 	const activeResolution = $derived(
-		streams.find((s: StreamOption) => s.info_hash === activeStreamHash)
-			?.resolution ?? null,
+		streams.find((s) => s.info_hash === activeStreamHash)?.resolution ?? null,
 	);
 
 	const resolutions = $derived.by(() => {
@@ -236,9 +234,7 @@
 						label: res,
 						selected: res === activeResolution,
 						onclick: () => {
-							const best = streams.find(
-								(s: StreamOption) => s.resolution === res,
-							);
+							const best = streams.find((s) => s.resolution === res);
 							if (best) onStreamSelect?.(best);
 						},
 					})),
@@ -246,14 +242,22 @@
 			: []),
 		{ kind: "header" as const, label: "Sources" },
 		...(activeResolution
-			? streams.filter((s: StreamOption) => s.resolution === activeResolution)
+			? streams.filter((s) => s.resolution === activeResolution)
 			: streams
 		)
 			.slice(0, 8)
-			.map((stream: StreamOption) => ({
+			.map((stream) => ({
 				kind: "item" as const,
 				label: `${stream.source}`,
-				description: [stream.codec, stream.audio, stream.source_type]
+				description: [
+					stream.codec,
+					stream.audio,
+					stream.source_type,
+					stream.download
+						? (DOWNLOAD_STATUS_LABEL[stream.download.status] ??
+							stream.download.status)
+						: null,
+				]
 					.filter(Boolean)
 					.join(" · "),
 				shortcut: stream.size_display ?? undefined,
