@@ -33,7 +33,7 @@
 		if (isRoot) {
 			getFocusSearch()?.();
 		} else {
-			await goto(base);
+			await goto("/");
 			requestAnimationFrame(() => getFocusSearch()?.());
 		}
 	}
