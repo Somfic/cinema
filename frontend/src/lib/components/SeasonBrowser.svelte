@@ -65,8 +65,8 @@
 		overflow-y: auto;
 		padding: 2rem;
 		box-sizing: border-box;
-		background: rgba(0, 0, 0, 0.35);
-		backdrop-filter: blur(16px);
+		/* No full-height frosted panel — the page blurs the backdrop image itself
+		   and shows the glow behind the season cards instead. */
 	}
 
 	/* Vertical + horizontal centring is desktop-only. On mobile the

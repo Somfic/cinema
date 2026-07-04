@@ -16,12 +16,12 @@
 		type Chapter,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
-	import { getDetails, imageUrl, playStream } from "$lib/utils";
+	import { getDetails, imageUrl, playStream, rgbToHex } from "$lib/utils";
 	import { remote } from "$lib/remote.svelte";
 
 	// This client is a remote-driven TV display.
 	const isTv = $derived(remote.mode === "tv");
-	import { Banner, Button, Spinner, Text } from "glow";
+	import { Banner, Button, Spinner, Text, Glow } from "glow";
 	import CyclingBackdrop from "$lib/components/CyclingBackdrop.svelte";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import MediaInfo from "$lib/components/MediaInfo.svelte";
@@ -163,6 +163,68 @@
 			el.style.setProperty("--tint-b", b);
 		}
 	});
+
+	// ── Glow backdrop palette ──
+	// A dark→vibrant ramp built from the extracted backdrop colors: the darkened
+	// dominant as the base/gap, the vibrant accent (dimmed → full → lightened) as
+	// the flowing light. Kept dim so text over it stays readable.
+	//
+	// While the title is still loading there are no extracted colors yet (they're
+	// the near-black/near-white defaults, which read as an invisible glow), so
+	// fall back to a vivid cinema-purple palette for the loading screen.
+	const DEFAULT_GLOW_BG = "#0a0616";
+	const DEFAULT_GLOW_COLORS = [
+		"#1a0033",
+		"#5b2a9d",
+		"#8b6ded",
+		"#5e7bff",
+		"#c4b5fd",
+	];
+	const glowBg = $derived(
+		item ? rgbToHex(backdropColor, 1.4) : DEFAULT_GLOW_BG,
+	);
+	const glowColors = $derived(
+		item
+			? [
+					rgbToHex(backdropColor, 1.4),
+					rgbToHex(accentColor, 0.8),
+					rgbToHex(accentColor, 1.2),
+					rgbToHex(accentColor, 1.7),
+				]
+			: DEFAULT_GLOW_COLORS,
+	);
+
+	// Perceptual brightness (luma, 0–1) of the accent color.
+	const accentLuma = $derived.by(() => {
+		const [r, g, b] = accentColor.split(",").map((s) => Number(s.trim()));
+		return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+	});
+	// Lerp between "ray" mode (ribbon 0, flowing sheets) for dark accents and
+	// "ribbon" mode (discrete strips) for bright accents. smoothstep over the
+	// mid-brightness band so the transition is gradual, not a hard switch. During
+	// loading, use flowing "ray" mode for a clean ambient look.
+	const glowRibbon = $derived.by(() => {
+		if (!item) return 0;
+		const t = Math.max(0, Math.min(1, (accentLuma - 0.35) / 0.4));
+		return t * t * (3 - 2 * t);
+	});
+
+	// Which side the backdrop fades into — mirrors the .gradient-right/.left
+	// visibility below. `full` fills the screen with glow: while the title loads
+	// (behind the spinner) and in season-select mode (slide 1, over the blurred
+	// backdrop). `none` when nothing is shown (playing / TV).
+	const glowSide = $derived(
+		!item
+			? "full"
+			: selectedStream !== null || isTv
+				? "none"
+				: slideIndex === 0
+					? "right"
+					: slideIndex === 2
+						? "left"
+						: "full",
+	);
+	const glowVisible = $derived(glowSide !== "none");
 
 	// ── Body style management ──
 	$effect(() => {
@@ -711,13 +773,34 @@
 		<Banner variant="error" label={error} />
 	</div>
 {/if}
+<!-- Single Glow instance, kept mounted across loading → loaded so the WebGL
+     context is never torn down and recreated. `full` fills the screen behind the
+     loading spinner; once loaded it fades into the backdrop's content side. -->
+<div
+	class="glow-fade"
+	class:hidden={!glowVisible}
+	class:full={glowSide === "full"}
+	class:left={glowSide === "left"}
+	class:right={glowSide === "right"}
+>
+	<Glow
+		colors={glowColors}
+		bgColor={glowBg}
+		rotation={52}
+		zoom={7}
+		ribbon={glowRibbon}
+		ribbonWidth={1.3}
+		transition={5000}
+		speed={glowVisible ? 1 : 0}
+	/>
+</div>
 {#if !item}
 	<div class="loading-screen" out:fade={{ duration: 300 }}>
 		<Spinner size={32} />
 	</div>
 {:else}
 	<!-- Backdrop -->
-	<div class="backdrop-container">
+	<div class="backdrop-container" class:blurred={slideIndex === 1}>
 		<CyclingBackdrop
 			images={slideIndex === 2 && episodeBackdrops.length > 0
 				? episodeBackdrops
@@ -860,6 +943,7 @@
 	.loading-screen {
 		position: fixed;
 		inset: 0;
+		z-index: 4;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -877,6 +961,15 @@
 		width: 100%;
 		height: 100%;
 		z-index: 0;
+		transition: filter 0.5s ease;
+	}
+
+	/* Season-select mode: the glow is the backdrop, with the image blurred
+	   softly behind it. `scale` hides the transparent edge bleed the blur
+	   would otherwise pull in. */
+	.backdrop-container.blurred {
+		filter: blur(24px);
+		transform: scale(1.08);
 	}
 
 	@property --tint-r {
@@ -899,7 +992,7 @@
 	.gradient-left {
 		position: fixed;
 		inset: 0;
-		z-index: 0;
+		z-index: 2;
 		pointer-events: none;
 		--tint-r: 9;
 		--tint-g: 10;
@@ -915,10 +1008,10 @@
 		background: linear-gradient(
 			to right,
 			transparent 0%,
-			transparent 35%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 52%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.95) 67%,
-			rgb(var(--tint-r), var(--tint-g), var(--tint-b)) 78%
+			transparent 50%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.38) 64%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.54) 77%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 86%
 		);
 	}
 
@@ -926,10 +1019,10 @@
 		background: linear-gradient(
 			to left,
 			transparent 0%,
-			transparent 35%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 52%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.95) 67%,
-			rgb(var(--tint-r), var(--tint-g), var(--tint-b)) 78%
+			transparent 50%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.38) 64%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.54) 77%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 86%
 		);
 	}
 
@@ -938,10 +1031,74 @@
 		opacity: 0;
 	}
 
+	/* Animated Glow the backdrop fades into, revealed on the content side by a
+	   mask matching the scrim's alpha ramp. Sits behind the scrim gradients. */
+	.glow-fade {
+		position: fixed;
+		inset: 0;
+		/* Above the backdrop image (z0), below the scrim gradients (z2) and
+		   content (z3). It's earlier in the DOM than .backdrop-container now
+		   (single instance kept across load), so it needs an explicit z-index. */
+		z-index: 1;
+		pointer-events: none;
+		opacity: 1;
+		transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	.glow-fade.hidden {
+		opacity: 0;
+	}
+
+	/* Loading state: no side mask — the glow fills the screen behind the spinner,
+	   dimmed so it reads as an ambient background. */
+	.glow-fade.full {
+		mask-image: none;
+		-webkit-mask-image: none;
+		opacity: 0.6;
+	}
+
+	.glow-fade.right {
+		mask-image: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+		-webkit-mask-image: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+	}
+
+	.glow-fade.left {
+		mask-image: linear-gradient(
+			to left,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+		-webkit-mask-image: linear-gradient(
+			to left,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+	}
+
 	/* ── Slider ── */
 	.slider {
 		position: relative;
-		z-index: 1;
+		z-index: 3;
 		display: flex;
 		width: 300vw;
 		height: 100%;
@@ -1003,9 +1160,27 @@
 			background: linear-gradient(
 				to bottom,
 				transparent 0%,
-				transparent 30%,
-				rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.7) 50%,
-				rgb(var(--tint-r), var(--tint-g), var(--tint-b)) 70%
+				transparent 45%,
+				rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.42) 62%,
+				rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 80%
+			);
+		}
+
+		.glow-fade.left,
+		.glow-fade.right {
+			mask-image: linear-gradient(
+				to bottom,
+				rgba(0, 0, 0, 0.13) 0%,
+				rgba(0, 0, 0, 0.13) 45%,
+				rgba(0, 0, 0, 0.7) 62%,
+				#000 80%
+			);
+			-webkit-mask-image: linear-gradient(
+				to bottom,
+				rgba(0, 0, 0, 0.13) 0%,
+				rgba(0, 0, 0, 0.13) 45%,
+				rgba(0, 0, 0, 0.7) 62%,
+				#000 80%
 			);
 		}
 

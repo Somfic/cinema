@@ -221,8 +221,27 @@
 		left: -15%;
 		width: 130%;
 		height: 100%;
-		background-size: auto 100%;
+		/* `cover` so the image always spans the full width — otherwise a
+		   narrower-than-viewport backdrop ends mid-screen. */
+		background-size: cover;
 		background-position: center center;
+		background-repeat: no-repeat;
+		/* Feather the left/right edges so the image fades softly into the dark
+		   background near the screen edges instead of ending hard. */
+		mask-image: linear-gradient(
+			to right,
+			transparent 3%,
+			#000 18%,
+			#000 82%,
+			transparent 97%
+		);
+		-webkit-mask-image: linear-gradient(
+			to right,
+			transparent 3%,
+			#000 18%,
+			#000 82%,
+			transparent 97%
+		);
 		opacity: 0;
 		transition:
 			opacity 1.5s ease,

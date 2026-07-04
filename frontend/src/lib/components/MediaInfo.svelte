@@ -15,6 +15,7 @@
 		Modal,
 		useModal,
 		Data,
+		Media,
 	} from "glow";
 	import type { IconName, DataItem } from "glow";
 	import PlayCard from "./PlayCard.svelte";
@@ -256,16 +257,18 @@
 						)
 				: undefined,
 	);
+
+	const logoSrc = $derived(
+		item.logo_path ? imageUrl(item.logo_path, "original") : null,
+	);
 </script>
 
 <div class="sidebar" class:tv={tvMode}>
 	<div class="title-area">
-		{#if item.logo_path}
-			<img
-				class="logo"
-				src={imageUrl(item.logo_path, "original")}
-				alt={item.title}
-			/>
+		{#if logoSrc}
+			<div class="logo">
+				<Media src={logoSrc} alt={item.title} fit="contain" lazy={false} />
+			</div>
 		{:else}
 			<h1 class="title">{item.title}</h1>
 		{/if}
@@ -578,11 +581,21 @@
 		min-height: 0;
 	}
 
+	/* Box for the <Media> logo — Media fills its parent and contains the logo
+	   within. Media crossfades it in once loaded; 0.95 opacity lets the moving
+	   glow behind subtly show through the logo. */
 	.logo {
-		object-fit: contain;
-		max-width: 100%;
-		max-height: 30vh;
+		width: 100%;
+		height: 30vh;
+		opacity: 0.95;
 		filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.6));
+	}
+
+	/* Contain the logo within the box, horizontally centered (right-aligned in TV
+	   mode via the override below). */
+	.logo :global(.media),
+	.logo :global(img) {
+		object-position: center center;
 	}
 
 	.title {
@@ -617,8 +630,9 @@
 		align-items: flex-end;
 	}
 
-	.sidebar.tv .logo {
-		margin-left: auto;
+	.sidebar.tv .logo :global(.media),
+	.sidebar.tv .logo :global(img) {
+		object-position: right center;
 	}
 
 	.sidebar.tv .actions-row {
@@ -708,8 +722,13 @@
 		}
 
 		.logo {
-			max-width: 100%;
 			width: 100%;
+			height: 22vh;
+		}
+
+		.logo :global(.media),
+		.logo :global(img) {
+			object-position: center center;
 		}
 
 		.title {

@@ -6,8 +6,11 @@
 <div class="tv-home">
 	<Glow
 		colors={["#700000", "#008cff", "#75daff", "#ff0026", "#ff3626"]}
+		ribbon={1}
+		ribbonWidth={0.5}
 		rotation={52}
 		zoom={9}
+		transition={5000}
 	>
 		<div class="exit">
 			<Button
@@ -30,7 +33,8 @@
 					<Icon name="Smartphone" size={18} />
 					<span>
 						{#if remote.controller}
-							Browse on <strong>{remote.controller.label}</strong> to start watching
+							Browse on <strong>{remote.controller.label}</strong> to
+							start watching
 						{:else}
 							Browse on your phone to start watching
 						{/if}
