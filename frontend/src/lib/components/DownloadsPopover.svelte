@@ -1,13 +1,30 @@
 <script lang="ts">
-	import type { Download } from "$lib/schema";
+	import type { Download, Pretranscoding } from "$lib/schema";
 	import { api } from "$lib/api";
-	import { DOWNLOAD_STATUS_LABEL, formatBytes, progress } from "$lib/utils";
+	import {
+		DOWNLOAD_STATUS_LABEL,
+		formatBytes,
+		pretranscodePercent,
+		progress,
+	} from "$lib/utils";
 	import { Button, Popover, Text, toast } from "glow";
 	import { onDestroy, onMount } from "svelte";
+	import { slide } from "svelte/transition";
+	import TranscodePanel from "./TranscodePanel.svelte";
+
+	let expandedId = $state<number | null>(null);
+
+	function toggleTranscode(id: number) {
+		expandedId = expandedId === id ? null : id;
+	}
 
 	let downloads = $state<
 		Array<Download & { download_speed_mbps?: number | null }>
 	>([]);
+
+	// All pretranscodings, grouped by their parent download id. Updated
+	// live from the pretranscodingsEvents socket subscription below.
+	let pretranscodings = $state<Record<number, Pretranscoding[]>>({});
 
 	const activeCount = $derived(
 		downloads.filter((d) => d.status === "Queued" || d.status === "Downloading")
@@ -16,6 +33,7 @@
 
 	let loading = $state(false);
 	const pendingRemoves = new Set<number>();
+	const recentlyRemovedPretranscodings = new Set<number>();
 
 	async function load() {
 		if (loading) {
@@ -24,14 +42,36 @@
 
 		try {
 			loading = true;
-			downloads = (await api.downloads.list()).filter(
-				(it) => !pendingRemoves.has(it.id),
-			);
+			recentlyRemovedPretranscodings.clear();
+
+			const [ds, pts] = await Promise.all([
+				api.downloads.list(),
+				api.pretranscodings.list(),
+			]);
+			downloads = ds.filter((it) => !pendingRemoves.has(it.id));
+
+			const grouped: Record<number, Pretranscoding[]> = {};
+			for (const pt of pts) {
+				if (recentlyRemovedPretranscodings.has(pt.id)) {
+					continue;
+				}
+				const parent = downloads.find((d) => d.id === pt.download_id);
+				if (!parent) continue;
+				(grouped[parent.id] ??= []).push(pt);
+			}
+			pretranscodings = grouped;
 		} catch {
 			// silently ignore
 		} finally {
 			loading = false;
+			recentlyRemovedPretranscodings.clear();
 		}
+	}
+
+	function activePretranscoding(id: number): Pretranscoding | undefined {
+		return pretranscodings[id]?.find(
+			(pt) => pt.status === "Transcoding" || pt.status === "Queued",
+		);
 	}
 
 	let unsub: (() => void) | undefined;
@@ -39,7 +79,7 @@
 	onMount(() => {
 		load();
 
-		const unsubOnProgress = api.downloadsEvents.onProgress((p) => {
+		const unsubOnDownloadProgress = api.downloadsEvents.onProgress((p) => {
 			if (pendingRemoves.has(p.download_id)) return;
 			const idx = downloads.findIndex((d) => d.id === p.download_id);
 			if (idx === -1) {
@@ -54,7 +94,7 @@
 				status: p.status,
 			};
 		});
-		const unsebOnStatusUpdate = api.downloadsEvents.onStatusUpdate(
+		const unsubOnDownloadStatusUpdate = api.downloadsEvents.onStatusUpdate(
 			(statusUpdate) => {
 				if (pendingRemoves.has(statusUpdate.download_id)) return;
 				const idx = downloads.findIndex(
@@ -70,9 +110,63 @@
 				};
 			},
 		);
+		const unsubOnPretranscodingProgress = api.pretranscodingsEvents.onProgress(
+			(p) => {
+				const list = pretranscodings[p.download_id];
+				if (!list) {
+					// New row: refetch the full list so its metadata lands in state.
+					load();
+					return;
+				}
+				const idx = list.findIndex((x) => x.id === p.pretranscoding_id);
+				if (idx === -1) {
+					load();
+					return;
+				}
+				list[idx] = {
+					...list[idx],
+					transcoded_ms: p.transcoded_ms,
+					total_ms: p.total_ms ?? list[idx].total_ms,
+					status: p.status,
+				};
+			},
+		);
+		const unsubOnPretranscodingStatusUpdate =
+			api.pretranscodingsEvents.onStatusUpdate((s) => {
+				const list = pretranscodings[s.download_id];
+				if (!list) {
+					load();
+					return;
+				}
+				const idx = list.findIndex((x) => x.id === s.pretranscoding_id);
+				if (idx === -1) {
+					load();
+					return;
+				}
+				list[idx] = { ...list[idx], status: s.new_status };
+			});
+		const unsubOnPretranscodingRemove = api.pretranscodingsEvents.onRemoved(
+			(p) => {
+				recentlyRemovedPretranscodings.add(p.pretranscoding_id);
+
+				const list = pretranscodings[p.download_id];
+				if (!list) {
+					// A pretranscoding has been removed, but we don't have a download entry for it, so nothing to do
+					return;
+				}
+
+				pretranscodings[p.download_id] = list.filter(
+					(it) => it.id !== p.pretranscoding_id,
+				);
+			},
+		);
+
 		unsub = () => {
-			unsubOnProgress();
-			unsebOnStatusUpdate();
+			unsubOnDownloadProgress();
+			unsubOnDownloadStatusUpdate();
+			unsubOnPretranscodingProgress();
+			unsubOnPretranscodingStatusUpdate();
+			unsubOnPretranscodingRemove();
 		};
 	});
 
@@ -132,6 +226,7 @@
 		try {
 			await api.downloads.remove(d.id);
 			downloads = downloads.filter((x) => x.id !== d.id);
+			delete pretranscodings[d.id];
 		} catch (err: unknown) {
 			toast.error(
 				`Remove failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -165,82 +260,127 @@
 					{#each downloads as d (d.id)}
 						{@const pct = progress(d)}
 						{@const ep = episodeLabel(d)}
+						{@const activePt = activePretranscoding(d.id)}
+						{@const ptPct = activePt ? pretranscodePercent(activePt) : null}
 						<div class="download-row">
-							<div class="row-info">
-								<div class="row-title-line">
-									<Text size="sm" weight="semibold">{displayTitle(d)}</Text>
-									<div class="row-chips">
-										{#if ep}
-											<span class="chip">{ep}</span>
-										{/if}
-										{#if d.meta?.resolution}
-											<span class="chip">{d.meta.resolution}</span>
-										{/if}
-										<span
-											class="chip chip--status"
-											class:chip--downloading={d.status === "Downloading"}
-											class:chip--queued={d.status === "Queued"}
-											class:chip--paused={d.status === "Paused"}
-											class:chip--done={d.status === "Completed"}
-											class:chip--failed={d.status === "Failed"}
-										>
-											{DOWNLOAD_STATUS_LABEL[d.status] ?? d.status}
-										</span>
-									</div>
-								</div>
-								{#if d.total_bytes && d.status !== "Queued"}
-									<div class="progress-bar-wrap">
-										<div
-											class="progress-bar"
-											class:progress-bar--done={d.status === "Completed"}
-											style="width: {pct}%"
-										></div>
-									</div>
-									<div
-										style="display: flex; align-items: center; justify-content: space-between;"
-									>
-										<Text size="xs" variant="muted">
-											{formatBytes(d.downloaded_bytes)} / {formatBytes(
-												d.total_bytes,
-											)}
-										</Text>
-										<Text size="xs" variant="muted">
-											{#if d.status === "Downloading" && d.download_speed_mbps}
-												{d.download_speed_mbps.toFixed(1)} MB/s
+							<div class="row-main">
+								<div class="row-info">
+									<div class="row-title-line">
+										<Text size="sm" weight="semibold">{displayTitle(d)}</Text>
+										<div class="row-chips">
+											{#if ep}
+												<span class="chip">{ep}</span>
 											{/if}
-										</Text>
-										<Text size="xs" variant="muted">
-											{pct}%
-										</Text>
+											{#if d.meta?.resolution}
+												<span class="chip">{d.meta.resolution}</span>
+											{/if}
+											<span
+												class="chip chip--status"
+												class:chip--downloading={d.status === "Downloading"}
+												class:chip--queued={d.status === "Queued"}
+												class:chip--paused={d.status === "Paused"}
+												class:chip--done={d.status === "Completed"}
+												class:chip--failed={d.status === "Failed"}
+											>
+												{DOWNLOAD_STATUS_LABEL[d.status] ?? d.status}
+											</span>
+										</div>
 									</div>
-								{/if}
+									{#if d.total_bytes && d.status !== "Queued"}
+										<div class="progress-bar-wrap">
+											<div
+												class="progress-bar"
+												class:progress-bar--done={d.status === "Completed"}
+												style="width: {pct}%"
+											></div>
+										</div>
+										<div
+											style="display: flex; align-items: center; justify-content: space-between;"
+										>
+											<Text size="xs" variant="muted">
+												{formatBytes(d.downloaded_bytes)} / {formatBytes(
+													d.total_bytes,
+												)}
+											</Text>
+											<Text size="xs" variant="muted">
+												{#if d.status === "Downloading" && d.download_speed_mbps}
+													{d.download_speed_mbps.toFixed(1)} MB/s
+												{/if}
+											</Text>
+											<Text size="xs" variant="muted">
+												{pct}%
+											</Text>
+										</div>
+									{/if}
+									{#if activePt}
+										<div class="pretranscode-line">
+											<div class="progress-bar-wrap progress-bar-wrap--pt">
+												<div
+													class="progress-bar progress-bar--pt"
+													style={ptPct != null
+														? `width: ${ptPct}%`
+														: "width: 100%; opacity: 0.4"}
+												></div>
+											</div>
+											<Text size="xs" variant="muted">
+												{activePt.status === "Queued"
+													? "Pretranscode queued"
+													: ptPct != null
+														? `Pretranscoding · ${ptPct}%`
+														: "Pretranscoding · waiting for pieces"}
+											</Text>
+										</div>
+									{/if}
+								</div>
+								<div class="row-actions">
+									{#if d.status === "Downloading" || d.status === "Queued"}
+										<Button
+											icon="Pause"
+											variant="ghost"
+											onclick={() => pause(d)}
+										/>
+									{/if}
+									{#if d.status === "Paused" || d.status === "Failed" || d.status === "Cancelled"}
+										<Button
+											icon="Play"
+											variant="ghost"
+											onclick={() => resume(d)}
+										/>
+									{/if}
+									{#if d.status !== "Completed" && d.status !== "Cancelled"}
+										<Button
+											icon="X"
+											variant="ghost"
+											onclick={() => cancel(d)}
+										/>
+									{/if}
+									{#if d.status === "Completed" || d.status === "Cancelled"}
+										<Button
+											icon="Trash"
+											variant="ghost"
+											onclick={() => remove(d)}
+										/>
+									{/if}
+									<Button
+										icon="Cpu"
+										variant="ghost"
+										selected={expandedId === d.id}
+										onclick={() => toggleTranscode(d.id)}
+									/>
+								</div>
 							</div>
-							<div class="row-actions">
-								{#if d.status === "Downloading" || d.status === "Queued"}
-									<Button
-										icon="Pause"
-										variant="ghost"
-										onclick={() => pause(d)}
+							{#if expandedId === d.id}
+								<div
+									class="transcode-slot"
+									transition:slide|local={{ duration: 200 }}
+								>
+									<TranscodePanel
+										download={d}
+										pretranscodings={pretranscodings[d.id] ?? []}
+										active
 									/>
-								{/if}
-								{#if d.status === "Paused" || d.status === "Failed" || d.status === "Cancelled"}
-									<Button
-										icon="Play"
-										variant="ghost"
-										onclick={() => resume(d)}
-									/>
-								{/if}
-								{#if d.status !== "Completed" && d.status !== "Cancelled"}
-									<Button icon="X" variant="ghost" onclick={() => cancel(d)} />
-								{/if}
-								{#if d.status === "Completed" || d.status === "Cancelled"}
-									<Button
-										icon="Trash"
-										variant="ghost"
-										onclick={() => remove(d)}
-									/>
-								{/if}
-							</div>
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -302,14 +442,23 @@
 
 	.download-row {
 		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+		flex-direction: column;
 		padding: 0.6rem 0.75rem;
 		border-bottom: $border;
 
 		&:last-child {
 			border-bottom: none;
 		}
+	}
+
+	.row-main {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.transcode-slot {
+		margin-top: 0.5rem;
 	}
 
 	.row-info {
@@ -385,6 +534,21 @@
 
 	.progress-bar--done {
 		background: rgb(34, 197, 94);
+	}
+
+	.pretranscode-line {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		margin-top: 0.15rem;
+	}
+
+	.progress-bar-wrap--pt {
+		height: 2px;
+	}
+
+	.progress-bar--pt {
+		background: rgb(139, 92, 246);
 	}
 
 	.row-actions {

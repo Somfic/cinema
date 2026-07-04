@@ -1,5 +1,5 @@
 import { api } from "$lib/api";
-import type { DownloadStatus, MediaType } from "./schema";
+import type { DownloadStatus, MediaType, PretranscodingStatus } from "./schema";
 
 export function imageUrl(path: string, size: string = "original"): string {
 	// URL contract lives in the draad `#[raw]` schema; the catch-all carries
@@ -37,3 +37,19 @@ export const DOWNLOAD_STATUS_LABEL: Record<DownloadStatus, string> = {
 	Failed: "Failed",
 	Cancelled: "Cancelled",
 };
+
+export const PRETRANSCODING_STATUS_LABEL: Record<PretranscodingStatus, string> = {
+	Queued: "Queued",
+	Transcoding: "Transcoding",
+	Completed: "Cached",
+	Failed: "Failed",
+	Cancelled: "Cancelled",
+};
+
+export function pretranscodePercent(pt: {
+	transcoded_ms: number;
+	total_ms: number | null;
+}): number | null {
+	if (!pt.total_ms || pt.total_ms <= 0) return null;
+	return Math.min(100, round((pt.transcoded_ms / pt.total_ms) * 100, 0));
+}

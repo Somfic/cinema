@@ -14,6 +14,7 @@ mod downloads;
 mod file_system;
 mod hls;
 mod logging;
+mod pretranscodings;
 mod proxy;
 mod raw;
 mod streams;
@@ -128,6 +129,12 @@ async fn run() -> Result<()> {
         .build()?;
 
     let downloads_handle = downloads::Handle::new(pool.clone(), events.clone(), config.clone());
+    let pretranscodings_handle = pretranscodings::Handle::new(
+        pool.clone(),
+        events.clone(),
+        config.clone(),
+        storage.clone(),
+    );
 
     let ctx = AppContext {
         db: pool,
@@ -139,6 +146,7 @@ async fn run() -> Result<()> {
         clients: app::ClientRoster::new(),
         http,
         downloads: downloads_handle,
+        pretranscodings: pretranscodings_handle,
     };
 
     // Initialize torrent engine
@@ -146,6 +154,10 @@ async fn run() -> Result<()> {
 
     if let Err(err) = ctx.downloads.boot().await {
         tracing::error!(?err, "Download boot recovery failed");
+    }
+
+    if let Err(err) = ctx.pretranscodings.boot().await {
+        tracing::error!(?err, "Pretranscoding boot recovery failed");
     }
 
     // HLS session cleanup reaper
@@ -246,6 +258,7 @@ async fn run() -> Result<()> {
 
     // Shutdown
     hls::stop_all().await;
+    ctx.pretranscodings.shutdown().await;
     ctx.downloads.shutdown().await;
     downloads::TorrentEngine::get().shutdown().await;
 

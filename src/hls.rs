@@ -16,7 +16,7 @@ struct HlsSession {
     /// Receives the ffmpeg error message when the process exits with failure.
     /// `None` means still running, `Some(msg)` means exited with that error.
     exit_error: watch::Receiver<Option<String>>,
-    abort_handles: [tokio::task::AbortHandle; 2],
+    abort_handles: Vec<tokio::task::AbortHandle>,
 }
 
 impl Drop for HlsSession {
@@ -55,8 +55,9 @@ const BROWSER_SAFE_VIDEO: &[&str] = &["h264", "avc", "avc1"];
 /// matching the 2s HLS segment length so the muxer always has a cut point.
 const GOP_FRAMES: u32 = 48;
 
-/// Probe the video codec of a file using ffprobe.
-pub async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
+/// Probe the video codec of a file using ffprobe. `input` accepts either an
+/// on-disk path or an ffmpeg-style URL/pipe descriptor.
+async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
     let output = tokio::process::Command::new("ffprobe")
         .args([
             "-v",
@@ -121,13 +122,13 @@ async fn nvenc_available() -> bool {
 }
 
 /// The video half of an ffmpeg invocation, split by where each arg must go.
-struct VideoPipeline {
+pub struct VideoPipeline {
     /// Decode-side args that must precede `-i` (e.g. `-hwaccel`).
-    pre_input: Vec<String>,
+    pub pre_input: Vec<String>,
     /// Output-side filter args (e.g. `-vf scale_cuda=...`).
-    filter: Vec<String>,
+    pub filter: Vec<String>,
     /// Encoder selection + tuning (`-c:v ...`).
-    encode: Vec<String>,
+    pub encode: Vec<String>,
 }
 
 /// Decide how to handle the video stream. `copy_video` streams it through
@@ -138,7 +139,15 @@ struct VideoPipeline {
 /// GPU but downloads every frame to do the 10-bit→8-bit `-pix_fmt` conversion on
 /// the CPU (~4 cores for 4K). Keeping frames on the GPU via `scale_cuda` drops
 /// that to a fraction.
-async fn video_pipeline(config: &crate::Config, copy_video: bool) -> VideoPipeline {
+///
+/// `low_latency` chooses between HLS-style tuning (fast segment cadence, uses
+/// `-tune ll` on NVENC) and background pretranscode tuning (quality preset,
+/// no low-latency tricks).
+pub async fn video_pipeline(
+    config: &crate::Config,
+    copy_video: bool,
+    low_latency: bool,
+) -> VideoPipeline {
     if copy_video {
         return VideoPipeline {
             pre_input: Vec::new(),
@@ -149,6 +158,34 @@ async fn video_pipeline(config: &crate::Config, copy_video: bool) -> VideoPipeli
 
     let want_nvenc = matches!(config.ffmpeg_hwaccel.as_str(), "auto" | "cuda" | "nvenc");
     if want_nvenc && nvenc_available().await {
+        let mut encode: Vec<String> = vec![
+            "-c:v".into(),
+            "h264_nvenc".into(),
+            "-preset".into(),
+            if low_latency {
+                "p4".into()
+            } else {
+                "p6".into()
+            },
+        ];
+        if low_latency {
+            encode.extend_from_slice(&["-tune".into(), "ll".into()]);
+        }
+        encode.extend_from_slice(&[
+            "-rc".into(),
+            "vbr".into(),
+            "-cq".into(),
+            config.ffmpeg_video_crf.to_string(),
+            "-b:v".into(),
+            "0".into(),
+            // Fixed keyframe interval (~2s at 24-30fps). Without it, nvenc
+            // with `-tune ll` emits only the opening keyframe and *ignores*
+            // `-force_key_frames`, so the HLS muxer finds no split points,
+            // buffers everything into segment 0, and only flushes at EOF —
+            // read as a startup timeout. A periodic IDR lets segments cut.
+            "-g".into(),
+            GOP_FRAMES.to_string(),
+        ]);
         VideoPipeline {
             // Decode on the GPU and keep frames in VRAM.
             pre_input: vec![
@@ -160,29 +197,32 @@ async fn video_pipeline(config: &crate::Config, copy_video: bool) -> VideoPipeli
             // Convert 10-bit (p010) → 8-bit (nv12) on the GPU; h264_nvenc is
             // 8-bit only. Doing it here avoids the CPU `-pix_fmt` round-trip.
             filter: vec!["-vf".into(), "scale_cuda=format=nv12".into()],
-            encode: vec![
-                "-c:v".into(),
-                "h264_nvenc".into(),
-                "-preset".into(),
-                "p4".into(),
-                "-tune".into(),
-                "ll".into(), // low-latency: prioritise fast segment production
-                "-rc".into(),
-                "vbr".into(),
-                "-cq".into(),
-                config.ffmpeg_video_crf.to_string(),
-                "-b:v".into(),
-                "0".into(),
-                // Fixed keyframe interval (~2s at 24-30fps). Without it, nvenc
-                // with `-tune ll` emits only the opening keyframe and *ignores*
-                // `-force_key_frames`, so the HLS muxer finds no split points,
-                // buffers everything into segment 0, and only flushes at EOF —
-                // read as a startup timeout. A periodic IDR lets segments cut.
-                "-g".into(),
-                GOP_FRAMES.to_string(),
-            ],
+            encode,
         }
     } else {
+        let mut encode: Vec<String> = vec![
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            config.ffmpeg_video_preset.clone(),
+        ];
+        if low_latency {
+            encode.extend_from_slice(&["-tune".into(), "zerolatency".into()]);
+        }
+        encode.extend_from_slice(&[
+            "-crf".into(),
+            config.ffmpeg_video_crf.to_string(),
+            // Match the segment cadence so the first segment closes quickly
+            // rather than at libx264's default ~250-frame keyint.
+            "-g".into(),
+            GOP_FRAMES.to_string(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+            "-bf".into(),
+            "0".into(),
+            "-b_strategy".into(),
+            "0".into(),
+        ]);
         VideoPipeline {
             pre_input: if config.ffmpeg_hwaccel != "none" {
                 vec!["-hwaccel".into(), config.ffmpeg_hwaccel.clone()]
@@ -190,26 +230,7 @@ async fn video_pipeline(config: &crate::Config, copy_video: bool) -> VideoPipeli
                 Vec::new()
             },
             filter: Vec::new(),
-            encode: vec![
-                "-c:v".into(),
-                "libx264".into(),
-                "-preset".into(),
-                config.ffmpeg_video_preset.clone(),
-                "-tune".into(),
-                "zerolatency".into(),
-                "-crf".into(),
-                config.ffmpeg_video_crf.to_string(),
-                // Match the segment cadence so the first segment closes quickly
-                // rather than at libx264's default ~250-frame keyint.
-                "-g".into(),
-                GOP_FRAMES.to_string(),
-                "-pix_fmt".into(),
-                "yuv420p".into(),
-                "-bf".into(),
-                "0".into(),
-                "-b_strategy".into(),
-                "0".into(),
-            ],
+            encode,
         }
     }
 }
@@ -259,7 +280,7 @@ async fn start_transcoding(
     let copy_video =
         session_input.only_audio || BROWSER_SAFE_VIDEO.iter().any(|c| video_codec.contains(c));
 
-    let video = video_pipeline(config, copy_video).await;
+    let video = video_pipeline(config, copy_video, true).await;
 
     // Decode-side args precede `-i`: the video hwaccel, then input seeking.
     let mut pre_args = video.pre_input.clone();
@@ -416,7 +437,7 @@ async fn start_transcoding(
             child,
             last_access: Instant::now(),
             exit_error: exit_rx,
-            abort_handles: [write_task.abort_handle(), error_task.abort_handle()],
+            abort_handles: vec![write_task.abort_handle(), error_task.abort_handle()],
         },
     );
 
@@ -453,6 +474,186 @@ async fn start_transcoding(
             )));
         }
     };
+
+    let url = format!("/api/hls/{session_id}/playlist.m3u8");
+    Ok(url)
+}
+
+/// Start an HLS remux session that reads a local pretranscoded MP4 (already
+/// browser-safe codecs) instead of a live torrent. Because the source is a
+/// completed on-disk file with the moov atom at the front (see `pretranscodings::supervisor`),
+/// ffmpeg can seek instantly and copy both streams into HLS without a re-encode.
+pub async fn start_session_from_local(
+    storage: &crate::app::Storage,
+    config: &crate::Config,
+    path: impl Into<PathBuf>,
+    start_time: f64,
+) -> crate::app::Result<(String, String)> {
+    let session_id = new_session_id();
+    let dir = storage.join(format!("hls/{session_id}"));
+    tokio::fs::create_dir_all(&dir).await?;
+
+    match start_local_transcoding(config, path.into(), start_time, &session_id, dir.clone()).await {
+        Ok(url) => Ok((session_id, url)),
+        Err(err) => {
+            let _ = tokio::fs::remove_dir_all(dir).await;
+            Err(err)
+        }
+    }
+}
+
+async fn start_local_transcoding(
+    config: &crate::Config,
+    path: PathBuf,
+    start_time: f64,
+    session_id: &String,
+    dir: PathBuf,
+) -> crate::app::Result<String> {
+    let playlist_path = dir.join("playlist.m3u8");
+    let segment_pattern = dir.join("seg%05d.ts");
+
+    // `-ss` before `-i` gives fast keyframe seek because the moov atom is at
+    // the head of the file (pretranscodings write with `-movflags +faststart`).
+    let mut pre_args: Vec<String> = Vec::new();
+    let mut post_args: Vec<String> = Vec::new();
+    if start_time > 0.0 {
+        pre_args.extend_from_slice(&["-ss".into(), format!("{start_time:.3}")]);
+        post_args.extend_from_slice(&[
+            "-copyts".into(),
+            "-output_ts_offset".into(),
+            format!("-{start_time:.3}"),
+        ]);
+    }
+
+    let input_display = path.display().to_string();
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(&pre_args)
+        .args(["-i".to_string()])
+        .arg(&path)
+        .args(&post_args)
+        .args(["-map", "0:v:0", "-map", "0:a:0"])
+        .args([
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-f",
+            "hls",
+            "-hls_time",
+            "2",
+            "-hls_list_size",
+            "0",
+            "-hls_flags",
+            "append_list",
+            "-hls_segment_filename",
+            segment_pattern.to_str().unwrap_or(""),
+            "-hls_playlist_type",
+            "event",
+        ])
+        .arg(playlist_path.to_str().unwrap_or(""))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| crate::app::Error::Generic(format!("Failed to start ffmpeg HLS: {e}")))?;
+
+    let (exit_tx, exit_rx) = watch::channel(None);
+    let stderr = child.stderr.take();
+    let sid = session_id.clone();
+    let span = tracing::Span::current();
+
+    let error_task = tokio::spawn(tracing::Instrument::instrument(
+        async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+
+            let Some(stderr) = stderr else { return };
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            let mut last_lines: Vec<String> = Vec::new();
+
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            tracing::trace!(session = %sid, "ffmpeg: {trimmed}");
+                            if last_lines.len() >= 5 {
+                                last_lines.remove(0);
+                            }
+                            last_lines.push(trimmed.to_string());
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(session = %sid, "ffmpeg stderr read error: {e}");
+                        break;
+                    }
+                }
+            }
+
+            let has_error = last_lines.iter().any(|l| {
+                l.contains("Error")
+                    || l.contains("error")
+                    || l.contains("Invalid")
+                    || l.contains("No such file")
+            });
+            if has_error {
+                let error_context = last_lines.join("\n");
+                tracing::warn!(session = %sid, input = %input_display, "ffmpeg failed: {error_context}");
+                let _ = exit_tx.send(Some(error_context));
+            } else {
+                tracing::info!(session = %sid, input = %input_display, "ffmpeg finished remux successfully");
+            }
+        },
+        span,
+    ));
+
+    sessions().lock().await.insert(
+        session_id.clone(),
+        HlsSession {
+            dir,
+            child,
+            last_access: Instant::now(),
+            exit_error: exit_rx,
+            abort_handles: vec![error_task.abort_handle()],
+        },
+    );
+
+    let result = tokio::time::timeout(config.ffmpeg_max_startup_duration, async {
+        loop {
+            if let Some(error) = session_error(session_id).await {
+                return Err(crate::app::Error::Generic(format!(
+                    "ffmpeg failed: {error}"
+                )));
+            }
+
+            if let Ok(content) = tokio::fs::read_to_string(&playlist_path).await
+                && content.contains("#EXTINF")
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(config.ffmpeg_startup_poll_interval).await;
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            stop_session(session_id).await;
+            return Err(e);
+        }
+        Err(_) => {
+            stop_session(session_id).await;
+            return Err(crate::app::Error::Generic(String::from(
+                "ffmpeg startup timeout",
+            )));
+        }
+    }
 
     let url = format!("/api/hls/{session_id}/playlist.m3u8");
     Ok(url)

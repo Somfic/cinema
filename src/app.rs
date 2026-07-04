@@ -101,7 +101,7 @@ pub async fn create_pool(config: &Config) -> Result<sqlx::PgPool> {
 
 // ── Storage ──
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Storage(Arc<PathBuf>);
 
 impl Storage {
@@ -165,4 +165,5 @@ pub struct AppContext {
     pub clients: ClientRoster,
     pub http: Client,
     pub downloads: crate::downloads::Handle,
+    pub pretranscodings: crate::pretranscodings::Handle,
 }
