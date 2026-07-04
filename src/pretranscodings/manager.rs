@@ -3,20 +3,14 @@
 //! semaphore, and each operation blocks until the requested state is
 //! observable in both the process table and the DB.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::{Semaphore, mpsc};
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
 use crate::app::{Error, Pool, Storage};
 use crate::config::Config;
 use crate::pretranscodings::PretranscodingOutputPath;
 use crate::pretranscodings::supervisor::Supervisor;
-use crate::pretranscodings::supervisor_guard::SupervisorGuard;
 use crate::pretranscodings::types::PretranscodingStatus;
+use crate::utils::supervisor_pool::{Acquire, SupervisorPool};
 
 /// Cheap, cloneable handle to the pretranscoding subsystem.
 #[derive(Clone)]
@@ -27,44 +21,32 @@ struct Inner {
     events: crate::Events,
     config: Arc<Config>,
     storage: Storage,
-    semaphore: Arc<Semaphore>,
-    supervisors: std::sync::Mutex<HashMap<i32, CancellationToken>>,
-    refresh_tx: mpsc::Sender<()>,
-    shutdown: CancellationToken,
-    tracker: TaskTracker,
+    supervisor_pool: SupervisorPool,
 }
 
 impl Handle {
     pub fn new(db: Pool, events: crate::Events, config: Arc<Config>, storage: Storage) -> Self {
         let permits = config.max_concurrent_pretranscodings.max(1);
-        let (refresh_tx, mut refresh_rx) = mpsc::channel::<()>(64);
+        let (supervisor_pool, refetch_rx) = SupervisorPool::new("pretranscodings manager", permits);
         let inner = Arc::new(Inner {
             db,
             events,
             config,
             storage,
-            semaphore: Arc::new(Semaphore::new(permits)),
-            supervisors: std::sync::Mutex::new(HashMap::new()),
-            refresh_tx,
-            shutdown: CancellationToken::new(),
-            tracker: TaskTracker::new(),
+            supervisor_pool,
         });
 
         let weak = Arc::downgrade(&inner);
-        let shutdown = inner.shutdown.clone();
-        inner.tracker.spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown.cancelled() => break,
-                    msg = refresh_rx.recv() => {
-                        if msg.is_none() {
-                            break;
-                        }
-                        let Some(inner) = weak.upgrade() else { break };
-                        Self(inner).refresh().await;
-                    }
-                }
+        inner.supervisor_pool.attach_refresh(refetch_rx, move || {
+            let weak = weak.clone();
+            async move {
+                let Some(inner) = weak.upgrade() else {
+                    return crate::utils::supervisor_pool::RefetchResult::Break;
+                };
+
+                Self(inner).refresh().await;
+
+                crate::utils::supervisor_pool::RefetchResult::Continue
             }
         });
 
@@ -73,12 +55,7 @@ impl Handle {
 
     /// Cancel all in-flight supervisors and wait for them to drain.
     pub async fn shutdown(&self) {
-        self.0.shutdown.cancel();
-        self.0.tracker.close();
-        if let Err(err) = tokio::time::timeout(Duration::from_secs(5), self.0.tracker.wait()).await
-        {
-            tracing::error!(?err, "Pretranscoding manager shutdown timed out");
-        }
+        self.0.supervisor_pool.shutdown().await
     }
 
     /// Boot-time recovery. A partial MP4 without its moov atom is unusable, so
@@ -91,7 +68,7 @@ impl Handle {
             r#"
                 SELECT pt.id, pt.download_id, pt.only_audio, pt.audio_index
                 FROM pretranscodings pt
-                WHERE pt.status IN ('queued', 'transcoding')
+                WHERE pt.status = 'transcoding'
             "#,
         )
         .fetch_all(&self.0.db)
@@ -111,7 +88,7 @@ impl Handle {
         }
 
         let reset = sqlx::query!(
-            "UPDATE pretranscodings SET status = 'failed', error = 'Interrupted at restart' WHERE status IN ('queued', 'transcoding')",
+            "UPDATE pretranscodings SET status = 'failed', error = 'Interrupted at restart' WHERE status = 'transcoding'",
         )
         .execute(&self.0.db)
         .await
@@ -123,6 +100,9 @@ impl Handle {
                 "Marked interrupted pretranscodings as failed"
             );
         }
+
+        self.refresh().await;
+
         Ok(())
     }
 
@@ -194,15 +174,16 @@ impl Handle {
         .map_err(Error::DatabaseError)?;
 
         self.emit_status_update(id, download_id, PretranscodingStatus::Queued);
-        let _ = self.0.refresh_tx.send(()).await;
+        self.0.supervisor_pool.nudge().await;
+
         Ok(id)
     }
 
     /// Cancel a running/queued pretranscoding. Deletes partial output; leaves
     /// the row in `cancelled` state so the user can see what happened.
     pub async fn cancel(&self, id: i32) -> crate::app::Result<()> {
-        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
-            cancel.cancel();
+        if self.0.supervisor_pool.cancel(id) {
+            tracing::info!(id, "Cancelling the pretranscoding");
         }
 
         let row = sqlx::query!(
@@ -240,8 +221,8 @@ impl Handle {
 
     /// Cancel if running, delete the row, and remove any cached files.
     pub async fn remove(&self, id: i32) -> crate::app::Result<()> {
-        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
-            cancel.cancel();
+        if self.0.supervisor_pool.cancel(id) {
+            tracing::info!(id, "Removing the pretranscoding");
         }
 
         let row = sqlx::query!(
@@ -285,8 +266,6 @@ impl Handle {
     }
 
     /// Cancel every supervisor for a download and delete its cached files.
-    /// Called from `downloads::Handle::remove` before the `ON DELETE CASCADE`
-    /// drops the pretranscoding rows.
     pub async fn remove_all_for_download(&self, download_id: i32) -> crate::app::Result<()> {
         let rows = sqlx::query!(
             "SELECT id, only_audio, audio_index FROM pretranscodings WHERE download_id = $1",
@@ -296,14 +275,9 @@ impl Handle {
         .await
         .map_err(Error::DatabaseError)?;
 
-        {
-            let mut sup = self.0.supervisors.lock().unwrap();
-            for row in &rows {
-                if let Some(cancel) = sup.remove(&row.id) {
-                    cancel.cancel();
-                }
-            }
-        }
+        self.0
+            .supervisor_pool
+            .cancel_all(rows.iter().map(|row| row.id));
 
         for row in &rows {
             let path = PretranscodingOutputPath::new(
@@ -337,10 +311,10 @@ impl Handle {
                 return;
             }
         };
-        let take = self.0.semaphore.available_permits();
+        let take = self.0.supervisor_pool.available_capacity();
         for id in queued.into_iter().take(take) {
             let h = self.clone();
-            self.0.tracker.spawn(async move {
+            self.0.supervisor_pool.spawn_helper(async move {
                 if let Err(err) = h.start(id).await {
                     tracing::warn!(?err, id, "Pretranscoding refresh: start failed");
                 }
@@ -349,7 +323,7 @@ impl Handle {
     }
 
     async fn start(&self, id: i32) -> crate::app::Result<()> {
-        if self.0.supervisors.lock().unwrap().contains_key(&id) {
+        if self.0.supervisor_pool.is_running(id) {
             return Ok(());
         }
 
@@ -377,31 +351,12 @@ impl Handle {
             return Ok(());
         }
 
-        let cancel = self.0.shutdown.child_token();
-        let guard = {
-            let mut sup = self.0.supervisors.lock().unwrap();
-            if sup.contains_key(&id) {
-                return Ok(());
-            }
-            sup.insert(id, cancel.clone());
-
-            SupervisorGuard::new(|| {
-                if let Ok(mut supervisors) = self.0.supervisors.lock()
-                    && let Some(cancel) = supervisors.remove(&id)
-                {
-                    cancel.cancel();
-                } else {
-                    tracing::warn!(
-                        "The guard could not clean up the supervisor for pretranscoding #{id}"
-                    );
-                }
-            })
+        let slot = match self.0.supervisor_pool.try_acquire(id) {
+            Acquire::Acquired(slot) => slot,
+            Acquire::AlreadyRunning | Acquire::NoCapacity => return Ok(()),
         };
 
-        let permit = match self.0.semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => return Ok(()),
-        };
+        let cancel = slot.cancel_token();
 
         // TODO: this shouldn't happen this way
         // Kick the torrent into life so the blocking reader in the supervisor
@@ -415,9 +370,6 @@ impl Handle {
             .select_file(&row.info_hash, row.file_idx as usize)
             .await?;
 
-        guard.commit();
-
-        let inner = self.0.clone();
         let supervisor = Supervisor::new(
             self.0.db.clone(),
             self.0.events.clone(),
@@ -433,11 +385,8 @@ impl Handle {
             cancel,
         );
 
-        self.0.tracker.spawn(async move {
+        slot.spawn(async move {
             supervisor.run().await;
-            drop(permit);
-            inner.supervisors.lock().unwrap().remove(&id);
-            let _ = inner.refresh_tx.send(()).await;
         });
 
         Ok(())

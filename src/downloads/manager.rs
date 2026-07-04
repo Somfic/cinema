@@ -3,19 +3,13 @@
 //! operations (`start`, `pause`, `cancel`, `remove`) that block until the
 //! engine and DB are in the requested state.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::{Semaphore, mpsc};
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
 use super::TorrentEngine;
 use crate::app::{Error, Pool};
 use crate::config::Config;
-use crate::downloads::supervisor_guard::SupervisorGuard;
 use crate::downloads::types::DownloadStatus;
+use crate::utils::supervisor_pool::{Acquire, SupervisorPool};
 
 /// Result of a `start` attempt. `Started` is the only outcome that spawns a
 /// new supervisor; the rest are idempotent no-ops the caller may want to
@@ -37,45 +31,31 @@ struct Inner {
     db: Pool,
     events: crate::Events,
     config: Arc<Config>,
-    semaphore: Arc<Semaphore>,
-    supervisors: std::sync::Mutex<HashMap<i32, CancellationToken>>,
-    refresh_tx: mpsc::Sender<()>,
-    shutdown: CancellationToken,
-    tracker: TaskTracker,
+    supervisor_pool: SupervisorPool,
 }
 
 impl Handle {
     pub fn new(db: Pool, events: crate::Events, config: Arc<Config>) -> Self {
         let permits = config.max_concurrent_downloads;
-        let (refresh_tx, mut refresh_rx) = mpsc::channel::<()>(64);
+        let (supervisor_pool, refetch_rx) = SupervisorPool::new("download manager", permits);
         let inner = Arc::new(Inner {
             db,
             events,
             config,
-            semaphore: Arc::new(Semaphore::new(permits)),
-            supervisors: std::sync::Mutex::new(HashMap::new()),
-            refresh_tx,
-            shutdown: CancellationToken::new(),
-            tracker: TaskTracker::new(),
+            supervisor_pool,
         });
 
         let weak = Arc::downgrade(&inner);
-        let shutdown = inner.shutdown.clone();
-        inner.tracker.spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown.cancelled() => break,
-                    msg = refresh_rx.recv() => {
-                        if msg.is_none() {
-                            break;
-                        }
-                        let Some(inner) = weak.upgrade() else {
-                            break;
-                        };
-                        Self(inner).refresh().await;
-                    }
-                }
+        inner.supervisor_pool.attach_refresh(refetch_rx, move || {
+            let weak = weak.clone();
+            async move {
+                let Some(inner) = weak.upgrade() else {
+                    return crate::utils::supervisor_pool::RefetchResult::Break;
+                };
+
+                Self(inner).refresh().await;
+
+                crate::utils::supervisor_pool::RefetchResult::Continue
             }
         });
 
@@ -85,12 +65,7 @@ impl Handle {
     /// Cancel all in-flight supervisors and wait for them to drain.
     /// After this returns, no new downloads will be started.
     pub async fn shutdown(&self) {
-        self.0.shutdown.cancel();
-        self.0.tracker.close();
-        if let Err(err) = tokio::time::timeout(Duration::from_secs(5), self.0.tracker.wait()).await
-        {
-            tracing::error!(?err, "Download manager shutdown timed out");
-        }
+        self.0.supervisor_pool.shutdown().await
     }
 
     /// Boot-time recovery: demote any rows left as `downloading` from a prior
@@ -118,7 +93,7 @@ impl Handle {
     /// selected, or returns a non-`Started` outcome that explains why no
     /// supervisor was started.
     pub async fn start(&self, id: i32) -> crate::app::Result<StartOutcome> {
-        if self.0.supervisors.lock().unwrap().contains_key(&id) {
+        if self.0.supervisor_pool.is_running(id) {
             return Ok(StartOutcome::AlreadyRunning);
         }
 
@@ -131,34 +106,13 @@ impl Handle {
         }
 
         // Claim the supervisor slot. Any concurrent start (for same download) will early return.
-        // Child of the manager-wide shutdown token so a single `shutdown.cancel()` cascades
-        // to every live supervisor.
-        let cancel = self.0.shutdown.child_token();
-        let guard = {
-            let mut sup = self.0.supervisors.lock().unwrap();
-            if sup.contains_key(&id) {
-                return Ok(StartOutcome::AlreadyRunning);
-            }
-            sup.insert(id, cancel.clone());
-
-            SupervisorGuard::new(|| {
-                if let Ok(mut supervisors) = self.0.supervisors.lock()
-                    && let Some(cancel) = supervisors.remove(&id)
-                {
-                    cancel.cancel();
-                } else {
-                    tracing::warn!("The guard could not clean up the supervisor for download #{id}")
-                }
-            })
+        let slot = match self.0.supervisor_pool.try_acquire(id) {
+            Acquire::Acquired(slot) => slot,
+            Acquire::AlreadyRunning => return Ok(StartOutcome::AlreadyRunning),
+            Acquire::NoCapacity => return Ok(StartOutcome::NoCapacity),
         };
 
-        // Reserve capacity before doing any slow engine work. If we can't,
-        // leave the row as-is so a future refresh retries it.
-        let permit = match self.0.semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => return Ok(StartOutcome::NoCapacity),
-        };
-
+        let cancel = slot.cancel_token();
         let engine = TorrentEngine::get();
 
         let cancel_clone = cancel.clone();
@@ -181,20 +135,13 @@ impl Handle {
                 return Err(err);
             }
 
-            guard.commit();
-
-            let inner = self.0.clone();
             let db = self.0.db.clone();
             let events = self.0.events.clone();
-            self.0.tracker.spawn(async move {
+            slot.spawn(async move {
                 super::supervisor::Supervisor::new(db, events, id, torrent, cancel)
                     .await
                     .run()
                     .await;
-                drop(permit);
-                inner.supervisors.lock().unwrap().remove(&id);
-                // A slot just freed up, kick the coordinator to refresh.
-                let _ = inner.refresh_tx.send(()).await;
             });
 
             Ok(StartOutcome::Started)
@@ -215,9 +162,8 @@ impl Handle {
 
     /// Pause downloading, keep files.
     pub async fn pause(&self, id: i32) -> crate::app::Result<()> {
-        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
+        if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Pausing torrent");
-            cancel.cancel();
         }
         if let Some(hash) = fetch_info_hash(&self.0.db, id).await
             && let Err(err) = TorrentEngine::get().pause(&hash).await
@@ -236,9 +182,8 @@ impl Handle {
 
     /// Stop downloading, keep files, releasing the resources
     pub async fn cancel(&self, id: i32) -> crate::app::Result<()> {
-        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
+        if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Cancelling torrent");
-            cancel.cancel();
         }
         if let Some(hash) = fetch_info_hash(&self.0.db, id).await
             && let Err(err) = TorrentEngine::get().stop(&hash).await
@@ -260,9 +205,8 @@ impl Handle {
 
     /// Stop downloading, wipe files + row. Always destructive.
     pub async fn remove(&self, id: i32) -> crate::app::Result<()> {
-        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
+        if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Cancelling torrent (remove)");
-            cancel.cancel();
         }
         if let Some(hash) = fetch_info_hash(&self.0.db, id).await {
             TorrentEngine::get().stop_and_delete(&hash).await;
@@ -290,10 +234,10 @@ impl Handle {
                 return;
             }
         };
-        let take = self.0.semaphore.available_permits();
+        let take = self.0.supervisor_pool.available_capacity();
         for id in queued.into_iter().take(take) {
             let h = self.clone();
-            self.0.tracker.spawn(async move {
+            self.0.supervisor_pool.spawn_helper(async move {
                 if let Err(err) = h.start(id).await {
                     tracing::warn!(?err, id, "Refresh: start failed");
                 }

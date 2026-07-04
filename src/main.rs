@@ -21,6 +21,7 @@ mod streams;
 mod subtitles;
 mod tmdb;
 mod trailer;
+mod utils;
 mod ws;
 
 use app::{AppContext, Result};
