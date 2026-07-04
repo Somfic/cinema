@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Download, DownloadStatus } from "$lib/schema";
 	import { api } from "$lib/api";
-	import { formatBytes } from "$lib/utils";
+	import { formatBytes, progress } from "$lib/utils";
 	import { Button, Popover, Text, toast } from "glow";
 	import { onDestroy, onMount } from "svelte";
 
@@ -90,13 +90,6 @@
 		return `S${d.meta.season}E${d.meta.episode}`;
 	}
 
-	function progressPct(d: Download): number {
-		if (!d.total_bytes || d.total_bytes === 0) return 0;
-		return Math.round(
-			Math.min(100, (d.downloaded_bytes / d.total_bytes) * 100),
-		);
-	}
-
 	async function pause(d: Download) {
 		try {
 			await api.downloads.pause(d.id);
@@ -179,7 +172,7 @@
 			{:else}
 				<div class="download-list">
 					{#each downloads as d (d.id)}
-						{@const pct = progressPct(d)}
+						{@const pct = progress(d)}
 						{@const ep = episodeLabel(d)}
 						<div class="download-row">
 							<div class="row-info">

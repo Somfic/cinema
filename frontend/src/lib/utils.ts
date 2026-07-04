@@ -19,3 +19,12 @@ export function formatBytes(bytes: number): string {
 	if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
 	return `${bytes} B`;
 }
+
+export function round(n: number, precision: number = 0) {
+	return Math.round((n + Number.EPSILON) * 10 ** precision) / (10 ** precision);
+}
+
+export function progress(download: { total_bytes: number | null, downloaded_bytes: number }, precision: number = 0) {
+	if (!download.total_bytes) return null;
+	return Math.min(100, round((download.downloaded_bytes / download.total_bytes) * 100, precision));
+}

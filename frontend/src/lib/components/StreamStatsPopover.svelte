@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { formatBytes } from "$lib/utils";
+	import { formatBytes, progress } from "$lib/utils";
 	import { Button, Data, Popover } from "glow";
 
 	interface StreamStats {
@@ -15,8 +15,11 @@
 	let open = $state(false);
 
 	const torrentPercent = $derived(
-		streamStats && streamStats.total_bytes > 0
-			? Math.round((streamStats.progress_bytes / streamStats.total_bytes) * 100)
+		streamStats
+			? (progress({
+					total_bytes: streamStats.total_bytes,
+					downloaded_bytes: streamStats.progress_bytes,
+				}) ?? 0)
 			: 0,
 	);
 </script>

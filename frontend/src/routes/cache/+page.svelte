@@ -2,7 +2,7 @@
 	import { type CacheEntry, type DiskStats } from "$lib/schema";
 	import { api } from "$lib/api";
 	import Spinner from "$lib/components/Spinner.svelte";
-	import { imageUrl, formatBytes } from "$lib/utils";
+	import { imageUrl, formatBytes, progress } from "$lib/utils";
 	import { Heading, Button, Text, Pill, Modal } from "glow";
 
 	type Category = "all" | "movies" | "tv" | "hls" | "orphan";
@@ -359,9 +359,7 @@
 										<Pill label="orphan" />
 									{/if}
 									{#if it.kind === "download" && it.download?.status !== "Completed" && it.download?.total_bytes && it.download.downloaded_bytes != null && it.download.total_bytes > 0}
-										<Pill
-											label={`${Math.round((it.download.downloaded_bytes / it.download.total_bytes) * 100)}%`}
-										/>
+										<Pill label={`${progress(it.download)}%`} />
 									{/if}
 								</div>
 							</div>
