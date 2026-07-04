@@ -1,20 +1,14 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use tokio::process::{Child, ChildStdout};
 use tokio::sync::Mutex;
 
 use crate::app::{Error, Result, Storage};
 
 const FORMAT: &str =
     "bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/18";
-
-const DETECT_FORMAT: &str =
-    "worstvideo[ext=mp4][height>=240]/worstvideo[ext=mp4]/worst[ext=mp4]/worst";
 
 // IMDb serves progressive (muxed) mp4s off Amazon's CDN rather than the
 // separate video/audio streams YouTube exposes, so the format filter is simpler.
@@ -103,7 +97,16 @@ fn is_valid_imdb_id(id: &str) -> bool {
         && id.as_bytes()[2..].iter().all(u8::is_ascii_digit)
 }
 
-pub async fn ensure_cached(storage: &Storage, key: &str) -> Result<PathBuf> {
+/// Download the trailer to the cache if it isn't there already and return its
+/// path. yt-dlp does the fetching itself — this matters because YouTube's stream
+/// URLs are bound to the player client yt-dlp used to obtain them (e.g. the
+/// `ANDROID_VR` client used when no PO token is available), so handing those raw
+/// URLs to ffmpeg gets a 403. Letting yt-dlp download sidesteps that entirely.
+///
+/// YouTube is the primary source; when it fails and we know the title's IMDb id
+/// we fall back to the trailer IMDb hosts. The cache is keyed by the YouTube
+/// `key` regardless of which source won, so later requests hit the file directly.
+pub async fn ensure_cached(storage: &Storage, key: &str, imdb_id: Option<&str>) -> Result<PathBuf> {
     if !is_valid_key(key) {
         return Err(Error::NotFound("invalid trailer key".into()));
     }
@@ -114,6 +117,8 @@ pub async fn ensure_cached(storage: &Storage, key: &str) -> Result<PathBuf> {
         return Ok(final_path);
     }
 
+    // De-dupe concurrent downloads of the same trailer so two viewers don't both
+    // shell out to yt-dlp for the same key.
     let lock = {
         let mut map = inflight().lock().await;
         map.entry(key.to_string())
@@ -121,64 +126,115 @@ pub async fn ensure_cached(storage: &Storage, key: &str) -> Result<PathBuf> {
             .clone()
     };
     let _guard = lock.lock().await;
-
     if final_path.exists() {
         return Ok(final_path);
     }
 
     tokio::fs::create_dir_all(&dir).await?;
-
     let tmp_path = dir.join(format!("{key}.part.mp4"));
-    let url = format!("https://www.youtube.com/watch?v={key}");
 
+    let youtube_url = format!("https://www.youtube.com/watch?v={key}");
+    let result = match download_trailer(
+        storage,
+        &youtube_url,
+        FORMAT,
+        true,
+        &tmp_path,
+        &format!("trailer {key}"),
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(yt_err) => match imdb_id.filter(|id| is_valid_imdb_id(id)) {
+            Some(id) => {
+                tracing::warn!("youtube trailer {key} failed ({yt_err}); trying imdb {id}");
+                match imdb_trailer_video_id(id).await {
+                    Ok(vi) => {
+                        let imdb_url = format!("https://www.imdb.com/video/{vi}/");
+                        download_trailer(
+                            storage,
+                            &imdb_url,
+                            IMDB_FORMAT,
+                            false,
+                            &tmp_path,
+                            &format!("imdb {id} {vi}"),
+                        )
+                        .await
+                        .map_err(|imdb_err| {
+                            Error::Generic(format!(
+                                "youtube failed ({yt_err}); imdb fallback failed ({imdb_err})"
+                            ))
+                        })
+                    }
+                    Err(imdb_err) => Err(Error::Generic(format!(
+                        "youtube failed ({yt_err}); imdb lookup failed ({imdb_err})"
+                    ))),
+                }
+            }
+            None => Err(yt_err),
+        },
+    };
+
+    match result {
+        Ok(()) => {
+            tokio::fs::rename(&tmp_path, &final_path).await?;
+            Ok(final_path)
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            Err(e)
+        }
+    }
+}
+
+/// Run yt-dlp to download `page_url` into `dest` as a faststart mp4. Cookies and
+/// the PO-token provider only apply to YouTube; IMDb is public and passing
+/// `--cookies-from-browser` in a headless environment would make yt-dlp error.
+async fn download_trailer(
+    storage: &Storage,
+    page_url: &str,
+    format: &str,
+    youtube: bool,
+    dest: &Path,
+    label: &str,
+) -> Result<()> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args([
         "-f",
-        FORMAT,
+        format,
         "--merge-output-format",
         "mp4",
         "--no-playlist",
         "--no-progress",
         "--quiet",
+        // Move the moov atom to the front so the browser can start playing (and
+        // seeking) as soon as the file is served, rather than after fetching it all.
+        "--postprocessor-args",
+        "ffmpeg:-movflags +faststart",
     ]);
-    apply_cookies(&mut cmd, storage);
-    apply_pot(&mut cmd);
-    cmd.arg("-o").arg(&tmp_path).arg(&url).kill_on_drop(true);
-
-    let result = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output()).await;
-
-    let cleanup = || {
-        let tmp = tmp_path.clone();
-        tokio::spawn(async move {
-            let _ = tokio::fs::remove_file(&tmp).await;
-        });
-    };
-
-    match result {
-        Ok(Ok(output)) if output.status.success() => {
-            tokio::fs::rename(&tmp_path, &final_path).await?;
-            Ok(final_path)
-        }
-        Ok(Ok(output)) => {
-            cleanup();
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(Error::Generic(format!(
-                "yt-dlp failed for trailer {key}: {}",
-                stderr.trim()
-            )))
-        }
-        Ok(Err(e)) => {
-            cleanup();
-            Err(Error::Generic(format!("failed to spawn yt-dlp: {e}")))
-        }
-        Err(_) => {
-            cleanup();
-            Err(Error::Generic(format!(
-                "yt-dlp timed out after {}s for trailer {key}",
-                DOWNLOAD_TIMEOUT.as_secs()
-            )))
-        }
+    if youtube {
+        apply_cookies(&mut cmd, storage);
+        apply_pot(&mut cmd);
     }
+    cmd.arg("-o").arg(dest).arg(page_url).kill_on_drop(true);
+
+    let output = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| {
+            Error::Generic(format!(
+                "yt-dlp timed out after {}s for {label}",
+                DOWNLOAD_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|e| Error::Generic(format!("failed to spawn yt-dlp: {e}")))?;
+
+    if !output.status.success() {
+        return Err(Error::Generic(format!(
+            "yt-dlp failed for {label}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 pub fn cached_path(storage: &Storage, key: &str) -> Option<PathBuf> {
@@ -189,221 +245,12 @@ pub fn cached_path(storage: &Storage, key: &str) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-pub struct TrailerStream {
-    pub child: Child,
-    pub stdout: ChildStdout,
-    pub tmp_path: PathBuf,
-    pub final_path: PathBuf,
-}
-
-pub async fn start_stream(
-    storage: &Storage,
-    key: &str,
-    imdb_id: Option<&str>,
-) -> Result<TrailerStream> {
-    if !is_valid_key(key) {
-        return Err(Error::NotFound("invalid trailer key".into()));
-    }
-    let dir = cache_dir(storage);
-    tokio::fs::create_dir_all(&dir).await?;
-
-    // YouTube is the primary source but frequently blocks anonymous/datacenter
-    // requests. When it fails and we know the title's IMDb id, fall back to the
-    // trailer IMDb hosts on Amazon's CDN (no bot-blocking). The cache stays keyed
-    // by the YouTube `key`, so later requests hit the fast path regardless.
-    let inputs = match resolve_urls(storage, key, FORMAT).await {
-        Ok(inputs) => inputs,
-        Err(yt_err) => match imdb_id.filter(|id| is_valid_imdb_id(id)) {
-            Some(id) => {
-                tracing::warn!("youtube trailer {key} failed ({yt_err}); trying imdb {id}");
-                resolve_imdb_urls(storage, id).await.map_err(|imdb_err| {
-                    Error::Generic(format!(
-                        "youtube failed ({yt_err}); imdb fallback failed ({imdb_err})"
-                    ))
-                })?
-            }
-            None => return Err(yt_err),
-        },
-    };
-
-    let mut cmd = tokio::process::Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-loglevel", "error"]);
-    for input in &inputs {
-        // Send yt-dlp's User-Agent so the CDN doesn't 403 the stream URL.
-        if let Some(ua) = &input.user_agent {
-            cmd.arg("-user_agent").arg(ua);
-        }
-        cmd.arg("-i").arg(&input.url);
-    }
-    if inputs.len() >= 2 {
-        cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
-    }
-    cmd.args([
-        "-c",
-        "copy",
-        "-movflags",
-        "frag_keyframe+empty_moov+default_base_moof",
-        "-f",
-        "mp4",
-        "pipe:1",
-    ]);
-
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| Error::Generic(format!("failed to spawn ffmpeg: {e}")))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::Generic("ffmpeg produced no stdout".into()))?;
-
-    // Drain ffmpeg's stderr in the background and log it. Without this a failing
-    // ffmpeg (e.g. an input URL that 403s) exits silently and the client just
-    // gets an empty 200 — the pipe had no bytes and there was nothing to see.
-    if let Some(stderr) = child.stderr.take() {
-        let key = key.to_string();
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut buf = String::new();
-            let mut stderr = stderr;
-            if stderr.read_to_string(&mut buf).await.is_ok() && !buf.trim().is_empty() {
-                tracing::warn!("ffmpeg stderr for trailer {key}: {}", buf.trim());
-            }
-        });
-    }
-
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-
-    Ok(TrailerStream {
-        child,
-        stdout,
-        tmp_path: dir.join(format!("{key}.stream.{seq}.part.mp4")),
-        final_path: dir.join(format!("{key}.mp4")),
-    })
-}
-
-/// A resolved media source: a direct URL plus the User-Agent yt-dlp used to
-/// obtain it. YouTube's CDN returns 403 if a stream URL is fetched with a
-/// different User-Agent than the player client that produced it (e.g. the
-/// `ANDROID_VR` client used when no PO token is available), so ffmpeg must send
-/// the same one rather than its own default.
-struct MediaInput {
-    url: String,
-    user_agent: Option<String>,
-}
-
-async fn resolve_urls(storage: &Storage, key: &str, format: &str) -> Result<Vec<MediaInput>> {
-    let url = format!("https://www.youtube.com/watch?v={key}");
-    resolve_streams(storage, &url, format, true, &format!("trailer {key}")).await
-}
-
-/// Resolve a source page to direct media inputs via `yt-dlp -j` (JSON, so we get
-/// each stream's `http_headers`). Cookies and the PO-token provider only apply to
-/// YouTube; IMDb is public and passing `--cookies-from-browser` in a headless
-/// environment would make yt-dlp error.
-async fn resolve_streams(
-    storage: &Storage,
-    page_url: &str,
-    format: &str,
-    youtube: bool,
-    label: &str,
-) -> Result<Vec<MediaInput>> {
-    let mut cmd = tokio::process::Command::new("yt-dlp");
-    cmd.args(["-f", format, "--no-playlist", "-j"]);
-    if youtube {
-        apply_cookies(&mut cmd, storage);
-        apply_pot(&mut cmd);
-    }
-    cmd.arg(page_url).kill_on_drop(true);
-
-    let output = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output())
-        .await
-        .map_err(|_| Error::Generic(format!("yt-dlp -j timed out for {label}")))?
-        .map_err(|e| Error::Generic(format!("failed to spawn yt-dlp: {e}")))?;
-
-    if !output.status.success() {
-        return Err(Error::Generic(format!(
-            "yt-dlp -j failed for {label}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let info: YtdlpInfo = serde_json::from_slice(&output.stdout)
-        .map_err(|e| Error::Generic(format!("yt-dlp json parse failed for {label}: {e}")))?;
-
-    // `requested_formats` holds the separate video+audio streams to be merged;
-    // otherwise the top-level `url` is a single progressive stream.
-    let inputs: Vec<MediaInput> = match info.requested_formats {
-        Some(formats) if !formats.is_empty() => {
-            formats.into_iter().map(MediaInput::from_format).collect()
-        }
-        _ => match info.url {
-            Some(url) => vec![MediaInput {
-                url,
-                user_agent: info.http_headers.and_then(user_agent_of),
-            }],
-            None => Vec::new(),
-        },
-    };
-    if inputs.is_empty() {
-        return Err(Error::Generic(format!(
-            "yt-dlp returned no media URL for {label}"
-        )));
-    }
-    Ok(inputs)
-}
-
-impl MediaInput {
-    fn from_format(f: YtdlpFormat) -> Self {
-        MediaInput {
-            url: f.url,
-            user_agent: f.http_headers.and_then(user_agent_of),
-        }
-    }
-}
-
-fn user_agent_of(headers: HashMap<String, String>) -> Option<String> {
-    headers
-        .into_iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
-        .map(|(_, v)| v)
-}
-
-#[derive(serde::Deserialize)]
-struct YtdlpInfo {
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(default)]
-    http_headers: Option<HashMap<String, String>>,
-    #[serde(default)]
-    requested_formats: Option<Vec<YtdlpFormat>>,
-}
-
-#[derive(serde::Deserialize)]
-struct YtdlpFormat {
-    url: String,
-    #[serde(default)]
-    http_headers: Option<HashMap<String, String>>,
-}
-
-/// Resolve a title's IMDb trailer: look up its primary video id (`vi…`), then
-/// hand that IMDb video page to yt-dlp.
-async fn resolve_imdb_urls(storage: &Storage, imdb_id: &str) -> Result<Vec<MediaInput>> {
-    let vi = imdb_trailer_video_id(imdb_id).await?;
-    let url = format!("https://www.imdb.com/video/{vi}/");
-    resolve_streams(storage, &url, IMDB_FORMAT, false, &format!("imdb {imdb_id} {vi}")).await
-}
-
 /// Find a title's trailer video id (`vi…`) via IMDb's suggestion API. This lives
 /// on a CDN host (`*.media-imdb.com`) that returns plain JSON, unlike the main
 /// `imdb.com` site which bot-walls datacenter requests. Prefers a video whose
 /// label mentions "trailer", else the first (the primary/hero video).
 async fn imdb_trailer_video_id(imdb_id: &str) -> Result<String> {
-    let url =
-        format!("https://v3.sg.media-imdb.com/suggestion/t/{imdb_id}.json?includeVideos=1");
+    let url = format!("https://v3.sg.media-imdb.com/suggestion/t/{imdb_id}.json?includeVideos=1");
     let client = reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
@@ -432,7 +279,9 @@ async fn imdb_trailer_video_id(imdb_id: &str) -> Result<String> {
         .ok_or_else(|| Error::Generic(format!("imdb has no videos for {imdb_id}")))?;
 
     // Guard against a malformed id flowing into a yt-dlp URL.
-    if !(pick.id.starts_with("vi") && pick.id.len() > 2 && pick.id[2..].bytes().all(|b| b.is_ascii_digit()))
+    if !(pick.id.starts_with("vi")
+        && pick.id.len() > 2
+        && pick.id[2..].bytes().all(|b| b.is_ascii_digit()))
     {
         return Err(Error::Generic(format!(
             "imdb returned malformed video id {}",
@@ -475,35 +324,25 @@ pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {
         return Ok(meta);
     }
 
-    let detected = match cached_path(storage, key) {
-        Some(path) => detect_content_aspect(&path.to_string_lossy(), None).await,
-        None => match resolve_urls(storage, key, DETECT_FORMAT).await {
-            Ok(inputs) => match inputs.first() {
-                Some(input) => {
-                    detect_content_aspect(&input.url, input.user_agent.as_deref()).await
-                }
-                None => None,
-            },
-            Err(_) => None,
-        },
+    // Aspect is detected from the downloaded file. If the trailer isn't cached yet
+    // (still downloading, or never played) return the default without persisting,
+    // so a later call re-detects once the file exists.
+    let Some(path) = cached_path(storage, key) else {
+        return Ok(TrailerMeta { aspect: 16.0 / 9.0 });
     };
-    let meta = TrailerMeta {
-        aspect: detected.unwrap_or(16.0 / 9.0),
-    };
+    let aspect = detect_content_aspect(&path.to_string_lossy())
+        .await
+        .unwrap_or(16.0 / 9.0);
+    let meta = TrailerMeta { aspect };
     if let Ok(bytes) = serde_json::to_vec(&meta) {
         let _ = tokio::fs::write(&meta_path, bytes).await;
     }
     Ok(meta)
 }
 
-async fn detect_content_aspect(input: &str, user_agent: Option<&str>) -> Option<f64> {
-    let mut cmd = tokio::process::Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-nostats", "-ss", "3"]);
-    if let Some(ua) = user_agent {
-        cmd.arg("-user_agent").arg(ua);
-    }
-    let output = cmd
-        .arg("-i")
+async fn detect_content_aspect(input: &str) -> Option<f64> {
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-nostats", "-ss", "3", "-i"])
         .arg(input)
         .args([
             "-vf",
