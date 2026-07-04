@@ -33,6 +33,7 @@
             bun
             ffmpeg
             yt-dlp
+            deno # JS runtime yt-dlp needs to solve YouTube's nsig/JS challenges
 
             # SQLite (for sqlx)
             sqlite

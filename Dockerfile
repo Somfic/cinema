@@ -33,20 +33,28 @@ FROM debian:bookworm-slim
 # pairs with the `pot-provider` sidecar in docker-compose.yml: it fetches
 # proof-of-origin tokens so YouTube stops blocking datacenter requests. Dropping
 # the release zip into a yt-dlp plugin dir needs no Python runtime.
-# python3 is required: the arch-agnostic `yt-dlp` release is a Python zipapp
-# (`#!/usr/bin/env python3`), and the bgutil PO-token plugin is pure Python too.
+# python3: the arch-agnostic `yt-dlp` release is a Python zipapp
+# (`#!/usr/bin/env python3`), and the bgutil PO-token plugin is pure Python.
+# deno: recent yt-dlp needs an external JavaScript runtime to solve YouTube's
+# nsig/JS challenges (without one, extraction is deprecated and formats 403).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     ffmpeg \
     python3 \
     curl \
+    unzip \
     && curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp \
     && mkdir -p /etc/yt-dlp/plugins \
     && curl -fsSL https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/latest/download/bgutil-ytdlp-pot-provider.zip \
     -o /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip \
-    && apt-get purge -y curl \
+    && DENO_ARCH="$(uname -m | sed -e 's/x86_64/x86_64-unknown-linux-gnu/' -e 's/aarch64/aarch64-unknown-linux-gnu/')" \
+    && curl -fsSL "https://github.com/denoland/deno/releases/latest/download/deno-${DENO_ARCH}.zip" -o /tmp/deno.zip \
+    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/deno \
+    && rm /tmp/deno.zip \
+    && apt-get purge -y curl unzip \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
