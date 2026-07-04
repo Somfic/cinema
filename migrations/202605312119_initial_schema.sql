@@ -44,8 +44,8 @@ CREATE TABLE IF NOT EXISTS download_meta
     file_idx   INTEGER     NOT NULL,
 
     media_id   INTEGER     NOT NULL REFERENCES media_items (id) ON DELETE CASCADE,
-    season     INTEGER     NOT NULL DEFAULT 0,
-    episode    INTEGER     NOT NULL DEFAULT 0,
+    season     INTEGER,
+    episode    INTEGER,
     resolution VARCHAR(15),
 
     PRIMARY KEY (info_hash, file_idx)
