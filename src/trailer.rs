@@ -246,7 +246,7 @@ pub async fn start_stream(
 
     let mut child = cmd
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| Error::Generic(format!("failed to spawn ffmpeg: {e}")))?;
@@ -254,6 +254,21 @@ pub async fn start_stream(
         .stdout
         .take()
         .ok_or_else(|| Error::Generic("ffmpeg produced no stdout".into()))?;
+
+    // Drain ffmpeg's stderr in the background and log it. Without this a failing
+    // ffmpeg (e.g. an input URL that 403s) exits silently and the client just
+    // gets an empty 200 — the pipe had no bytes and there was nothing to see.
+    if let Some(stderr) = child.stderr.take() {
+        let key = key.to_string();
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = String::new();
+            let mut stderr = stderr;
+            if stderr.read_to_string(&mut buf).await.is_ok() && !buf.trim().is_empty() {
+                tracing::warn!("ffmpeg stderr for trailer {key}: {}", buf.trim());
+            }
+        });
+    }
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
