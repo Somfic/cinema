@@ -33,9 +33,12 @@ FROM debian:bookworm-slim
 # pairs with the `pot-provider` sidecar in docker-compose.yml: it fetches
 # proof-of-origin tokens so YouTube stops blocking datacenter requests. Dropping
 # the release zip into a yt-dlp plugin dir needs no Python runtime.
+# python3 is required: the arch-agnostic `yt-dlp` release is a Python zipapp
+# (`#!/usr/bin/env python3`), and the bgutil PO-token plugin is pure Python too.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     ffmpeg \
+    python3 \
     curl \
     && curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp \
