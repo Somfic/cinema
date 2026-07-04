@@ -211,8 +211,8 @@ pub async fn start_stream(
     // requests. When it fails and we know the title's IMDb id, fall back to the
     // trailer IMDb hosts on Amazon's CDN (no bot-blocking). The cache stays keyed
     // by the YouTube `key`, so later requests hit the fast path regardless.
-    let urls = match resolve_urls(storage, key, FORMAT).await {
-        Ok(urls) => urls,
+    let inputs = match resolve_urls(storage, key, FORMAT).await {
+        Ok(inputs) => inputs,
         Err(yt_err) => match imdb_id.filter(|id| is_valid_imdb_id(id)) {
             Some(id) => {
                 tracing::warn!("youtube trailer {key} failed ({yt_err}); trying imdb {id}");
@@ -228,10 +228,14 @@ pub async fn start_stream(
 
     let mut cmd = tokio::process::Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "error"]);
-    for url in &urls {
-        cmd.arg("-i").arg(url);
+    for input in &inputs {
+        // Send yt-dlp's User-Agent so the CDN doesn't 403 the stream URL.
+        if let Some(ua) = &input.user_agent {
+            cmd.arg("-user_agent").arg(ua);
+        }
+        cmd.arg("-i").arg(&input.url);
     }
-    if urls.len() >= 2 {
+    if inputs.len() >= 2 {
         cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
     }
     cmd.args([
@@ -281,23 +285,34 @@ pub async fn start_stream(
     })
 }
 
-async fn resolve_urls(storage: &Storage, key: &str, format: &str) -> Result<Vec<String>> {
-    let url = format!("https://www.youtube.com/watch?v={key}");
-    resolve_media_urls(storage, &url, format, true, &format!("trailer {key}")).await
+/// A resolved media source: a direct URL plus the User-Agent yt-dlp used to
+/// obtain it. YouTube's CDN returns 403 if a stream URL is fetched with a
+/// different User-Agent than the player client that produced it (e.g. the
+/// `ANDROID_VR` client used when no PO token is available), so ffmpeg must send
+/// the same one rather than its own default.
+struct MediaInput {
+    url: String,
+    user_agent: Option<String>,
 }
 
-/// Resolve a source page to direct media URLs via `yt-dlp -g`. Cookies and the
-/// PO-token provider only apply to YouTube; IMDb is public and passing
-/// `--cookies-from-browser` in a headless environment would make yt-dlp error.
-async fn resolve_media_urls(
+async fn resolve_urls(storage: &Storage, key: &str, format: &str) -> Result<Vec<MediaInput>> {
+    let url = format!("https://www.youtube.com/watch?v={key}");
+    resolve_streams(storage, &url, format, true, &format!("trailer {key}")).await
+}
+
+/// Resolve a source page to direct media inputs via `yt-dlp -j` (JSON, so we get
+/// each stream's `http_headers`). Cookies and the PO-token provider only apply to
+/// YouTube; IMDb is public and passing `--cookies-from-browser` in a headless
+/// environment would make yt-dlp error.
+async fn resolve_streams(
     storage: &Storage,
     page_url: &str,
     format: &str,
     youtube: bool,
     label: &str,
-) -> Result<Vec<String>> {
+) -> Result<Vec<MediaInput>> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
-    cmd.args(["-f", format, "--no-playlist", "-g"]);
+    cmd.args(["-f", format, "--no-playlist", "-j"]);
     if youtube {
         apply_cookies(&mut cmd, storage);
         apply_pot(&mut cmd);
@@ -306,36 +321,80 @@ async fn resolve_media_urls(
 
     let output = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output())
         .await
-        .map_err(|_| Error::Generic(format!("yt-dlp -g timed out for {label}")))?
+        .map_err(|_| Error::Generic(format!("yt-dlp -j timed out for {label}")))?
         .map_err(|e| Error::Generic(format!("failed to spawn yt-dlp: {e}")))?;
 
     if !output.status.success() {
         return Err(Error::Generic(format!(
-            "yt-dlp -g failed for {label}: {}",
+            "yt-dlp -j failed for {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
 
-    let urls: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
-    if urls.is_empty() {
+    let info: YtdlpInfo = serde_json::from_slice(&output.stdout)
+        .map_err(|e| Error::Generic(format!("yt-dlp json parse failed for {label}: {e}")))?;
+
+    // `requested_formats` holds the separate video+audio streams to be merged;
+    // otherwise the top-level `url` is a single progressive stream.
+    let inputs: Vec<MediaInput> = match info.requested_formats {
+        Some(formats) if !formats.is_empty() => {
+            formats.into_iter().map(MediaInput::from_format).collect()
+        }
+        _ => match info.url {
+            Some(url) => vec![MediaInput {
+                url,
+                user_agent: info.http_headers.and_then(user_agent_of),
+            }],
+            None => Vec::new(),
+        },
+    };
+    if inputs.is_empty() {
         return Err(Error::Generic(format!(
             "yt-dlp returned no media URL for {label}"
         )));
     }
-    Ok(urls)
+    Ok(inputs)
 }
 
-/// Resolve a title's IMDb trailer to direct media URLs: scrape the title page for
-/// its primary video id (`vi…`), then hand that IMDb video page to yt-dlp.
-async fn resolve_imdb_urls(storage: &Storage, imdb_id: &str) -> Result<Vec<String>> {
+impl MediaInput {
+    fn from_format(f: YtdlpFormat) -> Self {
+        MediaInput {
+            url: f.url,
+            user_agent: f.http_headers.and_then(user_agent_of),
+        }
+    }
+}
+
+fn user_agent_of(headers: HashMap<String, String>) -> Option<String> {
+    headers
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+        .map(|(_, v)| v)
+}
+
+#[derive(serde::Deserialize)]
+struct YtdlpInfo {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    requested_formats: Option<Vec<YtdlpFormat>>,
+}
+
+#[derive(serde::Deserialize)]
+struct YtdlpFormat {
+    url: String,
+    #[serde(default)]
+    http_headers: Option<HashMap<String, String>>,
+}
+
+/// Resolve a title's IMDb trailer: look up its primary video id (`vi…`), then
+/// hand that IMDb video page to yt-dlp.
+async fn resolve_imdb_urls(storage: &Storage, imdb_id: &str) -> Result<Vec<MediaInput>> {
     let vi = imdb_trailer_video_id(imdb_id).await?;
     let url = format!("https://www.imdb.com/video/{vi}/");
-    resolve_media_urls(storage, &url, IMDB_FORMAT, false, &format!("imdb {imdb_id} {vi}")).await
+    resolve_streams(storage, &url, IMDB_FORMAT, false, &format!("imdb {imdb_id} {vi}")).await
 }
 
 /// Find a title's trailer video id (`vi…`) via IMDb's suggestion API. This lives
@@ -417,10 +476,12 @@ pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {
     }
 
     let detected = match cached_path(storage, key) {
-        Some(path) => detect_content_aspect(&path.to_string_lossy()).await,
+        Some(path) => detect_content_aspect(&path.to_string_lossy(), None).await,
         None => match resolve_urls(storage, key, DETECT_FORMAT).await {
-            Ok(urls) => match urls.first() {
-                Some(url) => detect_content_aspect(url).await,
+            Ok(inputs) => match inputs.first() {
+                Some(input) => {
+                    detect_content_aspect(&input.url, input.user_agent.as_deref()).await
+                }
                 None => None,
             },
             Err(_) => None,
@@ -435,9 +496,14 @@ pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {
     Ok(meta)
 }
 
-async fn detect_content_aspect(input: &str) -> Option<f64> {
-    let output = tokio::process::Command::new("ffmpeg")
-        .args(["-hide_banner", "-nostats", "-ss", "3", "-i"])
+async fn detect_content_aspect(input: &str, user_agent: Option<&str>) -> Option<f64> {
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-hide_banner", "-nostats", "-ss", "3"]);
+    if let Some(ua) = user_agent {
+        cmd.arg("-user_agent").arg(ua);
+    }
+    let output = cmd
+        .arg("-i")
         .arg(input)
         .args([
             "-vf",
