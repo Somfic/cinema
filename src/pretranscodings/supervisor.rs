@@ -125,54 +125,17 @@ impl Supervisor {
             tracing::warn!(?err, self.pretranscoding_id, "Failed to persist total_ms");
         }
 
-        // TODO: move this to the hls module
-        // Build the video pipeline. Only-audio copies video; full re-encodes.
-        let video =
-            crate::hls::video_pipeline(&self.config, self.output_path.only_audio, false).await;
+        let mut command = crate::hls::ffmpeg::pretranscode(
+            &self.config,
+            self.output_path.only_audio,
+            self.output_path.audio_index,
+            &part_path,
+        )
+        .await;
 
-        // Pretranscodes run at higher-than-live quality settings by default.
-        let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.args(&video.pre_input)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "warning",
-                "-nostats",
-                "-progress",
-                "pipe:1",
-                "-y",
-                "-i",
-                "pipe:0",
-                "-map",
-                "0:v:0",
-                "-map",
-                &format!("0:a:{}", self.output_path.audio_index),
-            ])
-            .args(&video.filter)
-            .args(&video.encode)
-            .args([
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-ac",
-                "2",
-                "-af",
-                "aresample=async=1:first_pts=0",
-                "-movflags",
-                "+faststart",
-                "-f",
-                "mp4",
-            ])
-            .arg(&part_path)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => return EncodeOutcome::Failed(format!("Failed to spawn ffmpeg: {e}")),
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => return EncodeOutcome::Failed(format!("Failed to spawn ffmpeg: {err}")),
         };
 
         let Some(stdin) = child.stdin.take() else {
