@@ -37,6 +37,7 @@
 	let error = $state<string | null>(null);
 	let backdropColor = $state("9, 10, 19");
 	let accentColor = $state("228, 228, 231");
+	let palette = $state<string[]>([]);
 
 	// ── Player state ──
 	let selectedStream = $state<Stream | null>(null);
@@ -200,18 +201,44 @@
 	const glowBg = $derived(
 		item ? rgbToHex(backdropColor, 1.4) : loadingSlow ? DEFAULT_GLOW_BG : BLACK,
 	);
-	const glowColors = $derived(
-		item
-			? [
-					rgbToHex(backdropColor, 1.4),
-					rgbToHex(accentColor, 0.8),
-					rgbToHex(accentColor, 1.2),
-					rgbToHex(accentColor, 1.7),
-				]
-			: loadingSlow
-				? DEFAULT_GLOW_COLORS
-				: BLACK_COLORS,
-	);
+	// Lift a "r, g, b" swatch so its brightest channel reaches `targetMax`, keeping
+	// hue. Only ever brightens (never dims), so a dark backdrop (e.g. a deep-blue
+	// poster) still yields a visibly glowing hot stop instead of a near-black ramp.
+	function litHex(rgb: string, targetMax: number): string {
+		const [r, g, b] = rgb.split(",").map((s) => Number(s.trim()));
+		const mx = Math.max(r, g, b, 1);
+		return rgbToHex(rgb, Math.max(1, targetMax / mx));
+	}
+	const glowColors = $derived.by(() => {
+		if (!item) return loadingSlow ? DEFAULT_GLOW_COLORS : BLACK_COLORS;
+		// Fall back to the old single-accent brightness ramp when no palette was
+		// extracted.
+		if (!palette.length) {
+			return [
+				rgbToHex(backdropColor, 1.4),
+				rgbToHex(accentColor, 0.8),
+				rgbToHex(accentColor, 1.2),
+				rgbToHex(accentColor, 1.7),
+			];
+		}
+		// Glow takes 5 stops. Reserve the first for the dark dominant base, then
+		// sample up to 4 swatches evenly from the dark→light palette (keeps both
+		// the darkest and the lightest).
+		const MAX = 4;
+		const swatches =
+			palette.length <= MAX
+				? palette
+				: Array.from({ length: MAX }, (_, k) =>
+						palette[Math.round((k * (palette.length - 1)) / (MAX - 1))],
+					);
+		// Lift each swatch toward a rising brightness target (150 → 240 on its
+		// brightest channel) so the ramp always reaches a visible hot stop.
+		const n = swatches.length;
+		const lit = swatches.map((c, i) =>
+			litHex(c, 150 + (n === 1 ? 1 : i / (n - 1)) * 90),
+		);
+		return [rgbToHex(backdropColor, 1.4), ...lit];
+	});
 
 	// Perceptual brightness (luma, 0–1) of the accent color.
 	const accentLuma = $derived.by(() => {
@@ -829,6 +856,7 @@
 			position={isTv ? "0%" : backdropPosition}
 			bind:dominantColor={backdropColor}
 			bind:accentColor
+			bind:palette
 		/>
 	</div>
 	<div
