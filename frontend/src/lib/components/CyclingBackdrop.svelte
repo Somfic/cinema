@@ -329,9 +329,10 @@
 		left: -15%;
 		width: 130%;
 		height: 100%;
-		/* `cover` so the image always spans the full width — otherwise a
-		   narrower-than-viewport backdrop ends mid-screen. */
-		background-size: cover;
+		/* `auto 100%` so the image always spans the full height and is never
+		   vertically zoomed/cropped — width follows aspect ratio (we don't care
+		   about horizontal coverage; the edge mask feathers any gap). */
+		background-size: auto 100%;
 		background-position: center center;
 		background-repeat: no-repeat;
 		/* Feather the left/right edges so the image fades softly into the dark
