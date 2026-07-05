@@ -208,7 +208,13 @@ impl StreamsApi for AppContext {
     }
 
     async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error> {
-        crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
+        crate::downloads::types::Download::ensure_download(
+            self,
+            &info_hash,
+            file_idx,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
     }
@@ -242,7 +248,13 @@ impl StreamsApi for AppContext {
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error> {
-        crate::downloads::types::Download::ensure_download(self, &info_hash, file_idx).await?;
+        crate::downloads::types::Download::ensure_download(
+            self,
+            &info_hash,
+            file_idx,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
 
         // Fast path: if a cached pretranscoded MP4 exists for the exact same
         // (info_hash, file_idx, only_audio, audio_index) request, serve it

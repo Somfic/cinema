@@ -380,7 +380,11 @@ impl Handle {
             return Ok(());
         }
 
-        let slot = match self.0.supervisor_pool.try_acquire(id) {
+        let slot = match self
+            .0
+            .supervisor_pool
+            .try_acquire(id, SupervisorPool::NO_PRIORITY)
+        {
             Acquire::Acquired(slot) => slot,
             Acquire::AlreadyRunning | Acquire::NoCapacity => return Ok(()),
         };

@@ -23,6 +23,13 @@ pub enum StartOutcome {
     Cancelled,
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone)]
+pub enum DownloadPriority {
+    Stream = 255,
+    Background = 0,
+}
+
 /// Cheap, cloneable handle to the download subsystem.
 #[derive(Clone)]
 pub struct Handle(Arc<Inner>);
@@ -92,7 +99,11 @@ impl Handle {
     /// spawned and the engine has the torrent loaded and the requested file
     /// selected, or returns a non-`Started` outcome that explains why no
     /// supervisor was started.
-    pub async fn start(&self, id: i32) -> crate::app::Result<StartOutcome> {
+    pub async fn start(
+        &self,
+        id: i32,
+        priority: DownloadPriority,
+    ) -> crate::app::Result<StartOutcome> {
         if self.0.supervisor_pool.is_running(id) {
             return Ok(StartOutcome::AlreadyRunning);
         }
@@ -106,7 +117,15 @@ impl Handle {
         }
 
         // Claim the supervisor slot. Any concurrent start (for same download) will early return.
-        let slot = match self.0.supervisor_pool.try_acquire(id) {
+        let slot = self
+            .0
+            .supervisor_pool
+            .acquire_evicting(id, priority as u8, |victim| async move {
+                self.reenqueue(victim).await
+            })
+            .await?;
+
+        let slot = match slot {
             Acquire::Acquired(slot) => slot,
             Acquire::AlreadyRunning => return Ok(StartOutcome::AlreadyRunning),
             Acquire::NoCapacity => return Ok(StartOutcome::NoCapacity),
@@ -168,7 +187,7 @@ impl Handle {
         if let Some(hash) = fetch_info_hash(&self.0.db, id).await
             && let Err(err) = TorrentEngine::get().pause(&hash).await
         {
-            tracing::debug!(?err, id, "Counld not pause");
+            tracing::debug!(?err, id, "Could not pause");
         }
         sqlx::query!("UPDATE downloads SET status = 'paused' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
             .execute(&self.0.db)
@@ -176,6 +195,27 @@ impl Handle {
             .map_err(Error::DatabaseError)?;
 
         self.emit_status_update(id, super::types::DownloadStatus::Paused);
+
+        Ok(())
+    }
+
+    /// Set the status (back) to [`DownloadStatus::Queued`]. This is useful when a background
+    /// download needs to be temporarily postponed to make room for an active stream.
+    pub async fn reenqueue(&self, id: i32) -> crate::app::Result<()> {
+        if self.0.supervisor_pool.cancel(id) {
+            tracing::info!(id, "Re-enqueueing torrent");
+        }
+        if let Some(hash) = fetch_info_hash(&self.0.db, id).await
+            && let Err(err) = TorrentEngine::get().pause(&hash).await
+        {
+            tracing::debug!(?err, id, "Could not re-enqueue");
+        }
+        sqlx::query!("UPDATE downloads SET status = 'queued' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
+            .execute(&self.0.db)
+            .await
+            .map_err(Error::DatabaseError)?;
+
+        self.emit_status_update(id, super::types::DownloadStatus::Queued);
 
         Ok(())
     }
@@ -238,7 +278,7 @@ impl Handle {
         for id in queued.into_iter().take(take) {
             let h = self.clone();
             self.0.supervisor_pool.spawn_helper(async move {
-                if let Err(err) = h.start(id).await {
+                if let Err(err) = h.start(id, DownloadPriority::Background).await {
                     tracing::warn!(?err, id, "Refresh: start failed");
                 }
             });

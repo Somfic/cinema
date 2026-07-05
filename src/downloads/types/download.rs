@@ -206,13 +206,14 @@ impl Download {
         Ok(())
     }
 
-    /// Upsert a download row (and optional media context), reset it from any
-    /// terminal state, and start it. Blocks until the supervisor is spawned
-    /// (or returns a non-`Started` outcome). Returns the download id.
+    /// Upsert a download row. Reset it from any terminal state, and start it.
+    /// Blocks until the supervisor is spawned (or returns a non-`Started` outcome).
+    /// Returns the download id.
     pub async fn ensure_download(
         ctx: &crate::app::AppContext,
         info_hash: &str,
         file_idx: i32,
+        priority: crate::downloads::DownloadPriority,
     ) -> crate::app::Result<i32> {
         let mut tx = ctx.db.begin().await.map_err(Error::DatabaseError)?;
 
@@ -222,7 +223,7 @@ impl Download {
 
         tx.commit().await.map_err(Error::DatabaseError)?;
 
-        ctx.downloads.start(id).await?;
+        ctx.downloads.start(id, priority).await?;
 
         Ok(id)
     }

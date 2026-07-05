@@ -69,6 +69,7 @@ impl DownloadsApi for AppContext {
             self,
             &body.info_hash,
             body.file_idx,
+            crate::downloads::DownloadPriority::Background,
         )
         .await?;
         Ok(id)
@@ -83,7 +84,9 @@ impl DownloadsApi for AppContext {
         let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
         crate::downloads::types::Download::reset_for_restart(&mut tx, id).await?;
         tx.commit().await.map_err(Error::DatabaseError)?;
-        self.downloads.start(id).await?;
+        self.downloads
+            .start(id, crate::downloads::DownloadPriority::Background)
+            .await?;
         Ok(())
     }
 

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -66,8 +66,8 @@ impl Drop for Slot {
         if self.permit.is_some()
             && let Ok(mut supervisors) = self.pool.supervisors.lock()
         {
-            if let Some(cancel) = supervisors.remove(&self.id) {
-                cancel.cancel();
+            if let Some(entry) = supervisors.remove(&self.id) {
+                entry.cancel.cancel();
                 let _ = self.pool.refresh_tx.try_send(());
             } else if !self.cancel.is_cancelled() {
                 tracing::warn!(
@@ -80,19 +80,28 @@ impl Drop for Slot {
     }
 }
 
+struct SlotEntry {
+    cancel: CancellationToken,
+    priority: u8,
+    started_at: Instant,
+}
+
 #[derive(Clone)]
 pub struct SupervisorPool(Arc<PoolInner>);
 
 struct PoolInner {
     subsystem: &'static str,
     semaphore: Arc<Semaphore>,
-    supervisors: Mutex<HashMap<i32, CancellationToken>>,
+    supervisors: Mutex<HashMap<i32, SlotEntry>>,
+    acquire_evict_mutex: tokio::sync::Mutex<()>,
     refresh_tx: mpsc::Sender<()>,
     shutdown: CancellationToken,
     tracker: TaskTracker,
 }
 
 impl SupervisorPool {
+    pub const NO_PRIORITY: u8 = 0;
+
     pub fn new(subsystem: &'static str, capacity: usize) -> (Self, mpsc::Receiver<()>) {
         let (refresh_tx, refresh_rx) = mpsc::channel::<()>(64);
         (
@@ -100,6 +109,7 @@ impl SupervisorPool {
                 subsystem,
                 semaphore: Arc::new(Semaphore::new(capacity.max(1))),
                 supervisors: Mutex::new(HashMap::new()),
+                acquire_evict_mutex: tokio::sync::Mutex::new(()),
                 refresh_tx,
                 shutdown: CancellationToken::new(),
                 tracker: TaskTracker::new(),
@@ -155,8 +165,8 @@ impl SupervisorPool {
 
     /// Cancel the supervisor for `id`. Returns whether one was present.
     pub fn cancel(&self, id: i32) -> bool {
-        if let Some(cancel) = self.0.supervisors.lock().unwrap().remove(&id) {
-            cancel.cancel();
+        if let Some(entry) = self.0.supervisors.lock().unwrap().remove(&id) {
+            entry.cancel.cancel();
             return true;
         }
         false
@@ -166,8 +176,8 @@ impl SupervisorPool {
     pub fn cancel_all(&self, ids: impl IntoIterator<Item = i32>) {
         let mut supervisors = self.0.supervisors.lock().unwrap();
         for id in ids {
-            if let Some(cancel) = supervisors.remove(&id) {
-                cancel.cancel();
+            if let Some(entry) = supervisors.remove(&id) {
+                entry.cancel.cancel();
             }
         }
     }
@@ -180,37 +190,114 @@ impl SupervisorPool {
         self.0.semaphore.available_permits()
     }
 
-    pub fn try_acquire(&self, id: i32) -> Acquire {
-        if self.is_running(id) {
-            return Acquire::AlreadyRunning;
-        }
-
+    // Sync half: reserve the id in the supervisors map, or bail. On success
+    // returns the cancel token + a Drop-guard that unwinds the reservation if
+    // the caller can't get a permit. Caller must `guard.commit()` on success.
+    fn reserve(
+        &self,
+        id: i32,
+        priority: u8,
+    ) -> Result<(CancellationToken, super::guard::Guard<impl FnOnce()>), Acquire> {
         let cancel = self.0.shutdown.child_token();
-        let guard = {
-            let mut sup = self.0.supervisors.lock().unwrap();
-            if sup.contains_key(&id) {
-                return Acquire::AlreadyRunning;
-            }
-            sup.insert(id, cancel.clone());
-            super::guard::Guard::new(|| {
-                self.0.supervisors.lock().unwrap().remove(&id);
-                let _ = self.0.refresh_tx.try_send(());
-            })
-        };
+        let mut sup = self.0.supervisors.lock().unwrap();
+        if sup.contains_key(&id) {
+            return Err(Acquire::AlreadyRunning);
+        }
+        sup.insert(
+            id,
+            SlotEntry {
+                cancel: cancel.clone(),
+                priority,
+                started_at: Instant::now(),
+            },
+        );
+        let guard = super::guard::Guard::new(move || {
+            self.0.supervisors.lock().unwrap().remove(&id);
+            let _ = self.0.refresh_tx.try_send(());
+        });
 
-        let permit = match self.0.semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => return Acquire::NoCapacity,
-        };
+        Ok((cancel, guard))
+    }
 
-        guard.commit();
-
-        Acquire::Acquired(Slot {
+    fn make_slot(&self, id: i32, cancel: CancellationToken, permit: OwnedSemaphorePermit) -> Slot {
+        Slot {
             id,
             permit: Some(permit),
             cancel,
             pool: self.0.clone(),
-        })
+        }
+    }
+
+    pub fn try_acquire(&self, id: i32, priority: u8) -> Acquire {
+        let (cancel, guard) = match self.reserve(id, priority) {
+            Ok(res) => res,
+            Err(acquire) => return acquire,
+        };
+
+        let Ok(permit) = self.0.semaphore.clone().try_acquire_owned() else {
+            return Acquire::NoCapacity;
+        };
+
+        guard.commit();
+
+        Acquire::Acquired(self.make_slot(id, cancel, permit))
+    }
+
+    /// Do not mix [`Self::try_acquire`] and [`Self::acquire_evicting`] on the same pool:
+    /// the mutex only serialises [`Self::acquire_evicting`] callers, so a concurrent
+    /// [`Self::try_acquire`] can steal a permit that [`Self::acquire_evicting`]
+    /// has just freed for itself, leaving the latter hanging indefinitely (while also holding the mutex!)
+    pub async fn acquire_evicting<Fn, Fut, Err>(
+        &self,
+        id: i32,
+        priority: u8,
+        on_evict: Fn,
+    ) -> Result<Acquire, Err>
+    where
+        Fn: FnOnce(i32) -> Fut,
+        Fut: Future<Output = Result<(), Err>>,
+    {
+        let (cancel, guard) = match self.reserve(id, priority) {
+            Ok(res) => res,
+            Err(acquire) => return Ok(acquire),
+        };
+
+        if let Ok(permit) = self.0.semaphore.clone().try_acquire_owned() {
+            guard.commit();
+            return Ok(Acquire::Acquired(self.make_slot(id, cancel, permit)));
+        }
+
+        let lock = self.0.acquire_evict_mutex.lock().await;
+
+        let Some(victim) = self.find_evictable(priority) else {
+            return Ok(Acquire::NoCapacity);
+        };
+
+        on_evict(victim).await?;
+
+        let Ok(permit) = self.0.semaphore.clone().acquire_owned().await else {
+            return Ok(Acquire::NoCapacity);
+        };
+
+        guard.commit();
+        drop(lock);
+
+        Ok(Acquire::Acquired(self.make_slot(id, cancel, permit)))
+    }
+
+    /// Pick the oldest running supervisor whose priority is **below**
+    /// `threshold`, so a higher-priority job can take its slot. Returns
+    /// `None` if no entry qualifies. The caller is responsible for actually
+    /// evicting it via [`SupervisorPool::cancel`].
+    fn find_evictable(&self, threshold: u8) -> Option<i32> {
+        self.0
+            .supervisors
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.1.priority < threshold)
+            .min_by_key(|entry| entry.1.started_at)
+            .map(|(key, _)| *key)
     }
 
     /// Run a helper (e.g. fanned-out `start` calls from `refresh`) on the
