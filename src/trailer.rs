@@ -44,11 +44,15 @@ fn apply_cookies(cmd: &mut tokio::process::Command, storage: &Storage) {
         cmd.arg("--cookies").arg(path);
         return;
     }
-    let browser = std::env::var("CINEMA_YTDLP_COOKIES_FROM_BROWSER")
+    // Only read cookies from a browser if one is explicitly configured. There's
+    // no browser in a server/container, so defaulting to it would make yt-dlp
+    // error; the anonymous case is covered by the in-process PO token instead.
+    if let Some(browser) = std::env::var("CINEMA_YTDLP_COOKIES_FROM_BROWSER")
         .ok()
         .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| "chrome".to_string());
-    cmd.arg("--cookies-from-browser").arg(browser);
+    {
+        cmd.arg("--cookies-from-browser").arg(browser);
+    }
 }
 
 /// Point yt-dlp at an HTTP bgutil PO-token provider when one is configured.
