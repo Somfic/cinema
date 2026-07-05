@@ -27,9 +27,10 @@ pub fn router() -> Router<AppContext> {
 
 #[derive(serde::Deserialize)]
 struct TrailerQuery {
-    /// Optional IMDb id of the title, used to fall back to IMDb-hosted trailers
-    /// when YouTube resolution fails.
-    imdb: Option<String>,
+    /// Title and release year, used to look the trailer up via the trailers-api
+    /// fallback when YouTube resolution fails.
+    title: Option<String>,
+    year: Option<String>,
 }
 
 async fn serve_trailer(
@@ -41,7 +42,13 @@ async fn serve_trailer(
     // Download via yt-dlp on the first request (no-op once cached), then range-serve
     // the file so seeking works. yt-dlp does the fetching so client-bound YouTube
     // CDN URLs — which 403 when handed straight to ffmpeg — resolve correctly.
-    let path = crate::trailer::ensure_cached(&ctx.storage, &key, query.imdb.as_deref()).await?;
+    let path = crate::trailer::ensure_cached(
+        &ctx.storage,
+        &key,
+        query.title.as_deref(),
+        query.year.as_deref(),
+    )
+    .await?;
 
     let metadata = tokio::fs::metadata(&path)
         .await

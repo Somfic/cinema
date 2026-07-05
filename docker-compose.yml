@@ -1,7 +1,7 @@
-# Runs cinema alongside a bgutil PO-token provider. YouTube increasingly blocks
-# anonymous/datacenter requests unless yt-dlp presents a proof-of-origin token;
-# the provider mints them and the yt-dlp plugin baked into the cinema image
-# (see Dockerfile) fetches them automatically via CINEMA_YTDLP_POT_BASE_URL.
+# cinema + a self-hosted trailers-api fallback. PO tokens for YouTube are baked
+# into the cinema image (bgutil provider in script mode), so no PO sidecar is
+# needed here. trailers-api is the fallback source when YouTube fails: it pulls
+# trailers straight from Apple TV / Netflix / Prime CDNs.
 services:
   cinema:
     image: ghcr.io/somfic/cinema
@@ -15,13 +15,19 @@ services:
       - ./data:/app/data
     environment:
       CINEMA_TMDB_API_KEY: ${CINEMA_TMDB_API_KEY}
-      # Reach the sidecar over the compose network. Pairs with the bundled plugin.
-      CINEMA_YTDLP_POT_BASE_URL: http://pot-provider:4416
+      # Fall back to trailers-api over the compose network when YouTube fails.
+      # Remove this to disable the fallback.
+      CINEMA_TRAILERS_API_URL: http://trailers-api:3000
     depends_on:
-      - pot-provider
+      - trailers-api
 
-  pot-provider:
-    image: brainicism/bgutil-ytdlp-pot-provider:latest
+  # Third-party service — see https://github.com/Theryston/trailers-api for its
+  # own configuration (storage/DB). Its port 3000 stays internal to the compose
+  # network; it is not published to the host.
+  trailers-api:
+    build: https://github.com/Theryston/trailers-api.git
     restart: unless-stopped
-    # Port 4416 is only consumed by cinema over the internal network; the token
-    # server never needs to be published to the host.
+    environment:
+      DATA_FOLDER: /data
+    volumes:
+      - ./data/trailers-api:/data

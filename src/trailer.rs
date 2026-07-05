@@ -10,10 +10,6 @@ use crate::app::{Error, Result, Storage};
 const FORMAT: &str =
     "bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/18";
 
-// IMDb serves progressive (muxed) mp4s off Amazon's CDN rather than the
-// separate video/audio streams YouTube exposes, so the format filter is simpler.
-const IMDB_FORMAT: &str = "best[ext=mp4][height<=1080]/best[height<=1080]/best";
-
 fn cache_dir(storage: &Storage) -> PathBuf {
     storage.join("cache/trailers")
 }
@@ -55,10 +51,10 @@ fn apply_cookies(cmd: &mut tokio::process::Command, storage: &Storage) {
     cmd.arg("--cookies-from-browser").arg(browser);
 }
 
-/// Point yt-dlp at a bgutil PO-token provider when one is configured. YouTube
-/// increasingly requires a proof-of-origin token from datacenter IPs; the
-/// provider (a sidecar server) mints them and the bundled yt-dlp plugin fetches
-/// them automatically. No-op when `CINEMA_YTDLP_POT_BASE_URL` is unset.
+/// Point yt-dlp at an HTTP bgutil PO-token provider when one is configured.
+/// Normally unset: the Docker image bundles the provider in *script* mode, so
+/// yt-dlp mints proof-of-origin tokens in-process (via deno) with no server.
+/// Set `CINEMA_YTDLP_POT_BASE_URL` only to use an external provider instead.
 fn apply_pot(cmd: &mut tokio::process::Command) {
     if let Ok(url) = std::env::var("CINEMA_YTDLP_POT_BASE_URL")
         && !url.is_empty()
@@ -66,6 +62,14 @@ fn apply_pot(cmd: &mut tokio::process::Command) {
         cmd.arg("--extractor-args")
             .arg(format!("youtubepot-bgutilhttp:base_url={url}"));
     }
+}
+
+/// Base URL of a self-hosted [trailers-api](https://github.com/Theryston/trailers-api)
+/// used as the fallback source when YouTube fails. Unset disables the fallback.
+fn trailers_api_url() -> Option<String> {
+    std::env::var("CINEMA_TRAILERS_API_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
 }
 
 /// Display metadata for a cached trailer.
@@ -76,6 +80,9 @@ pub struct TrailerMeta {
 }
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(90);
+/// trailers-api scrapes streaming sites on demand (concurrency 1), so its jobs
+/// are slower than a yt-dlp download — give the poll loop a generous ceiling.
+const TRAILERS_API_TIMEOUT: Duration = Duration::from_secs(180);
 
 static INFLIGHT: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 
@@ -90,23 +97,21 @@ fn is_valid_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// IMDb title ids are `tt` followed by 7+ digits (e.g. `tt0468569`).
-fn is_valid_imdb_id(id: &str) -> bool {
-    (9..=12).contains(&id.len())
-        && id.starts_with("tt")
-        && id.as_bytes()[2..].iter().all(u8::is_ascii_digit)
-}
-
 /// Download the trailer to the cache if it isn't there already and return its
 /// path. yt-dlp does the fetching itself — this matters because YouTube's stream
-/// URLs are bound to the player client yt-dlp used to obtain them (e.g. the
-/// `ANDROID_VR` client used when no PO token is available), so handing those raw
-/// URLs to ffmpeg gets a 403. Letting yt-dlp download sidesteps that entirely.
+/// URLs are bound to the player client yt-dlp used to obtain them, so handing
+/// those raw URLs to ffmpeg gets a 403. Letting yt-dlp download sidesteps that.
 ///
-/// YouTube is the primary source; when it fails and we know the title's IMDb id
-/// we fall back to the trailer IMDb hosts. The cache is keyed by the YouTube
-/// `key` regardless of which source won, so later requests hit the file directly.
-pub async fn ensure_cached(storage: &Storage, key: &str, imdb_id: Option<&str>) -> Result<PathBuf> {
+/// YouTube is the primary source; when it fails and a `trailers-api` instance is
+/// configured we fall back to it (pulls high-res trailers straight from Apple TV
+/// / Netflix / Prime CDNs), matched by `title` + `year`. The cache is keyed by
+/// the YouTube `key` regardless of which source won.
+pub async fn ensure_cached(
+    storage: &Storage,
+    key: &str,
+    title: Option<&str>,
+    year: Option<&str>,
+) -> Result<PathBuf> {
     if !is_valid_key(key) {
         return Err(Error::NotFound("invalid trailer key".into()));
     }
@@ -134,44 +139,24 @@ pub async fn ensure_cached(storage: &Storage, key: &str, imdb_id: Option<&str>) 
     let tmp_path = dir.join(format!("{key}.part.mp4"));
 
     let youtube_url = format!("https://www.youtube.com/watch?v={key}");
-    let result = match download_trailer(
-        storage,
-        &youtube_url,
-        FORMAT,
-        true,
-        &tmp_path,
-        &format!("trailer {key}"),
-    )
-    .await
+    let result = match download_trailer(storage, &youtube_url, &tmp_path, &format!("trailer {key}"))
+        .await
     {
         Ok(()) => Ok(()),
-        Err(yt_err) => match imdb_id.filter(|id| is_valid_imdb_id(id)) {
-            Some(id) => {
-                tracing::warn!("youtube trailer {key} failed ({yt_err}); trying imdb {id}");
-                match imdb_trailer_video_id(id).await {
-                    Ok(vi) => {
-                        let imdb_url = format!("https://www.imdb.com/video/{vi}/");
-                        download_trailer(
-                            storage,
-                            &imdb_url,
-                            IMDB_FORMAT,
-                            false,
-                            &tmp_path,
-                            &format!("imdb {id} {vi}"),
-                        )
-                        .await
-                        .map_err(|imdb_err| {
-                            Error::Generic(format!(
-                                "youtube failed ({yt_err}); imdb fallback failed ({imdb_err})"
-                            ))
-                        })
-                    }
-                    Err(imdb_err) => Err(Error::Generic(format!(
-                        "youtube failed ({yt_err}); imdb lookup failed ({imdb_err})"
-                    ))),
-                }
+        Err(yt_err) => match (trailers_api_url(), title) {
+            (Some(base), Some(title)) => {
+                tracing::warn!(
+                    "youtube trailer {key} failed ({yt_err}); trying trailers-api for {title:?}"
+                );
+                trailers_api_download(&base, title, year, &tmp_path)
+                    .await
+                    .map_err(|api_err| {
+                        Error::Generic(format!(
+                            "youtube failed ({yt_err}); trailers-api fallback failed ({api_err})"
+                        ))
+                    })
             }
-            None => Err(yt_err),
+            _ => Err(yt_err),
         },
     };
 
@@ -187,21 +172,17 @@ pub async fn ensure_cached(storage: &Storage, key: &str, imdb_id: Option<&str>) 
     }
 }
 
-/// Run yt-dlp to download `page_url` into `dest` as a faststart mp4. Cookies and
-/// the PO-token provider only apply to YouTube; IMDb is public and passing
-/// `--cookies-from-browser` in a headless environment would make yt-dlp error.
+/// Run yt-dlp to download a YouTube video into `dest` as a faststart mp4.
 async fn download_trailer(
     storage: &Storage,
     page_url: &str,
-    format: &str,
-    youtube: bool,
     dest: &Path,
     label: &str,
 ) -> Result<()> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args([
         "-f",
-        format,
+        FORMAT,
         "--merge-output-format",
         "mp4",
         "--no-playlist",
@@ -212,10 +193,8 @@ async fn download_trailer(
         "--postprocessor-args",
         "ffmpeg:-movflags +faststart",
     ]);
-    if youtube {
-        apply_cookies(&mut cmd, storage);
-        apply_pot(&mut cmd);
-    }
+    apply_cookies(&mut cmd, storage);
+    apply_pot(&mut cmd);
     cmd.arg("-o").arg(dest).arg(page_url).kill_on_drop(true);
 
     let output = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output())
@@ -237,78 +216,112 @@ async fn download_trailer(
     Ok(())
 }
 
+/// Fetch a trailer via a self-hosted trailers-api: submit a job for the title,
+/// poll until it's done, then download the resulting file into `dest`.
+async fn trailers_api_download(
+    base: &str,
+    title: &str,
+    year: Option<&str>,
+    dest: &Path,
+) -> Result<()> {
+    let base = base.trim_end_matches('/');
+    let client = reqwest::Client::new();
+
+    // 1) Submit the job.
+    let mut body = serde_json::json!({ "name": title });
+    if let Some(y) = year {
+        body["year"] = serde_json::Value::from(y);
+    }
+    let submit: ProcessSubmit = client
+        .post(format!("{base}/process"))
+        .json(&body)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| Error::Generic(format!("trailers-api submit failed: {e}")))?
+        .json()
+        .await
+        .map_err(|e| Error::Generic(format!("trailers-api submit parse failed: {e}")))?;
+
+    // 2) Poll until the job finishes.
+    let deadline = tokio::time::Instant::now() + TRAILERS_API_TIMEOUT;
+    let file_url = loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Error::Generic(format!("trailers-api timed out for {title:?}")));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let status: ProcessStatus = client
+            .get(format!("{base}/process/{}", submit.process_id))
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|e| Error::Generic(format!("trailers-api poll failed: {e}")))?
+            .json()
+            .await
+            .map_err(|e| Error::Generic(format!("trailers-api poll parse failed: {e}")))?;
+
+        match status.status.as_str() {
+            "done" => match status.trailers.into_iter().next() {
+                Some(t) => break t.url,
+                None => {
+                    return Err(Error::Generic(format!(
+                        "trailers-api returned no trailer for {title:?}"
+                    )));
+                }
+            },
+            "error" | "no_trailers" | "cancelled" => {
+                return Err(Error::Generic(format!(
+                    "trailers-api {} for {title:?}",
+                    status.status
+                )));
+            }
+            // pending / processing / finding_trailer_page / trying_to_download / …
+            _ => continue,
+        }
+    };
+
+    // 3) Download the finished file.
+    let bytes = client
+        .get(&file_url)
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| Error::Generic(format!("trailers-api download failed: {e}")))?
+        .bytes()
+        .await
+        .map_err(|e| Error::Generic(format!("trailers-api read failed: {e}")))?;
+    tokio::fs::write(dest, &bytes).await?;
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct ProcessSubmit {
+    #[serde(alias = "processId", alias = "process_id", alias = "id")]
+    process_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ProcessStatus {
+    status: String,
+    #[serde(default)]
+    trailers: Vec<ProcessTrailer>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProcessTrailer {
+    url: String,
+}
+
 pub fn cached_path(storage: &Storage, key: &str) -> Option<PathBuf> {
     if !is_valid_key(key) {
         return None;
     }
     let path = cache_dir(storage).join(format!("{key}.mp4"));
     path.exists().then_some(path)
-}
-
-/// Find a title's trailer video id (`vi…`) via IMDb's suggestion API. This lives
-/// on a CDN host (`*.media-imdb.com`) that returns plain JSON, unlike the main
-/// `imdb.com` site which bot-walls datacenter requests. Prefers a video whose
-/// label mentions "trailer", else the first (the primary/hero video).
-async fn imdb_trailer_video_id(imdb_id: &str) -> Result<String> {
-    let url = format!("https://v3.sg.media-imdb.com/suggestion/t/{imdb_id}.json?includeVideos=1");
-    let client = reqwest::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-        )
-        .build()
-        .map_err(|e| Error::Generic(format!("failed to build http client: {e}")))?;
-
-    let resp: ImdbSuggestion = tokio::time::timeout(Duration::from_secs(15), async {
-        client.get(&url).send().await?.error_for_status()?.json().await
-    })
-    .await
-    .map_err(|_| Error::Generic(format!("imdb suggestion timed out for {imdb_id}")))?
-    .map_err(|e| Error::Generic(format!("imdb suggestion failed for {imdb_id}: {e}")))?;
-
-    let item = resp
-        .d
-        .iter()
-        .find(|i| i.id == imdb_id)
-        .ok_or_else(|| Error::Generic(format!("imdb suggestion had no entry for {imdb_id}")))?;
-    let pick = item
-        .v
-        .iter()
-        .find(|v| v.l.to_ascii_lowercase().contains("trailer"))
-        .or_else(|| item.v.first())
-        .ok_or_else(|| Error::Generic(format!("imdb has no videos for {imdb_id}")))?;
-
-    // Guard against a malformed id flowing into a yt-dlp URL.
-    if !(pick.id.starts_with("vi")
-        && pick.id.len() > 2
-        && pick.id[2..].bytes().all(|b| b.is_ascii_digit()))
-    {
-        return Err(Error::Generic(format!(
-            "imdb returned malformed video id {}",
-            pick.id
-        )));
-    }
-    Ok(pick.id.clone())
-}
-
-#[derive(serde::Deserialize)]
-struct ImdbSuggestion {
-    #[serde(default)]
-    d: Vec<ImdbSuggestItem>,
-}
-
-#[derive(serde::Deserialize)]
-struct ImdbSuggestItem {
-    id: String,
-    #[serde(default)]
-    v: Vec<ImdbSuggestVideo>,
-}
-
-#[derive(serde::Deserialize)]
-struct ImdbSuggestVideo {
-    id: String,
-    #[serde(default)]
-    l: String,
 }
 
 pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {

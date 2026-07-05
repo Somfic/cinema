@@ -5,7 +5,8 @@
 	let {
 		image,
 		trailerKeys = [],
-		imdbId,
+		title,
+		year,
 		active = true,
 		label,
 		action,
@@ -16,7 +17,8 @@
 	}: {
 		image?: string;
 		trailerKeys?: string[];
-		imdbId?: string | null;
+		title?: string | null;
+		year?: string | null;
 		active?: boolean;
 		label?: string;
 		action: string;
@@ -33,12 +35,14 @@
 	let index = $state(0);
 
 	const trailerKey = $derived(trailerKeys[index]);
-	const trailerSrc = $derived(
-		trailerKey
-			? api.urls.trailer(trailerKey) +
-					(imdbId ? `?imdb=${encodeURIComponent(imdbId)}` : "")
-			: undefined,
-	);
+	const trailerSrc = $derived.by(() => {
+		if (!trailerKey) return undefined;
+		const params = new URLSearchParams();
+		if (title) params.set("title", title);
+		if (year) params.set("year", year);
+		const qs = params.toString();
+		return api.urls.trailer(trailerKey) + (qs ? `?${qs}` : "");
+	});
 	const loop = $derived(trailerKeys.length <= 1);
 
 	$effect(() => {
