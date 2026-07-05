@@ -114,18 +114,17 @@ impl Handle {
         only_audio: bool,
         audio_index: i32,
     ) -> crate::app::Result<i32> {
-        // TODO: TOCTOU with remove/remove_all_for_download vulnerable. Should add database locking
+        let mut tx = self.0.db.begin().await?;
 
         // Verify the download exists (fail early rather than dangling FK).
         let exists = sqlx::query_scalar!(
-            "SELECT EXISTS(SELECT 1 FROM downloads WHERE id = $1) as \"exists!\"",
+            "SELECT id FROM downloads WHERE id = $1 FOR UPDATE",
             download_id
         )
-        .fetch_one(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .fetch_optional(&mut *tx)
+        .await?;
 
-        if !exists {
+        if exists.is_none() {
             return Err(Error::NotFound(format!("Download {download_id} not found")));
         }
 
@@ -144,9 +143,8 @@ impl Handle {
             only_audio,
             audio_index,
         )
-        .fetch_optional(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .fetch_optional(&mut *tx)
+        .await?;
 
         if let Some(id) = existing {
             return Ok(id);
@@ -169,9 +167,10 @@ impl Handle {
             only_audio,
             audio_index,
         )
-        .fetch_one(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
 
         self.emit_status_update(id, download_id, PretranscodingStatus::Queued);
         self.0.supervisor_pool.nudge().await;
@@ -221,19 +220,36 @@ impl Handle {
 
     /// Cancel if running, delete the row, and remove any cached files.
     pub async fn remove(&self, id: i32) -> crate::app::Result<()> {
+        let mut tx = self.0.db.begin().await?;
+
+        // Lock the parent download so a concurrent enqueue for the same
+        // download can't race us between the row lookup and the delete.
+        let row = sqlx::query!(
+            r#"
+                SELECT pt.download_id, pt.only_audio, pt.audio_index
+                FROM pretranscodings pt
+                JOIN downloads d ON d.id = pt.download_id
+                WHERE pt.id = $1
+                FOR UPDATE OF d
+            "#,
+            id
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        // Cancel inside the tx: the row lock keeps refresh() from spawning a
+        // fresh supervisor for this id until we commit.
         if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Removing the pretranscoding");
         }
 
-        let row = sqlx::query!(
-            "SELECT download_id, only_audio, audio_index FROM pretranscodings WHERE id = $1",
-            id
-        )
-        .fetch_optional(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        sqlx::query!("DELETE FROM pretranscodings WHERE id = $1", id)
+            .execute(&mut *tx)
+            .await?;
 
-        if let Some(row) = &row {
+        tx.commit().await?;
+
+        if let Some(row) = row {
             let path = PretranscodingOutputPath::new(
                 &self.0.storage,
                 row.download_id,
@@ -246,14 +262,7 @@ impl Handle {
             if let Err(err) = tokio::fs::remove_file(path.with_extension("mp4.part")).await {
                 tracing::warn!(?err, "Could not remove the pretranscoding part file");
             }
-        }
 
-        sqlx::query!("DELETE FROM pretranscodings WHERE id = $1", id)
-            .execute(&self.0.db)
-            .await
-            .map_err(Error::DatabaseError)?;
-
-        if let Some(row) = row {
             self.0.events.pretranscodings.emit_removed(
                 &crate::api::pretranscodings::PretranscodingRemoved {
                     pretranscoding_id: id,
@@ -267,17 +276,30 @@ impl Handle {
 
     /// Cancel every supervisor for a download and delete its cached files.
     pub async fn remove_all_for_download(&self, download_id: i32) -> crate::app::Result<()> {
-        let rows = sqlx::query!(
-            "SELECT id, only_audio, audio_index FROM pretranscodings WHERE download_id = $1",
+        let mut tx = self.0.db.begin().await?;
+
+        // Lock the parent download so enqueue can't slip in a new row while
+        // we're tearing down. If the download is already gone the lock is a
+        // no-op and the delete below just returns an empty set.
+        sqlx::query_scalar!(
+            "SELECT id FROM downloads WHERE id = $1 FOR UPDATE",
             download_id,
         )
-        .fetch_all(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let rows = sqlx::query!(
+            "DELETE FROM pretranscodings WHERE download_id = $1 RETURNING id, only_audio, audio_index",
+            download_id,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
 
         self.0
             .supervisor_pool
             .cancel_all(rows.iter().map(|row| row.id));
+
+        tx.commit().await?;
 
         for row in &rows {
             let path = PretranscodingOutputPath::new(
@@ -292,6 +314,13 @@ impl Handle {
             if let Err(err) = tokio::fs::remove_file(path.with_extension("mp4.part")).await {
                 tracing::warn!(?err, "Could not remove the pretranscoding part file");
             }
+
+            self.0.events.pretranscodings.emit_removed(
+                &crate::api::pretranscodings::PretranscodingRemoved {
+                    pretranscoding_id: row.id,
+                    download_id,
+                },
+            );
         }
 
         Ok(())
@@ -357,39 +386,63 @@ impl Handle {
         };
 
         let cancel = slot.cancel_token();
+        let cancel_clone = cancel.clone();
 
-        // TODO: this shouldn't happen this way
-        // Kick the torrent into life so the blocking reader in the supervisor
-        // has something to draw from.
-        let engine = crate::downloads::TorrentEngine::get();
-        engine
-            .ensure_torrent(&row.info_hash, &self.0.config)
-            .await?;
-        let _ = engine.resume(&row.info_hash).await;
-        engine
-            .select_file(&row.info_hash, row.file_idx as usize)
-            .await?;
+        let start = async {
+            // TODO: this shouldn't happen this way
+            // Kick the torrent into life so the blocking reader in the supervisor
+            // has something to draw from.
+            let engine = crate::downloads::TorrentEngine::get();
+            if let Err(err) = engine.ensure_torrent(&row.info_hash, &self.0.config).await {
+                self.fail(
+                    id,
+                    row.download_id,
+                    &format!("ensure_torrent failed: {err:?}"),
+                )
+                .await;
 
-        let supervisor = Supervisor::new(
-            self.0.db.clone(),
-            self.0.events.clone(),
-            self.0.config.clone(),
-            id,
-            (row.info_hash, row.file_idx),
-            PretranscodingOutputPath::new(
-                &self.0.storage,
-                row.download_id,
-                row.only_audio,
-                row.audio_index,
-            ),
-            cancel,
-        );
+                return Err(err);
+            }
+            let _ = engine.resume(&row.info_hash).await;
+            if let Err(err) = engine
+                .select_file(&row.info_hash, row.file_idx as usize)
+                .await
+            {
+                self.fail(id, row.download_id, &format!("select_file failed: {err:?}"))
+                    .await;
 
-        slot.spawn(async move {
-            supervisor.run().await;
-        });
+                return Err(err);
+            }
 
-        Ok(())
+            let supervisor = Supervisor::new(
+                self.0.db.clone(),
+                self.0.events.clone(),
+                self.0.config.clone(),
+                id,
+                (row.info_hash, row.file_idx),
+                PretranscodingOutputPath::new(
+                    &self.0.storage,
+                    row.download_id,
+                    row.only_audio,
+                    row.audio_index,
+                ),
+                cancel,
+            );
+
+            slot.spawn(async move {
+                supervisor.run().await;
+            });
+
+            Ok(())
+        };
+
+        tokio::select! {
+            biased;
+            _ = cancel_clone.cancelled() => {
+                Ok(())
+            }
+            res = start => res
+        }
     }
 
     fn emit_status_update(&self, id: i32, download_id: i32, new_status: PretranscodingStatus) {
@@ -400,5 +453,20 @@ impl Handle {
                 new_status,
             },
         );
+    }
+
+    async fn fail(&self, id: i32, download_id: i32, error: &str) {
+        tracing::warn!(id, "Pretranscode failed: {error}");
+        if let Err(err) = sqlx::query!(
+            "UPDATE pretranscodings SET status = 'failed', error = $1 WHERE id = $2 AND status NOT IN ('cancelled')",
+            error,
+            id,
+        )
+        .execute(&self.0.db)
+        .await
+        {
+            tracing::error!(?err, id, "Failed to record failure");
+        }
+        self.emit_status_update(id, download_id, PretranscodingStatus::Failed);
     }
 }

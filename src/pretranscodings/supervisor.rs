@@ -77,20 +77,27 @@ impl Supervisor {
             "Pretranscode supervisor started"
         );
 
-        if let Err(err) = sqlx::query!(
-            "UPDATE pretranscodings SET status = 'transcoding', error = NULL WHERE id = $1",
+        match sqlx::query!(
+            "UPDATE pretranscodings SET status = 'transcoding', error = NULL WHERE id = $1 AND status = 'queued'",
             self.pretranscoding_id,
         )
         .execute(&self.db)
-        .await
-        {
-            tracing::error!(
-                ?err,
-                self.pretranscoding_id,
-                "Failed to mark pretranscoding as transcoding"
-            );
-            return;
-        }
+        .await{
+            Ok(r) => {
+                if r.rows_affected() == 0 {
+                    return;
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    self.pretranscoding_id,
+                    "Failed to mark pretranscoding as transcoding"
+                );
+                return;
+            }
+        };
+
         self.emit_status_update(PretranscodingStatus::Transcoding);
 
         let outcome = self.encode().await;
@@ -125,9 +132,18 @@ impl Supervisor {
             tracing::warn!(?err, self.pretranscoding_id, "Failed to persist total_ms");
         }
 
+        let copy_video = self.output_path.only_audio || {
+            let engine = crate::downloads::TorrentEngine::get();
+            if let Ok(file_path) = engine.file_path(&self.info_hash, self.file_idx as usize) {
+                crate::hls::is_browser_safe(&file_path).await
+            } else {
+                false
+            }
+        };
+
         let mut command = crate::hls::ffmpeg::pretranscode(
             &self.config,
-            self.output_path.only_audio,
+            copy_video,
             self.output_path.audio_index,
             &part_path,
         )
@@ -250,10 +266,12 @@ impl Supervisor {
         let outcome = loop {
             tokio::select! {
                 _ = self.cancel.cancelled() => {
+                    Self::drain("progress", progress_task).await;
                     break EncodeOutcome::Cancelled;
                 }
                 exit = child.wait() => {
                     let status = exit.ok();
+                    Self::drain("progress", progress_task).await;
                     match status {
                         Some(s) if s.success() && progress_ended.load(Ordering::Relaxed) == 1 => {
                             break EncodeOutcome::Completed {
@@ -299,7 +317,6 @@ impl Supervisor {
         tokio::join!(
             child_timeout,
             Self::drain("write", write_task),
-            Self::drain("progress", progress_task),
             Self::drain("stderr", stderr_task),
         );
 
@@ -407,6 +424,7 @@ impl Supervisor {
         );
         TorrentEngine::probe_duration(&url)
             .await
+            .filter(|s| !s.is_infinite() && *s > 0.0)
             .map(|s| (s * 1000.0) as i64)
     }
 
