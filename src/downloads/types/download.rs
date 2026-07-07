@@ -27,8 +27,8 @@ pub struct SimpleDownload {
     downloaded_bytes: i64,
     status: DownloadStatus,
     error: Option<String>,
-    created_at: time::OffsetDateTime,
-    completed_at: Option<time::OffsetDateTime>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[draad::ty]
@@ -41,8 +41,8 @@ pub struct Download {
     pub downloaded_bytes: i64,
     pub status: DownloadStatus,
     pub error: Option<String>,
-    pub created_at: time::OffsetDateTime,
-    pub completed_at: Option<time::OffsetDateTime>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub meta: Option<super::DownloadMeta>,
 }
 
@@ -58,8 +58,8 @@ struct DownloadRow {
     downloaded_bytes: i64,
     status: DownloadStatus,
     error: Option<String>,
-    created_at: time::OffsetDateTime,
-    completed_at: Option<time::OffsetDateTime>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
 
     // download meta
     meta_exists: bool,

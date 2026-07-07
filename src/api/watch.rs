@@ -40,7 +40,7 @@ pub struct WatchHistoryItem {
     pub progress: f64,
     pub duration: f64,
     pub transcoding: TranscodingOption,
-    pub last_watched: time::OffsetDateTime,
+    pub last_watched: chrono::DateTime<chrono::Utc>,
 }
 
 #[draad::api(namespace = "watch")]

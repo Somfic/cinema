@@ -22,7 +22,7 @@ reqwest = { version = "0.13.4", features = ["json", "stream"] }
 # Database
 sqlx = { version = "0.9.0", features = [
 	"postgres",
-	"time",
+	"chrono",
 	"runtime-tokio",
 	"tls-rustls-aws-lc-rs",
 	"migrate",
@@ -62,4 +62,4 @@ bytes = "1"
 hex = "0.4"
 mime_guess = "2"
 libc = "0.2"
-time = { version = "0.3", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }

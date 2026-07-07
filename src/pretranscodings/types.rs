@@ -28,8 +28,8 @@ pub struct Pretranscoding {
     pub total_ms: Option<i64>,
     pub status: PretranscodingStatus,
     pub error: Option<String>,
-    pub created_at: time::OffsetDateTime,
-    pub completed_at: Option<time::OffsetDateTime>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub meta: Option<DownloadMeta>,
 }
 
@@ -44,8 +44,8 @@ struct PretranscodingRow {
     total_ms: Option<i64>,
     status: PretranscodingStatus,
     error: Option<String>,
-    created_at: time::OffsetDateTime,
-    completed_at: Option<time::OffsetDateTime>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
 
     meta_exists: bool,
     season: Option<i32>,

@@ -1,2 +1,2 @@
-export type OffsetDateTime = string;
+export type DateTime = string;
 
