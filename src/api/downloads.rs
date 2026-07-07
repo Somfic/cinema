@@ -170,4 +170,6 @@ pub trait DownloadsEvents {
     fn progress(payload: DownloadProgress);
 
     fn status_update(payload: DownloadStatusUpdate);
+
+    fn removed(id: i32);
 }

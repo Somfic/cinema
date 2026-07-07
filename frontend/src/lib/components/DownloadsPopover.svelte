@@ -32,7 +32,7 @@
 	);
 
 	let loading = $state(false);
-	const pendingRemoves = new Set<number>();
+	const recentlyRemovedDownloads = new Set<number>();
 	const recentlyRemovedPretranscodings = new Set<number>();
 
 	async function load() {
@@ -42,13 +42,14 @@
 
 		try {
 			loading = true;
+			recentlyRemovedDownloads.clear();
 			recentlyRemovedPretranscodings.clear();
 
 			const [ds, pts] = await Promise.all([
 				api.downloads.list(),
 				api.pretranscodings.list(),
 			]);
-			downloads = ds.filter((it) => !pendingRemoves.has(it.id));
+			downloads = ds.filter((it) => !recentlyRemovedDownloads.has(it.id));
 
 			const grouped: Record<number, Pretranscoding[]> = {};
 			for (const pt of pts) {
@@ -64,6 +65,7 @@
 			// silently ignore
 		} finally {
 			loading = false;
+			recentlyRemovedDownloads.clear();
 			recentlyRemovedPretranscodings.clear();
 		}
 	}
@@ -80,7 +82,6 @@
 		load();
 
 		const unsubOnDownloadProgress = api.downloadsEvents.onProgress((p) => {
-			if (pendingRemoves.has(p.download_id)) return;
 			const idx = downloads.findIndex((d) => d.id === p.download_id);
 			if (idx === -1) {
 				load();
@@ -96,7 +97,6 @@
 		});
 		const unsubOnDownloadStatusUpdate = api.downloadsEvents.onStatusUpdate(
 			(statusUpdate) => {
-				if (pendingRemoves.has(statusUpdate.download_id)) return;
 				const idx = downloads.findIndex(
 					(d) => d.id === statusUpdate.download_id,
 				);
@@ -110,6 +110,13 @@
 				};
 			},
 		);
+		const unsubOnDownloadRemove = api.downloadsEvents.onRemoved((id) => {
+			recentlyRemovedDownloads.add(id);
+
+			downloads = downloads.filter((it) => it.id === id);
+			delete pretranscodings[id];
+		});
+
 		const unsubOnPretranscodingProgress = api.pretranscodingsEvents.onProgress(
 			(p) => {
 				const list = pretranscodings[p.download_id];
@@ -164,6 +171,8 @@
 		unsub = () => {
 			unsubOnDownloadProgress();
 			unsubOnDownloadStatusUpdate();
+			unsubOnDownloadRemove();
+
 			unsubOnPretranscodingProgress();
 			unsubOnPretranscodingStatusUpdate();
 			unsubOnPretranscodingRemove();
@@ -222,7 +231,6 @@
 	}
 
 	async function remove(d: Download) {
-		pendingRemoves.add(d.id);
 		try {
 			await api.downloads.remove(d.id);
 			downloads = downloads.filter((x) => x.id !== d.id);
@@ -231,8 +239,6 @@
 			toast.error(
 				`Remove failed: ${err instanceof Error ? err.message : String(err)}`,
 			);
-		} finally {
-			pendingRemoves.delete(d.id);
 		}
 	}
 </script>

@@ -298,9 +298,13 @@ impl Handle {
             tracing::warn!(?err, id, "Could not remove the torrent");
         }
 
-        sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
+        let res = sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
             .execute(&self.0.db)
             .await?;
+
+        if res.rows_affected() > 0 {
+            self.0.events.downloads.emit_removed(&id);
+        }
 
         Ok(())
     }
