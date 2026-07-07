@@ -87,27 +87,26 @@ async fn probe_video_codec(path: &std::path::Path) -> Option<String> {
 }
 
 pub struct HlsSessionStartInput {
-    pub info_hash: String,
-    pub file_idx: usize,
     pub audio_index: usize,
     pub start_time: f64,
     pub only_audio: bool,
 }
 
 /// Start an HLS remux session. Returns (session_id, playlist_path).
-/// Spawns ffmpeg reading from a torrent stream (blocks on missing pieces)
-/// and writing HLS segments to a temp directory.
-/// If `start_time` > 0, ffmpeg seeks to that position before encoding.
+/// Spawns ffmpeg reading from the given `source` (disk or engine) and writing
+/// HLS segments to a temp directory. If `start_time` > 0, ffmpeg seeks to that
+/// position before encoding.
 pub async fn start_session(
     storage: &crate::app::Storage,
     config: &crate::Config,
+    source: crate::downloads::MediaSource,
     session_input: HlsSessionStartInput,
 ) -> crate::app::Result<(String, String)> {
     let session_id = new_session_id();
     let dir = storage.join(format!("hls/{session_id}"));
     tokio::fs::create_dir_all(&dir).await?;
 
-    match start_transcoding(config, session_input, &session_id, dir.clone()).await {
+    match start_transcoding(config, source, session_input, &session_id, dir.clone()).await {
         Ok(url) => Ok((session_id, url)),
         Err(err) => {
             let _ = tokio::fs::remove_dir_all(dir).await;
@@ -118,6 +117,7 @@ pub async fn start_session(
 
 async fn start_transcoding(
     config: &crate::Config,
+    source: crate::downloads::MediaSource,
     session_input: HlsSessionStartInput,
     session_id: &String,
     dir: PathBuf,
@@ -125,17 +125,12 @@ async fn start_transcoding(
     let playlist_path = dir.join("playlist.m3u8");
     let segment_pattern = dir.join("seg%05d.ts");
 
-    let engine = crate::downloads::TorrentEngine::get();
-    let file_path = engine.file_path(&session_input.info_hash, session_input.file_idx)?;
-    let copy_video = session_input.only_audio || is_browser_safe(&file_path).await;
-
-    let input_display = format!(
-        "torrent:{}/{}",
-        session_input.info_hash, session_input.file_idx
-    );
+    let copy_video = session_input.only_audio || is_browser_safe(source.probe_path()).await;
+    let input_display = source.probe_path().display().to_string();
 
     let mut child = ffmpeg::transcode(
         config,
+        &source,
         copy_video,
         session_input.start_time,
         session_input.audio_index,
@@ -146,41 +141,27 @@ async fn start_transcoding(
     .spawn()
     .map_err(|e| crate::app::Error::Generic(format!("Failed to start ffmpeg HLS: {e}")))?;
 
-    // Pipe the torrent stream into ffmpeg's stdin
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| crate::app::Error::Generic("Failed to open ffmpeg stdin".into()))?;
-
-    let engine = crate::downloads::TorrentEngine::get();
-    let reader = engine.stream(&session_input.info_hash, session_input.file_idx)?;
-
-    let span = tracing::Span::current();
-
-    let write_task = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-
-        let mut reader = reader;
-        let mut stdin = stdin;
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    use tokio::io::AsyncWriteExt;
-                    if stdin.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
+    // For Engine sources we need to pump bytes into ffmpeg's stdin (so it
+    // blocks on missing pieces rather than hitting EOF). Disk sources use
+    // `-i <path>` and don't need a pump task.
+    let write_task = if matches!(
+        source.ffmpeg_input_spec(),
+        crate::downloads::FfmpegInputSpec::Pipe
+    ) {
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| crate::app::Error::Generic("Failed to open ffmpeg stdin".into()))?;
+        Some(source.spawn_stdin_pump(stdin).await?)
+    } else {
+        None
+    };
 
     // Capture stderr and track process exit
     let (exit_tx, exit_rx) = watch::channel(None);
     let stderr = child.stderr.take();
     let sid = session_id.clone();
+    let span = tracing::Span::current();
 
     let error_task = tokio::spawn(tracing::Instrument::instrument(
         async move {
@@ -232,6 +213,11 @@ async fn start_transcoding(
         span,
     ));
 
+    let mut abort_handles = vec![error_task.abort_handle()];
+    if let Some(ref w) = write_task {
+        abort_handles.push(w.abort_handle());
+    }
+
     sessions().lock().await.insert(
         session_id.clone(),
         HlsSession {
@@ -239,7 +225,7 @@ async fn start_transcoding(
             child,
             last_access: Instant::now(),
             exit_error: exit_rx,
-            abort_handles: vec![write_task.abort_handle(), error_task.abort_handle()],
+            abort_handles,
         },
     );
 

@@ -1,0 +1,1 @@
+ALTER TABLE downloads ADD COLUMN IF NOT EXISTS output_path TEXT;

@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 
 use crate::app::Pool;
-use crate::downloads::TorrentEngine;
+use crate::downloads::{FfmpegInputSpec, MediaSource, TorrentEngine};
 
 use super::types::PretranscodingStatus;
 
@@ -33,8 +33,7 @@ pub struct PretranscodingProgress {
 
 pub struct Supervisor {
     pretranscoding_id: i32,
-    info_hash: String,
-    file_idx: i32,
+    source: MediaSource,
     output_path: super::PretranscodingOutputPath,
     db: Pool,
     events: crate::Events,
@@ -48,14 +47,13 @@ impl Supervisor {
         events: crate::Events,
         config: Arc<crate::Config>,
         pretranscoding_id: i32,
-        torrent_key: (String, i32),
+        source: MediaSource,
         output_path: super::PretranscodingOutputPath,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
             pretranscoding_id,
-            info_hash: torrent_key.0,
-            file_idx: torrent_key.1,
+            source,
             output_path,
             db,
             events,
@@ -132,17 +130,12 @@ impl Supervisor {
             tracing::warn!(?err, self.pretranscoding_id, "Failed to persist total_ms");
         }
 
-        let copy_video = self.output_path.only_audio || {
-            let engine = crate::downloads::TorrentEngine::get();
-            if let Ok(file_path) = engine.file_path(&self.info_hash, self.file_idx as usize) {
-                crate::hls::is_browser_safe(&file_path).await
-            } else {
-                false
-            }
-        };
+        let copy_video = self.output_path.only_audio
+            || crate::hls::is_browser_safe(self.source.probe_path()).await;
 
         let mut command = crate::hls::ffmpeg::pretranscode(
             &self.config,
+            &self.source,
             copy_video,
             self.output_path.audio_index,
             &part_path,
@@ -154,8 +147,15 @@ impl Supervisor {
             Err(err) => return EncodeOutcome::Failed(format!("Failed to spawn ffmpeg: {err}")),
         };
 
-        let Some(stdin) = child.stdin.take() else {
-            return EncodeOutcome::Failed("ffmpeg stdin unavailable".into());
+        // Only Engine sources need stdin, Disk sources feed ffmpeg via
+        // `-i <path>` and don't set up a piped stdin.
+        let stdin_slot = if matches!(self.source.ffmpeg_input_spec(), FfmpegInputSpec::Pipe) {
+            match child.stdin.take() {
+                Some(s) => Some(s),
+                None => return EncodeOutcome::Failed("ffmpeg stdin unavailable".into()),
+            }
+        } else {
+            None
         };
         let Some(stdout) = child.stdout.take() else {
             return EncodeOutcome::Failed("ffmpeg stdout unavailable".into());
@@ -171,37 +171,20 @@ impl Supervisor {
         let stderr_tail: Arc<tokio::sync::Mutex<Vec<String>>> =
             Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
-        // Feed the torrent stream into ffmpeg's stdin. Blocks on missing
-        // pieces exactly like the live transcode's `write_task`.
-        let engine = TorrentEngine::get();
-        let reader = match engine.stream(&self.info_hash, self.file_idx as usize) {
-            Ok(r) => r,
-            Err(err) => {
-                return EncodeOutcome::Failed(format!("Failed to open torrent stream: {err}"));
-            }
-        };
+        // For Engine sources: spawn the stdin pump so ffmpeg blocks on missing
+        // pieces exactly like the live transcode. For Disk: no pump since ffmpeg
+        // reads the file itself via `-i <path>`.
         let span = tracing::Span::current();
-        let write_task = tokio::spawn(tracing::Instrument::instrument(
-            async move {
-                use tokio::io::AsyncReadExt;
-                let mut reader = reader;
-                let mut stdin = stdin;
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
-                    match reader.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            use tokio::io::AsyncWriteExt;
-                            if stdin.write_all(&buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
+        let write_task = if let Some(stdin) = stdin_slot {
+            match self.source.spawn_stdin_pump(stdin).await {
+                Ok(h) => Some(h),
+                Err(err) => {
+                    return EncodeOutcome::Failed(format!("Failed to open torrent stream: {err}"));
                 }
-            },
-            span.clone(),
-        ));
+            }
+        } else {
+            None
+        };
 
         // Parse `-progress pipe:1` lines. Format is one `key=value` per line;
         // `out_time_us` is the value we care about. `progress=end` marks a
@@ -314,9 +297,15 @@ impl Supervisor {
             }
         };
 
+        let drain_write = async {
+            if let Some(task) = write_task {
+                Self::drain("write", task).await;
+            }
+        };
+
         tokio::join!(
             child_timeout,
-            Self::drain("write", write_task),
+            drain_write,
             Self::drain("stderr", stderr_task),
         );
 
@@ -418,11 +407,8 @@ impl Supervisor {
     }
 
     async fn probe_duration_ms(&self) -> Option<i64> {
-        let url = format!(
-            "http://127.0.0.1:{}/api/stream/{}/{}",
-            self.config.port, self.info_hash, self.file_idx
-        );
-        TorrentEngine::probe_duration(&url)
+        let input = self.source.coherent_input(&self.config);
+        TorrentEngine::probe_duration(&input)
             .await
             .filter(|s| !s.is_infinite() && *s > 0.0)
             .map(|s| (s * 1000.0) as i64)

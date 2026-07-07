@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use super::TorrentEngine;
-use crate::app::{Error, Pool};
+use crate::app::{Error, Pool, Storage};
 use crate::config::Config;
 use crate::downloads::types::DownloadStatus;
 use crate::utils::supervisor_pool::{Acquire, SupervisorPool};
@@ -14,11 +14,11 @@ use crate::utils::supervisor_pool::{Acquire, SupervisorPool};
 /// Result of a `start` attempt. `Started` is the only outcome that spawns a
 /// new supervisor; the rest are idempotent no-ops the caller may want to
 /// observe (e.g. surface "NoCapacity" to a UI as "queued").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum StartOutcome {
     Started,
     AlreadyRunning,
-    AlreadyComplete,
+    AlreadyComplete { output_path: Option<String> },
     NoCapacity,
     Cancelled,
 }
@@ -38,17 +38,19 @@ struct Inner {
     db: Pool,
     events: crate::Events,
     config: Arc<Config>,
+    storage: Storage,
     supervisor_pool: SupervisorPool,
 }
 
 impl Handle {
-    pub fn new(db: Pool, events: crate::Events, config: Arc<Config>) -> Self {
+    pub fn new(db: Pool, events: crate::Events, config: Arc<Config>, storage: Storage) -> Self {
         let permits = config.max_concurrent_downloads;
         let (supervisor_pool, refetch_rx) = SupervisorPool::new("download manager", permits);
         let inner = Arc::new(Inner {
             db,
             events,
             config,
+            storage,
             supervisor_pool,
         });
 
@@ -95,6 +97,26 @@ impl Handle {
         Ok(())
     }
 
+    /// Upsert a download row. Reset it from any terminal state, and start it.
+    /// Blocks until the supervisor is spawned (or returns a non-`Started` outcome).
+    /// Returns the download id.
+    pub async fn ensure_download(
+        &self,
+        info_hash: &str,
+        file_idx: i32,
+        priority: DownloadPriority,
+    ) -> crate::app::Result<(i32, StartOutcome)> {
+        let mut tx = self.0.db.begin().await.map_err(Error::DatabaseError)?;
+
+        let id = super::types::Download::upsert(&mut tx, info_hash, file_idx).await?;
+
+        super::types::Download::reset_for_restart(&mut tx, id).await?;
+
+        tx.commit().await.map_err(Error::DatabaseError)?;
+
+        Ok((id, self.start(id, priority).await?))
+    }
+
     /// Start (or resume) a download. Blocks until the supervisor has been
     /// spawned and the engine has the torrent loaded and the requested file
     /// selected, or returns a non-`Started` outcome that explains why no
@@ -108,12 +130,26 @@ impl Handle {
             return Ok(StartOutcome::AlreadyRunning);
         }
 
-        let row = load_min(&self.0.db, id)
-            .await
-            .ok_or_else(|| Error::NotFound(format!("Download {id} not found")))?;
+        let row = sqlx::query!(
+            r#"
+                SELECT
+                    info_hash,
+                    file_idx,
+                    status as "status: DownloadStatus",
+                    output_path
+                FROM downloads
+                WHERE id = $1
+            "#,
+            id
+        )
+        .fetch_optional(&self.0.db)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("Download {id} not found")))?;
 
         if row.status == DownloadStatus::Completed {
-            return Ok(StartOutcome::AlreadyComplete);
+            return Ok(StartOutcome::AlreadyComplete {
+                output_path: row.output_path,
+            });
         }
 
         // Claim the supervisor slot. Any concurrent start (for same download) will early return.
@@ -133,34 +169,36 @@ impl Handle {
 
         let cancel = slot.cancel_token();
         let engine = TorrentEngine::get();
+        let engine_key: super::engine::EngineKey = (row.info_hash, row.file_idx as usize).into();
 
+        let engine_key_clone = engine_key.clone();
         let cancel_clone = cancel.clone();
         let start = async {
-            let torrent = match engine.ensure_torrent(&row.info_hash, &self.0.config).await {
+            let torrent = match engine
+                .ensure_torrent(&engine_key.info_hash, &self.0.config)
+                .await
+            {
                 Ok(h) => h,
                 Err(err) => {
                     fail(&self.0.db, id, &err).await;
                     return Err(err);
                 }
             };
-            if let Err(err) = engine.resume(&row.info_hash).await {
-                tracing::warn!(?err, info_hash = %row.info_hash, "engine.resume failed");
-            }
-            if let Err(err) = engine
-                .select_file(&row.info_hash, row.file_idx as usize)
-                .await
-            {
+            if let Err(err) = engine.select_file(&engine_key).await {
                 fail(&self.0.db, id, &err).await;
                 return Err(err);
             }
 
             let db = self.0.db.clone();
             let events = self.0.events.clone();
+            let storage = self.0.storage.clone();
             slot.spawn(async move {
-                super::supervisor::Supervisor::new(db, events, id, torrent, cancel)
-                    .await
-                    .run()
-                    .await;
+                super::supervisor::Supervisor::new(
+                    db, events, storage, id, engine_key, torrent, cancel,
+                )
+                .await
+                .run()
+                .await;
             });
 
             Ok(StartOutcome::Started)
@@ -169,7 +207,7 @@ impl Handle {
         tokio::select! {
             biased;
             _ = cancel_clone.cancelled() => {
-                if let Err(err) = engine.stop(&row.info_hash).await {
+                if let Err(err) = engine.stop(&engine_key_clone).await {
                     tracing::warn!(?err, "Error while cleaning up in-flight start after cancellation");
                 }
 
@@ -184,8 +222,8 @@ impl Handle {
         if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Pausing torrent");
         }
-        if let Some(hash) = fetch_info_hash(&self.0.db, id).await
-            && let Err(err) = TorrentEngine::get().pause(&hash).await
+        if let Some(key) = fetch_download_key(&self.0.db, id).await
+            && let Err(err) = TorrentEngine::get().pause(&key).await
         {
             tracing::debug!(?err, id, "Could not pause");
         }
@@ -205,8 +243,8 @@ impl Handle {
         if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Re-enqueueing torrent");
         }
-        if let Some(hash) = fetch_info_hash(&self.0.db, id).await
-            && let Err(err) = TorrentEngine::get().pause(&hash).await
+        if let Some(key) = fetch_download_key(&self.0.db, id).await
+            && let Err(err) = TorrentEngine::get().pause(&key).await
         {
             tracing::debug!(?err, id, "Could not re-enqueue");
         }
@@ -225,10 +263,10 @@ impl Handle {
         if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Cancelling torrent");
         }
-        if let Some(hash) = fetch_info_hash(&self.0.db, id).await
-            && let Err(err) = TorrentEngine::get().stop(&hash).await
+        if let Some(key) = fetch_download_key(&self.0.db, id).await
+            && let Err(err) = TorrentEngine::get().stop(&key).await
         {
-            tracing::debug!(?err, id, "Could not cancel");
+            tracing::warn!(?err, id, "Could not cancel");
         }
         sqlx::query!(
             "UPDATE downloads SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')",
@@ -248,8 +286,10 @@ impl Handle {
         if self.0.supervisor_pool.cancel(id) {
             tracing::info!(id, "Cancelling torrent (remove)");
         }
-        if let Some(hash) = fetch_info_hash(&self.0.db, id).await {
-            TorrentEngine::get().stop_and_delete(&hash).await;
+        if let Some(key) = fetch_download_key(&self.0.db, id).await
+            && let Err(err) = TorrentEngine::get().stop_and_delete(&key).await
+        {
+            tracing::warn!(?err, id, "Could not remove the torrent");
         }
         sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
             .execute(&self.0.db)
@@ -310,39 +350,14 @@ async fn fail(db: &Pool, id: i32, err: &Error) {
     }
 }
 
-async fn fetch_info_hash(db: &Pool, id: i32) -> Option<String> {
-    sqlx::query_scalar!("SELECT info_hash FROM downloads WHERE id = $1", id)
-        .fetch_optional(db)
-        .await
-        .ok()
-        .flatten()
-}
-
-struct MinRow {
-    info_hash: String,
-    file_idx: i32,
-    status: DownloadStatus,
-}
-
-async fn load_min(db: &Pool, id: i32) -> Option<MinRow> {
-    let res = sqlx::query!(
-        r#"
-        SELECT
-            d.info_hash,
-            d.file_idx,
-            d.status as "status: DownloadStatus"
-        FROM downloads d
-        WHERE d.id = $1
-        "#,
+async fn fetch_download_key(db: &Pool, id: i32) -> Option<super::engine::EngineKey> {
+    sqlx::query!(
+        "SELECT info_hash, file_idx FROM downloads WHERE id = $1",
         id
     )
     .fetch_optional(db)
     .await
     .ok()
-    .flatten()?;
-    Some(MinRow {
-        info_hash: res.info_hash,
-        file_idx: res.file_idx,
-        status: res.status,
-    })
+    .flatten()
+    .map(|record| (record.info_hash, record.file_idx as usize).into())
 }

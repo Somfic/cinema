@@ -65,13 +65,15 @@ impl DownloadsApi for AppContext {
     }
 
     async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, Error> {
-        let id = crate::downloads::types::Download::ensure_download(
-            self,
-            &body.info_hash,
-            body.file_idx,
-            crate::downloads::DownloadPriority::Background,
-        )
-        .await?;
+        let (id, _) = self
+            .downloads
+            .ensure_download(
+                &body.info_hash,
+                body.file_idx,
+                crate::downloads::DownloadPriority::Background,
+            )
+            .await?;
+
         Ok(id)
     }
 

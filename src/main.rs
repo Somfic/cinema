@@ -129,10 +129,16 @@ async fn run() -> Result<()> {
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let downloads_handle = downloads::Handle::new(pool.clone(), events.clone(), config.clone());
+    let downloads_handle = downloads::Handle::new(
+        pool.clone(),
+        events.clone(),
+        config.clone(),
+        storage.clone(),
+    );
     let pretranscodings_handle = pretranscodings::Handle::new(
         pool.clone(),
         events.clone(),
+        downloads_handle.clone(),
         config.clone(),
         storage.clone(),
     );
@@ -170,45 +176,10 @@ async fn run() -> Result<()> {
     });
 
     // stream stats
-    {
-        let events = ctx.events.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(333)).await;
-                let engine = downloads::TorrentEngine::get();
-                for hash in engine.active_info_hashes() {
-                    let Ok(stats) = engine.stats(&hash) else {
-                        continue;
-                    };
-                    let (download_speed_mbps, peers) = match &stats.live {
-                        Some(live) => (live.download_speed.mbps, live.snapshot.peer_stats.live),
-                        None => (0.0, 0),
-                    };
-                    events.streams.emit_stats(&api::streams::StreamStatsUpdate {
-                        info_hash: hash,
-                        progress_bytes: stats.progress_bytes,
-                        total_bytes: stats.total_bytes,
-                        download_speed_mbps,
-                        peers,
-                        finished: stats.finished,
-                    });
-                }
-                // Piece bitmaps for files currently being streamed. Only
-                // pushed for active streams (not every file in every
-                // torrent), keeping the wire chatter bounded.
-                for (hash, file_idx) in engine.active_streams().await {
-                    let Ok(pieces) = engine.piece_map(&hash, file_idx, 200) else {
-                        continue;
-                    };
-                    events.streams.emit_pieces(&api::streams::PiecesUpdate {
-                        info_hash: hash,
-                        file_idx: file_idx as i64,
-                        pieces,
-                    });
-                }
-            }
-        });
-    }
+    let events = ctx.events.clone();
+    tokio::spawn(crate::downloads::TorrentEngine::stream_stats_supervisor(
+        events,
+    ));
 
     // Build router
     let mut router = Router::new();

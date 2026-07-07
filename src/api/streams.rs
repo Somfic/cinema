@@ -51,7 +51,7 @@ pub struct AudioTracks {
 #[draad::ty]
 pub struct PiecesUpdate {
     pub info_hash: String,
-    pub file_idx: i64,
+    pub file_idx: i32,
     pub pieces: Vec<u8>,
 }
 
@@ -81,7 +81,7 @@ pub trait StreamsApi {
     /// manager. Only meaningful when the server runs on the user's own machine
     /// (the self-hosted local case).
     #[post]
-    async fn reveal(&self, info_hash: String, file_idx: i64) -> Result<(), Error>;
+    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), Error>;
 
     /// Starts an HLS remux/transcode session for a file and returns its
     /// playlist URL (feed to hls.js). Callers stop the previous session first.
@@ -208,13 +208,13 @@ impl StreamsApi for AppContext {
     }
 
     async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error> {
-        crate::downloads::types::Download::ensure_download(
-            self,
-            &info_hash,
-            file_idx,
-            crate::downloads::DownloadPriority::Stream,
-        )
-        .await?;
+        self.downloads
+            .ensure_download(
+                &info_hash,
+                file_idx,
+                crate::downloads::DownloadPriority::Stream,
+            )
+            .await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
     }
@@ -234,10 +234,16 @@ impl StreamsApi for AppContext {
         self.downloads.pause(id).await
     }
 
-    async fn reveal(&self, info_hash: String, file_idx: i64) -> Result<(), Error> {
-        let engine = TorrentEngine::get();
-        let path = engine.file_path(&info_hash, file_idx as usize)?;
-        reveal_in_file_manager(&path)
+    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), Error> {
+        let source = crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
+            &info_hash,
+            file_idx,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
+        reveal_in_file_manager(source.probe_path())
     }
 
     async fn remux(
@@ -248,8 +254,9 @@ impl StreamsApi for AppContext {
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error> {
-        crate::downloads::types::Download::ensure_download(
-            self,
+        let source = crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
             &info_hash,
             file_idx,
             crate::downloads::DownloadPriority::Stream,
@@ -313,9 +320,8 @@ impl StreamsApi for AppContext {
         let (session_id, playlist_url) = crate::hls::start_session(
             &self.storage,
             &self.config,
+            source,
             crate::hls::HlsSessionStartInput {
-                info_hash,
-                file_idx: file_idx as usize,
                 audio_index: audio as usize,
                 start_time: t,
                 only_audio,
@@ -346,13 +352,21 @@ impl StreamsApi for AppContext {
 
     async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, Error> {
         let engine = TorrentEngine::get();
-        Ok(engine.piece_map(&info_hash, file_idx as usize, 200)?)
+        Ok(engine.piece_map(&(info_hash, file_idx as usize).into(), 200)?)
     }
 
     async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error> {
-        // Block until the torrent is loaded and its metadata is known.
-        let engine = TorrentEngine::get();
-        engine.ensure_torrent(&info_hash, &self.config).await?;
+        // Ensure the download row exists and the engine has what it needs; we
+        // don't need the returned MediaSource here because ffprobe goes through
+        // the loopback HTTP route (which handles disk-vs-engine internally).
+        crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
+            &info_hash,
+            file_idx as i32,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
 
         // Probe through the local HTTP stream route, not the on-disk file: a
         // still-downloading torrent is sparse on disk (missing pieces = holes),

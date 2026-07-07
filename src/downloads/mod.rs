@@ -1,5 +1,6 @@
 use std::pin::Pin;
 
+use std::path::Path;
 use std::task::{Context, Poll};
 
 use librqbit::ManagedTorrent;
@@ -8,22 +9,38 @@ use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 mod engine;
 mod manager;
+mod media_source;
 mod supervisor;
 pub mod types;
 
 pub use engine::{AudioTrack, Chapter, EmbeddedSubtitleTrack, TorrentEngine};
 pub use manager::*;
+pub use media_source::{FfmpegInputSpec, MediaSource};
 pub use supervisor::DownloadProgress;
 
 /// Trait combining AsyncRead + AsyncSeek for torrent file streaming.
 trait AsyncReadSeek: AsyncRead + AsyncSeek + Send + Unpin {}
 impl<T: AsyncRead + AsyncSeek + Send + Unpin> AsyncReadSeek for T {}
 
-/// A type-erased async reader for streaming torrent files.
-/// Wraps librqbit's FileStream (which can't be named outside the crate).
+/// A type-erased async reader for streaming media files. Wraps either
+/// librqbit's `FileStream` (blocks on missing pieces) or an ordinary
+/// `tokio::fs::File` for completed downloads served straight from disk.
 pub struct TorrentFileReader {
     inner: Pin<Box<dyn AsyncReadSeek>>,
     pub len: u64,
+}
+
+impl TorrentFileReader {
+    /// Open a completed file from disk as a reader. Used for downloads that
+    /// have finished where no engine is needed.
+    pub async fn open_disk(path: &Path) -> std::io::Result<Self> {
+        let file = tokio::fs::File::open(path).await?;
+        let len = file.metadata().await?.len();
+        Ok(Self {
+            inner: Box::pin(file),
+            len,
+        })
+    }
 }
 
 impl AsyncRead for TorrentFileReader {

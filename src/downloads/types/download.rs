@@ -139,8 +139,8 @@ impl Download {
             "#
         )
         .fetch_all(db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
+
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
@@ -157,8 +157,7 @@ impl Download {
             file_idx
         )
         .fetch_optional(db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
 
         Ok(id)
     }
@@ -201,31 +200,9 @@ impl Download {
             id
         )
         .execute(&mut **tx)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
+
         Ok(())
-    }
-
-    /// Upsert a download row. Reset it from any terminal state, and start it.
-    /// Blocks until the supervisor is spawned (or returns a non-`Started` outcome).
-    /// Returns the download id.
-    pub async fn ensure_download(
-        ctx: &crate::app::AppContext,
-        info_hash: &str,
-        file_idx: i32,
-        priority: crate::downloads::DownloadPriority,
-    ) -> crate::app::Result<i32> {
-        let mut tx = ctx.db.begin().await.map_err(Error::DatabaseError)?;
-
-        let id = Self::upsert(&mut tx, info_hash, file_idx).await?;
-
-        Self::reset_for_restart(&mut tx, id).await?;
-
-        tx.commit().await.map_err(Error::DatabaseError)?;
-
-        ctx.downloads.start(id, priority).await?;
-
-        Ok(id)
     }
 }
 
@@ -259,8 +236,7 @@ impl SimpleDownload {
             &file_indexes
         )
         .fetch_all(db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
 
         let map = rows
             .into_iter()

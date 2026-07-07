@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::app::Pool;
+use crate::app::{Pool, Storage};
 
 /// Streaming progress for an active download. Emitted periodically by the
 /// download supervisor
@@ -15,7 +15,10 @@ pub struct DownloadProgress {
 
 pub struct Supervisor {
     download_id: i32,
+    info_hash: String,
+    file_idx: i32,
     db: Pool,
+    storage: Storage,
     events: crate::Events,
     handle: super::TorrentHandle,
     cancel: tokio_util::sync::CancellationToken,
@@ -25,7 +28,9 @@ impl Supervisor {
     pub async fn new(
         db: Pool,
         events: crate::Events,
+        storage: Storage,
         download_id: i32,
+        engine_key: super::engine::EngineKey,
         handle: super::TorrentHandle,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
@@ -51,7 +56,10 @@ impl Supervisor {
 
         Self {
             download_id,
+            info_hash: engine_key.info_hash,
+            file_idx: engine_key.file_idx as i32,
             db,
+            storage,
             events,
             handle,
             cancel,
@@ -127,9 +135,30 @@ impl Supervisor {
             });
 
             if stats.finished {
+                // Resolve the on-disk path while the torrent is still loaded,
+                // and persist it storage-relative so consumers can bypass the
+                // engine for completed downloads.
+                let engine = super::TorrentEngine::get();
+                let output_path = match engine.file_path(&self.info_hash, self.file_idx as usize) {
+                    Ok(abs) => Some(
+                        abs.strip_prefix(self.storage.path())
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
+                    ),
+                    Err(err) => {
+                        tracing::warn!(
+                            ?err,
+                            self.download_id,
+                            "Supervisor: failed to resolve output_path"
+                        );
+                        None
+                    }
+                };
+
                 if let Err(err) = sqlx::query!(
-                    "UPDATE downloads SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = $1",
-                    self.download_id
+                    "UPDATE downloads SET status = 'completed', completed_at = CURRENT_TIMESTAMP, output_path = $2 WHERE id = $1",
+                    self.download_id,
+                    output_path,
                 )
                 .execute(&self.db)
                 .await

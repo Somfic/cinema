@@ -19,18 +19,26 @@ pub struct Handle(Arc<Inner>);
 struct Inner {
     db: Pool,
     events: crate::Events,
+    downloads_manager: crate::downloads::Handle,
     config: Arc<Config>,
     storage: Storage,
     supervisor_pool: SupervisorPool,
 }
 
 impl Handle {
-    pub fn new(db: Pool, events: crate::Events, config: Arc<Config>, storage: Storage) -> Self {
+    pub fn new(
+        db: Pool,
+        events: crate::Events,
+        downloads_manager: crate::downloads::Handle,
+        config: Arc<Config>,
+        storage: Storage,
+    ) -> Self {
         let permits = config.max_concurrent_pretranscodings.max(1);
         let (supervisor_pool, refetch_rx) = SupervisorPool::new("pretranscodings manager", permits);
         let inner = Arc::new(Inner {
             db,
             events,
+            downloads_manager,
             config,
             storage,
             supervisor_pool,
@@ -393,37 +401,33 @@ impl Handle {
         let cancel_clone = cancel.clone();
 
         let start = async {
-            // TODO: this shouldn't happen this way
-            // Kick the torrent into life so the blocking reader in the supervisor
-            // has something to draw from.
-            let engine = crate::downloads::TorrentEngine::get();
-            if let Err(err) = engine.ensure_torrent(&row.info_hash, &self.0.config).await {
-                self.fail(
-                    id,
-                    row.download_id,
-                    &format!("ensure_torrent failed: {err:?}"),
-                )
-                .await;
-
-                return Err(err);
-            }
-            let _ = engine.resume(&row.info_hash).await;
-            if let Err(err) = engine
-                .select_file(&row.info_hash, row.file_idx as usize)
-                .await
+            let source = match crate::downloads::MediaSource::ensure_and_locate(
+                &self.0.downloads_manager,
+                &self.0.storage,
+                &row.info_hash,
+                row.file_idx,
+                crate::downloads::DownloadPriority::Background,
+            )
+            .await
             {
-                self.fail(id, row.download_id, &format!("select_file failed: {err:?}"))
+                Ok(s) => s,
+                Err(err) => {
+                    self.fail(
+                        id,
+                        row.download_id,
+                        &format!("MediaSource not found: {err:?}"),
+                    )
                     .await;
-
-                return Err(err);
-            }
+                    return Err(err);
+                }
+            };
 
             let supervisor = Supervisor::new(
                 self.0.db.clone(),
                 self.0.events.clone(),
                 self.0.config.clone(),
                 id,
-                (row.info_hash, row.file_idx),
+                source,
                 PretranscodingOutputPath::new(
                     &self.0.storage,
                     row.download_id,

@@ -1,5 +1,6 @@
 pub(super) async fn transcode(
     config: &crate::Config,
+    source: &crate::downloads::MediaSource,
     copy_video: bool,
     start_time: f64,
     audio_index: usize,
@@ -14,19 +15,23 @@ pub(super) async fn transcode(
         pre_args.extend_from_slice(&["-ss".into(), format!("{:.3}", start_time), "-copyts".into()]);
     }
 
-    // Feed ffmpeg from stdin using the torrent stream, which blocks on
-    // missing pieces rather than hitting premature EOF on a partial file.
     let mut command = tokio::process::Command::new("ffmpeg");
+    command.args(&pre_args);
+    // Disk sources read the file directly (cheap, no pump). Engine sources
+    // pipe through stdin so ffmpeg blocks on missing pieces rather than hitting
+    // premature EOF on a partial file.
+    match source.ffmpeg_input_spec() {
+        crate::downloads::FfmpegInputSpec::Path(p) => {
+            command.arg("-i").arg(p);
+            command.stdin(std::process::Stdio::null());
+        }
+        crate::downloads::FfmpegInputSpec::Pipe => {
+            command.args(["-i", "pipe:0"]);
+            command.stdin(std::process::Stdio::piped());
+        }
+    }
     command
-        .args(&pre_args)
-        .args([
-            "-i",
-            "pipe:0",
-            "-map",
-            "0:v:0",
-            "-map",
-            &format!("0:a:{}", audio_index),
-        ])
+        .args(["-map", "0:v:0", "-map", &format!("0:a:{}", audio_index)])
         .args(&video.filter)
         .args(&video.encode)
         .args([
@@ -55,7 +60,6 @@ pub(super) async fn transcode(
             "event",
         ])
         .arg(playlist_path.to_str().unwrap_or(""))
-        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -117,6 +121,7 @@ pub(super) fn local_transcode(
 
 pub(crate) async fn pretranscode(
     config: &crate::Config,
+    source: &crate::downloads::MediaSource,
     copy_video: bool,
     audio_index: i32,
     path: &std::path::Path,
@@ -125,22 +130,26 @@ pub(crate) async fn pretranscode(
 
     // Pretranscodes run at higher-than-live quality settings by default.
     let mut cmd = tokio::process::Command::new("ffmpeg");
-    cmd.args(&video.pre_input)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-nostats",
-            "-progress",
-            "pipe:1",
-            "-y",
-            "-i",
-            "pipe:0",
-            "-map",
-            "0:v:0",
-            "-map",
-            &format!("0:a:{audio_index}"),
-        ])
+    cmd.args(&video.pre_input).args([
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-nostats",
+        "-progress",
+        "pipe:1",
+        "-y",
+    ]);
+    match source.ffmpeg_input_spec() {
+        crate::downloads::FfmpegInputSpec::Path(p) => {
+            cmd.arg("-i").arg(p);
+            cmd.stdin(std::process::Stdio::null());
+        }
+        crate::downloads::FfmpegInputSpec::Pipe => {
+            cmd.args(["-i", "pipe:0"]);
+            cmd.stdin(std::process::Stdio::piped());
+        }
+    }
+    cmd.args(["-map", "0:v:0", "-map", &format!("0:a:{audio_index}")])
         .args(&video.filter)
         .args(&video.encode)
         .args([
@@ -158,7 +167,6 @@ pub(crate) async fn pretranscode(
             "mp4",
         ])
         .arg(path)
-        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);

@@ -10,7 +10,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 
 use crate::app::{AppContext, Error};
-use crate::downloads::TorrentEngine;
 use crate::hls;
 
 // Paths come from the `#[draad::raw]` schema (`crate::api::urls`) so the route
@@ -177,19 +176,19 @@ async fn stream_file(
     Path((info_hash, file_idx)): Path<(String, usize)>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, RawError> {
-    let engine = TorrentEngine::get();
-    // Block until the torrent is loaded and its metadata is known.
-    engine.ensure_torrent(&info_hash, &ctx.config).await?;
-    engine.select_file(&info_hash, file_idx).await?;
-    // Record the active stream in the DB so the manager picks it up too.
-    crate::downloads::types::Download::ensure_download(
-        &ctx,
+    // Ensure the download is progressing (or completed), and get a reader over
+    // wherever its bytes live: disk for a completed download, engine stream
+    // for one still in flight.
+    let source = crate::downloads::MediaSource::ensure_and_locate(
+        &ctx.downloads,
+        &ctx.storage,
         &info_hash,
         file_idx as i32,
         crate::downloads::DownloadPriority::Stream,
     )
     .await?;
-    let reader = engine.stream(&info_hash, file_idx)?;
+
+    let reader = source.open_reader().await?;
     let total_size = reader.len;
 
     let range_header = req
