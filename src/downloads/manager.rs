@@ -227,12 +227,14 @@ impl Handle {
         {
             tracing::debug!(?err, id, "Could not pause");
         }
-        sqlx::query!("UPDATE downloads SET status = 'paused' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
-            .execute(&self.0.db)
-            .await
-            .map_err(Error::DatabaseError)?;
 
-        self.emit_status_update(id, super::types::DownloadStatus::Paused);
+        let res = sqlx::query!("UPDATE downloads SET status = 'paused' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
+            .execute(&self.0.db)
+            .await?;
+
+        if res.rows_affected() > 0 {
+            self.emit_status_update(id, super::types::DownloadStatus::Paused);
+        }
 
         Ok(())
     }
@@ -248,12 +250,14 @@ impl Handle {
         {
             tracing::debug!(?err, id, "Could not re-enqueue");
         }
-        sqlx::query!("UPDATE downloads SET status = 'queued' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
-            .execute(&self.0.db)
-            .await
-            .map_err(Error::DatabaseError)?;
 
-        self.emit_status_update(id, super::types::DownloadStatus::Queued);
+        let res = sqlx::query!("UPDATE downloads SET status = 'queued' WHERE id = $1 AND status NOT IN ('completed', 'failed')", id)
+            .execute(&self.0.db)
+            .await?;
+
+        if res.rows_affected() > 0 {
+            self.emit_status_update(id, super::types::DownloadStatus::Queued);
+        }
 
         Ok(())
     }
@@ -268,15 +272,17 @@ impl Handle {
         {
             tracing::warn!(?err, id, "Could not cancel");
         }
-        sqlx::query!(
+
+        let res = sqlx::query!(
             "UPDATE downloads SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')",
             id
         )
         .execute(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
 
-        self.emit_status_update(id, super::types::DownloadStatus::Cancelled);
+        if res.rows_affected() > 0 {
+            self.emit_status_update(id, super::types::DownloadStatus::Cancelled);
+        }
 
         Ok(())
     }
@@ -291,10 +297,11 @@ impl Handle {
         {
             tracing::warn!(?err, id, "Could not remove the torrent");
         }
+
         sqlx::query!("DELETE FROM downloads WHERE id = $1", id)
             .execute(&self.0.db)
-            .await
-            .map_err(Error::DatabaseError)?;
+            .await?;
+
         Ok(())
     }
 
