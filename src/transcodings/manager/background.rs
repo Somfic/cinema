@@ -34,7 +34,7 @@ impl super::Handle {
                 WHERE download_id = $1
                     AND only_audio = $2
                     AND audio_index = $3
-                    AND status in ('queued', 'transcoding', 'completed')
+                    AND status in ('queued', 'transcoding', 'paused', 'completed')
             "#,
             download_id,
             only_audio,
@@ -75,19 +75,74 @@ impl super::Handle {
         Ok(id)
     }
 
-    /// Cancel a running/queued pretranscoding. Deletes partial output; leaves
-    /// the row in `cancelled` state so the user can see what happened.
-    pub async fn cancel(&self, id: i32) -> crate::app::Result<()> {
-        if self.0.supervisor_pool.cancel(id) {
-            tracing::info!(id, "Cancelling the pretranscoding");
+    /// Pause a running (or queued) pretranscoding. ffmpeg is signalled with
+    /// SIGINT so it flushes a valid `moov`, the segment is kept, and the
+    /// row's `transcoded_ms` becomes the resume checkpoint. Resume via
+    /// [`resume`](Self::resume).
+    pub async fn pause(&self, id: i32) -> crate::app::Result<()> {
+        // Set the target status BEFORE firing the cancel token so the
+        // supervisor reads `paused` and does a soft stop (SIGINT, keep segment).
+        let download_id = sqlx::query_scalar!(
+            "UPDATE pretranscodings SET status = 'paused' WHERE id = $1 AND status IN ('queued', 'transcoding') RETURNING download_id",
+            id,
+        )
+        .fetch_optional(&self.0.db)
+        .await?;
+
+        if let Some(download_id) = download_id {
+            if self.0.supervisor_pool.cancel(id) {
+                tracing::info!(id, "Pausing the pretranscoding");
+            }
+
+            self.emit_status_update(id, download_id, super::PretranscodingStatus::Paused);
         }
 
+        Ok(())
+    }
+
+    /// Resume a paused pretranscoding: flip back to `queued` and nudge the
+    /// pool. `refresh()` picks it up and the supervisor resumes with `-ss`
+    /// pointing at the persisted checkpoint.
+    pub async fn resume(&self, id: i32) -> crate::app::Result<()> {
+        let download_id = sqlx::query_scalar!(
+            "UPDATE pretranscodings SET status = 'queued', error = NULL WHERE id = $1 AND status = 'paused' RETURNING download_id",
+            id,
+        )
+        .fetch_optional(&self.0.db)
+        .await?;
+
+        if let Some(download_id) = download_id {
+            self.emit_status_update(id, download_id, super::PretranscodingStatus::Queued);
+            self.0.supervisor_pool.nudge().await;
+        }
+
+        Ok(())
+    }
+
+    /// Cancel a running/queued/paused pretranscoding. Deletes all partial
+    /// segments; leaves the row in `cancelled` state so the user can see what
+    /// happened.
+    pub async fn cancel(&self, id: i32) -> crate::app::Result<()> {
         let row = sqlx::query!(
             "SELECT download_id, only_audio, audio_index FROM pretranscodings WHERE id = $1",
             id
         )
         .fetch_optional(&self.0.db)
         .await?;
+
+        // Set `cancelled` first so a running supervisor sees a non-soft target
+        // status when the cancel token fires and cleans up segments itself.
+        let res = sqlx::query!(
+            "UPDATE pretranscodings SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')",
+            id,
+        )
+        .execute(&self.0.db)
+        .await?;
+
+        let was_running = self.0.supervisor_pool.cancel(id);
+        if was_running {
+            tracing::info!(id, "Cancelling the pretranscoding");
+        }
 
         if let Some(row) = &row {
             let path = crate::transcodings::PretranscodingOutputPath::new(
@@ -96,17 +151,17 @@ impl super::Handle {
                 row.only_audio,
                 row.audio_index,
             );
-            let _ = tokio::fs::remove_file(path.with_extension("mp4.part")).await;
+            if !was_running {
+                // No supervisor to run finalize; the manager cleans segments.
+                path.remove_all_segments().await;
+            }
+            // If a supervisor was running, its HardCancelled finalize wipes
+            // segments; a duplicate delete here would race the writer.
         }
 
-        sqlx::query!(
-            "UPDATE pretranscodings SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')",
-            id,
-        )
-        .execute(&self.0.db)
-        .await?;
-
-        if let Some(row) = row {
+        if let Some(row) = row
+            && res.rows_affected() > 0
+        {
             self.emit_status_update(id, row.download_id, super::PretranscodingStatus::Cancelled);
         }
 
@@ -154,9 +209,7 @@ impl super::Handle {
             if let Err(err) = tokio::fs::remove_file(&path).await {
                 tracing::warn!(?err, "Could not remove the pretranscoding file");
             }
-            if let Err(err) = tokio::fs::remove_file(path.with_extension("mp4.part")).await {
-                tracing::warn!(?err, "Could not remove the pretranscoding part file");
-            }
+            path.remove_all_segments().await;
 
             self.0.events.transcodings.emit_removed(
                 &crate::api::transcodings::PretranscodingRemoved {
@@ -206,9 +259,7 @@ impl super::Handle {
             if let Err(err) = tokio::fs::remove_file(&path).await {
                 tracing::warn!(?err, "Could not remove the pretranscoding file");
             }
-            if let Err(err) = tokio::fs::remove_file(path.with_extension("mp4.part")).await {
-                tracing::warn!(?err, "Could not remove the pretranscoding part file");
-            }
+            path.remove_all_segments().await;
 
             self.0.events.transcodings.emit_removed(
                 &crate::api::transcodings::PretranscodingRemoved {

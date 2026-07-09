@@ -303,43 +303,28 @@ impl super::Handle {
     }
 
     /// On-evict callback for `acquire_evicting`. Re-queues the victim
-    /// pretranscoding in the DB, removes its `.part` file, and fires the
-    /// supervisor's cancel token so the slot is released. Runs BEFORE the
-    /// cancel, so the supervisor's finalize sees `status != 'transcoding'`
-    /// and does not overwrite our `queued` transition (see
-    /// [`Supervisor::finalize`]).
+    /// pretranscoding in the DB and fires the supervisor's cancel token so
+    /// the slot is released. `status = 'queued'` is set BEFORE cancel so the
+    /// supervisor reads it as a soft stop: ffmpeg gets SIGINT, the current
+    /// segment is finalized with a valid `moov`, `transcoded_ms` is preserved,
+    /// and when capacity frees up the pretranscode resumes from checkpoint
+    /// (see [`Supervisor::finalize`]).
     ///
     /// [`Supervisor::finalize`]: crate::transcodings::supervisor::Supervisor
     async fn evict_pretranscoding_for_stream(&self, id: i32) -> crate::app::Result<()> {
         tracing::info!(id, "Evicting pretranscoding for live stream");
 
-        let row = sqlx::query!(
-            "SELECT download_id, only_audio, audio_index FROM pretranscodings WHERE id = $1",
-            id
+        // Flip status back to `queued` before cancelling the supervisor.
+        // `transcoded_ms` is kept so the resume picks up where we left off.
+        let download_id = sqlx::query_scalar!(
+            "UPDATE pretranscodings SET status = 'queued', error = NULL WHERE id = $1 AND status = 'transcoding' RETURNING download_id",
+            id,
         )
         .fetch_optional(&self.0.db)
         .await?;
 
-        // Flip status back to `queued` before cancelling the supervisor.
-        let res = sqlx::query!(
-            "UPDATE pretranscodings SET status = 'queued', transcoded_ms = 0, error = NULL WHERE id = $1 AND status = 'transcoding'",
-            id,
-        )
-        .execute(&self.0.db)
-        .await?;
-
-        if let Some(row) = row {
-            let path = crate::transcodings::PretranscodingOutputPath::new(
-                &self.0.storage,
-                row.download_id,
-                row.only_audio,
-                row.audio_index,
-            );
-            let _ = tokio::fs::remove_file(path.with_extension("mp4.part")).await;
-
-            if res.rows_affected() > 0 {
-                self.emit_status_update(id, row.download_id, super::PretranscodingStatus::Queued);
-            }
+        if let Some(download_id) = download_id {
+            self.emit_status_update(id, download_id, super::PretranscodingStatus::Queued);
         }
 
         // Fire the supervisor's cancel token so its finalize runs and the

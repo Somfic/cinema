@@ -87,7 +87,10 @@
 
 	function activePretranscoding(id: number): Pretranscoding | undefined {
 		return pretranscodings[id]?.find(
-			(pt) => pt.status === "Transcoding" || pt.status === "Queued",
+			(pt) =>
+				pt.status === "Transcoding" ||
+				pt.status === "Queued" ||
+				pt.status === "Paused",
 		);
 	}
 
@@ -128,7 +131,7 @@
 		const unsubOnDownloadRemove = api.downloadsEvents.onRemoved((id) => {
 			recentlyRemovedDownloads.add(id);
 
-			downloads = downloads.filter((it) => it.id === id);
+			downloads = downloads.filter((it) => it.id !== id);
 			delete pretranscodings[id];
 		});
 
@@ -370,9 +373,11 @@
 											<Text size="xs" variant="muted">
 												{activePt.status === "Queued"
 													? "Pretranscode queued"
-													: ptPct != null
-														? `Pretranscoding · ${ptPct}%`
-														: "Pretranscoding · waiting for pieces"}
+													: activePt.status === "Paused"
+														? `Pretranscode paused${ptPct != null ? ` · ${ptPct}%` : ""}`
+														: ptPct != null
+															? `Pretranscoding · ${ptPct}%`
+															: "Pretranscoding · waiting for pieces"}
 											</Text>
 										</div>
 									{/if}

@@ -73,6 +73,26 @@
 		}
 	}
 
+	async function pause(pt: Pretranscoding) {
+		try {
+			await api.transcodings.pause(pt.id);
+		} catch (err: unknown) {
+			toast.error(
+				`Pause failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
+
+	async function resume(pt: Pretranscoding) {
+		try {
+			await api.transcodings.resume(pt.id);
+		} catch (err: unknown) {
+			toast.error(
+				`Resume failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
+
 	async function remove(pt: Pretranscoding) {
 		try {
 			await api.transcodings.remove(pt.id);
@@ -109,16 +129,18 @@
 								class="chip"
 								class:chip--transcoding={pt.status === "Transcoding"}
 								class:chip--queued={pt.status === "Queued"}
+								class:chip--paused={pt.status === "Paused"}
 								class:chip--done={pt.status === "Completed"}
 								class:chip--failed={pt.status === "Failed"}
 							>
 								{PRETRANSCODING_STATUS_LABEL[pt.status]}
 							</span>
 						</div>
-						{#if pt.status === "Transcoding"}
+						{#if pt.status === "Transcoding" || pt.status === "Paused"}
 							<div class="bar-wrap">
 								<div
 									class="bar"
+									class:bar--paused={pt.status === "Paused"}
 									style={pct != null
 										? `width: ${pct}%`
 										: "width: 100%; opacity: 0.4"}
@@ -133,6 +155,10 @@
 					</div>
 					<div class="row-actions">
 						{#if pt.status === "Transcoding" || pt.status === "Queued"}
+							<Button icon="Pause" variant="ghost" onclick={() => pause(pt)} />
+							<Button icon="X" variant="ghost" onclick={() => cancel(pt)} />
+						{:else if pt.status === "Paused"}
+							<Button icon="Play" variant="ghost" onclick={() => resume(pt)} />
 							<Button icon="X" variant="ghost" onclick={() => cancel(pt)} />
 						{:else}
 							<Button icon="Trash" variant="ghost" onclick={() => remove(pt)} />
@@ -260,6 +286,10 @@
 	.chip--queued {
 		background: rgba(255, 255, 255, 0.1);
 	}
+	.chip--paused {
+		background: rgba(234, 179, 8, 0.2);
+		color: rgb(234, 179, 8);
+	}
 	.chip--done {
 		background: rgba(34, 197, 94, 0.2);
 		color: rgb(34, 197, 94);
@@ -281,6 +311,9 @@
 		background: $primary;
 		border-radius: 2px;
 		transition: width 0.5s;
+	}
+	.bar--paused {
+		background: rgb(234, 179, 8);
 	}
 
 	.pretranscoding-options {

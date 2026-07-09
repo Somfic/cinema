@@ -114,7 +114,9 @@ impl Handle {
 
     /// Boot-time recovery. A partial MP4 without its moov atom is unusable, so
     /// any row left mid-flight from a previous run is marked failed and its
-    /// `.part` file is scrubbed. Also picks up any `queued` rows.
+    /// segment files are scrubbed. Also picks up any `queued` rows. Rows in
+    /// `paused` state are left alone: their segments were finalized cleanly
+    /// on the pause SIGINT path and are safe to resume.
     pub async fn boot(&self) -> crate::app::Result<()> {
         // Collect the rows we're about to fail so we can also delete their
         // partial output files.
@@ -136,9 +138,7 @@ impl Handle {
                 row.only_audio,
                 row.audio_index,
             );
-            if let Err(err) = tokio::fs::remove_file(path.with_extension("mp4.part")).await {
-                tracing::warn!(?err, ?path, "Could not remove partial pretranscoding");
-            }
+            path.remove_all_segments().await;
         }
 
         let reset = sqlx::query!(

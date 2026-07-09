@@ -10,6 +10,7 @@ use crate::{
 pub enum PretranscodingStatus {
     Queued,
     Transcoding,
+    Paused,
     Completed,
     Cancelled,
     Failed,

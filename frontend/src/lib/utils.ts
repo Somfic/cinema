@@ -41,6 +41,7 @@ export const DOWNLOAD_STATUS_LABEL: Record<DownloadStatus, string> = {
 export const PRETRANSCODING_STATUS_LABEL: Record<PretranscodingStatus, string> = {
 	Queued: "Queued",
 	Transcoding: "Transcoding",
+	Paused: "Paused",
 	Completed: "Cached",
 	Failed: "Failed",
 	Cancelled: "Cancelled",

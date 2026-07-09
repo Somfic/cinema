@@ -125,6 +125,7 @@ pub(crate) async fn pretranscode(
     copy_video: bool,
     audio_index: i32,
     path: &std::path::Path,
+    start_time: f64,
 ) -> tokio::process::Command {
     let video = super::pipeline::VideoPipeline::new(config, copy_video, false).await;
 
@@ -139,6 +140,12 @@ pub(crate) async fn pretranscode(
         "pipe:1",
         "-y",
     ]);
+    // Resume from a checkpoint: ffmpeg discards packets up to the target PTS
+    // for both pipe and disk inputs. Placed before `-i` so seek is at demux
+    // time rather than a full decode-then-drop.
+    if start_time > 0.0 {
+        cmd.args(["-ss".to_string(), format!("{start_time:.3}")]);
+    }
     match source.ffmpeg_input_spec() {
         crate::downloads::FfmpegInputSpec::Path(p) => {
             cmd.arg("-i").arg(p);
@@ -171,5 +178,32 @@ pub(crate) async fn pretranscode(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
+    cmd
+}
+
+/// Concat-copy the pretranscoded segments into the final MP4 with `+faststart`.
+/// All segments must have been produced with identical encoder parameters,
+/// which holds because `VideoPipeline` is deterministic per `Config`.
+pub(crate) fn concat(list_path: &std::path::Path, out_path: &std::path::Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-nostats",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+    ])
+    .arg(list_path)
+    .args(["-c", "copy", "-movflags", "+faststart"])
+    .arg(out_path)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::piped())
+    .kill_on_drop(true);
     cmd
 }
