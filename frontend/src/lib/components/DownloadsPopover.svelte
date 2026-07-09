@@ -26,9 +26,22 @@
 	// live from the pretranscodingsEvents socket subscription below.
 	let pretranscodings = $state<Record<number, Pretranscoding[]>>({});
 
-	const activeCount = $derived(
+	// Number of live HLS viewer sessions currently holding a slot in the
+	// transcodings semaphore. Hydrated on mount, kept live via hlsEvents.
+	let liveHlsCount = $state(0);
+
+	const activeDownloadsCount = $derived(
 		downloads.filter((d) => d.status === "Queued" || d.status === "Downloading")
 			.length,
+	);
+	const activePretranscodingCount = $derived(
+		Object.values(pretranscodings)
+			.flatMap((p) => p)
+			.filter((p) => p.status === "Queued" || p.status === "Transcoding")
+			.length,
+	);
+	const badgeCount = $derived(
+		activeDownloadsCount + activePretranscodingCount + liveHlsCount,
 	);
 
 	let loading = $state(false);
@@ -45,11 +58,13 @@
 			recentlyRemovedDownloads.clear();
 			recentlyRemovedPretranscodings.clear();
 
-			const [ds, pts] = await Promise.all([
+			const [ds, pts, lc] = await Promise.all([
 				api.downloads.list(),
 				api.transcodings.list(),
+				api.hls.liveCount(),
 			]);
 			downloads = ds.filter((it) => !recentlyRemovedDownloads.has(it.id));
+			liveHlsCount = lc;
 
 			const grouped: Record<number, Pretranscoding[]> = {};
 			for (const pt of pts) {
@@ -168,6 +183,10 @@
 			},
 		);
 
+		const unsubOnHlsLiveCount = api.hlsEvents.onLiveCount((n) => {
+			liveHlsCount = n;
+		});
+
 		unsub = () => {
 			unsubOnDownloadProgress();
 			unsubOnDownloadStatusUpdate();
@@ -176,6 +195,8 @@
 			unsubOnPretranscodingProgress();
 			unsubOnPretranscodingStatusUpdate();
 			unsubOnPretranscodingRemove();
+
+			unsubOnHlsLiveCount();
 		};
 	});
 
@@ -241,14 +262,24 @@
 			);
 		}
 	}
+
+	async function killAllLive() {
+		try {
+			await api.hls.stopAll();
+		} catch (err: unknown) {
+			toast.error(
+				`Stop all failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
 </script>
 
 <Popover align="right">
 	{#snippet trigger()}
 		<div class="trigger-wrap">
 			<Button icon="Download" variant="ghost" />
-			{#if activeCount > 0}
-				<span class="badge">{activeCount}</span>
+			{#if badgeCount > 0}
+				<span class="badge">{badgeCount}</span>
 			{/if}
 		</div>
 	{/snippet}
@@ -256,6 +287,14 @@
 		<div class="popover-panel">
 			<div class="panel-header">
 				<Text size="lg" weight="semibold">Downloads</Text>
+				{#if liveHlsCount > 0}
+					<Button
+						label={`Kill ${liveHlsCount} HLS`}
+						variant="danger"
+						onclick={killAllLive}
+						class="kill-hls"
+					/>
+				{/if}
 			</div>
 			{#if downloads.length === 0}
 				<div class="empty">
@@ -432,6 +471,14 @@
 		padding: 0.5rem 0.75rem;
 		border-bottom: $border;
 		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+
+		:global(.kill-hls) {
+			font-size: 0.75rem;
+		}
 	}
 
 	.empty {

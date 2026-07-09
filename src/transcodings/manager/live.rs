@@ -260,16 +260,24 @@ impl super::Handle {
                 return Err(err);
             }
 
-            // Startup succeeded. Spawn the keeper future that holds the slot
-            // until stop_live / cleanup_idle_live / shutdown fires the cancel
-            // token; on cancel the LiveSession is dropped, which kills ffmpeg
-            // and removes its temp dir.
+            // Startup succeeded. Emit the new live-count and spawn the keeper
+            // future that holds the slot until stop_live / cleanup_idle_live /
+            // shutdown fires the cancel token; on cancel the LiveSession is
+            // dropped, which kills ffmpeg and removes its temp dir.
+            {
+                let map = self.0.sessions.lock().await;
+                self.0.events.hls.emit_live_count(&map.len());
+            }
             let sessions = self.0.sessions.clone();
+            let events = self.0.events.clone();
             let session_id_for_keeper = session_id.clone();
             let playlist_url = format!("/api/hls/{session_id}/playlist.m3u8");
             slot.spawn(async move {
                 cancel.cancelled().await;
-                sessions.lock().await.remove(&session_id_for_keeper);
+                let mut map = sessions.lock().await;
+                if map.remove(&session_id_for_keeper).is_some() {
+                    events.hls.emit_live_count(&map.len());
+                }
             });
 
             Ok(super::PlaybackSession {
@@ -281,7 +289,12 @@ impl super::Handle {
         tokio::select! {
             biased;
             _ = cancel_clone.cancelled() => {
-                self.0.sessions.lock().await.remove(&session_id);
+                {
+                    let mut map = self.0.sessions.lock().await;
+                    if map.remove(&session_id).is_some() {
+                        self.0.events.hls.emit_live_count(&map.len());
+                    }
+                }
 
                 Err(crate::app::Error::Generic(String::from("Transcoding has been cancelled")))
             }
@@ -339,16 +352,22 @@ impl super::Handle {
 
     /// Stop a live session by id. Idempotent for unknown ids.
     pub async fn stop_live(&self, session_id: &str) {
-        let pool_id = self
-            .0
-            .sessions
-            .lock()
-            .await
-            .remove(session_id)
-            .map(|s| s.pool_id);
+        let pool_id = {
+            let mut map = self.0.sessions.lock().await;
+            let pool_id = map.remove(session_id).map(|s| s.pool_id);
+            if pool_id.is_some() {
+                self.0.events.hls.emit_live_count(&map.len());
+            }
+            pool_id
+        };
         if let Some(pool_id) = pool_id {
             self.0.supervisor_pool.cancel(pool_id);
         }
+    }
+
+    /// Current number of live HLS sessions. Reads the in-memory session map.
+    pub async fn live_session_count(&self) -> usize {
+        self.0.sessions.lock().await.len()
     }
 
     /// Update a live session's last-access timestamp. Called on every
@@ -386,9 +405,14 @@ impl super::Handle {
         let stale: Vec<i32> = {
             let mut map = self.0.sessions.lock().await;
             let now = Instant::now();
-            map.extract_if(|_, session| now.duration_since(session.last_access) > max_idle)
+            let stale: Vec<i32> = map
+                .extract_if(|_, session| now.duration_since(session.last_access) > max_idle)
                 .map(|(_, session)| session.pool_id)
-                .collect()
+                .collect();
+            if !stale.is_empty() {
+                self.0.events.hls.emit_live_count(&map.len());
+            }
+            stale
         };
         let count = stale.len();
         for pool_id in stale {
@@ -397,16 +421,17 @@ impl super::Handle {
         count
     }
 
-    /// Stop every live session. Used at shutdown.
+    /// Stop every live session. Used at shutdown and from the "kill all"
+    /// action on the Downloads popover.
     pub async fn stop_all_live(&self) {
-        let pool_ids: Vec<i32> = self
-            .0
-            .sessions
-            .lock()
-            .await
-            .drain()
-            .map(|(_, session)| session.pool_id)
-            .collect();
+        let pool_ids: Vec<i32> = {
+            let mut map = self.0.sessions.lock().await;
+            let pool_ids: Vec<i32> = map.drain().map(|(_, session)| session.pool_id).collect();
+            if !pool_ids.is_empty() {
+                self.0.events.hls.emit_live_count(&map.len());
+            }
+            pool_ids
+        };
 
         for pool_id in pool_ids {
             self.0.supervisor_pool.cancel(pool_id);
