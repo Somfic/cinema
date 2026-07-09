@@ -100,7 +100,7 @@ pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<
 }
 
 pub async fn clear_app_cache(ctx: &AppContext) -> Result<(), Error> {
-    crate::hls::stop_all().await;
+    ctx.transcodings.stop_all_live().await;
 
     // Wipe every subdirectory of data_dir/fs/ except `torrents/` (downloads).
     let root = ctx.storage.path().to_path_buf();

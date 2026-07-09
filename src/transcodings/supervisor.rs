@@ -131,9 +131,9 @@ impl Supervisor {
         }
 
         let copy_video = self.output_path.only_audio
-            || crate::hls::is_browser_safe(self.source.probe_path()).await;
+            || crate::transcodings::probe::is_browser_safe(self.source.probe_path()).await;
 
-        let mut command = crate::hls::ffmpeg::pretranscode(
+        let mut command = crate::transcodings::ffmpeg::pretranscode(
             &self.config,
             &self.source,
             copy_video,
@@ -373,16 +373,26 @@ impl Supervisor {
             }
             EncodeOutcome::Cancelled => {
                 let _ = tokio::fs::remove_file(&part_path).await;
-                if let Err(err) = sqlx::query!(
-                    "UPDATE pretranscodings SET status = 'cancelled' WHERE id = $1 AND status IN ('queued', 'transcoding')",
+                // Only overwrite the row + fire the event if we were still
+                // actively transcoding. On live-stream eviction the manager
+                // has already flipped the row back to `queued` before firing
+                // the cancel token, and we don't want to clobber that with
+                // `cancelled` (nor emit a spurious status update).
+                let res = sqlx::query!(
+                    "UPDATE pretranscodings SET status = 'cancelled' WHERE id = $1 AND status = 'transcoding'",
                     self.pretranscoding_id,
                 )
                 .execute(&self.db)
-                .await
-                {
-                    tracing::warn!(?err, self.pretranscoding_id, "Failed to mark cancelled");
+                .await;
+                match res {
+                    Ok(r) if r.rows_affected() > 0 => {
+                        self.emit_status_update(PretranscodingStatus::Cancelled);
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(?err, self.pretranscoding_id, "Failed to mark cancelled");
+                    }
                 }
-                self.emit_status_update(PretranscodingStatus::Cancelled);
             }
             EncodeOutcome::Failed(msg) => {
                 let _ = tokio::fs::remove_file(&part_path).await;
@@ -394,7 +404,7 @@ impl Supervisor {
     async fn mark_failed(&self, error: &str) {
         tracing::warn!(self.pretranscoding_id, "Pretranscode failed: {error}");
         if let Err(err) = sqlx::query!(
-            "UPDATE pretranscodings SET status = 'failed', error = $1 WHERE id = $2 AND status NOT IN ('cancelled')",
+            "UPDATE pretranscodings SET status = 'failed', error = $1 WHERE id = $2 AND status NOT IN ('queued', 'cancelled')",
             error,
             self.pretranscoding_id,
         )
@@ -432,7 +442,7 @@ impl Supervisor {
             );
         }
         self.events
-            .pretranscodings
+            .transcodings
             .emit_progress(&PretranscodingProgress {
                 pretranscoding_id: self.pretranscoding_id,
                 download_id: self.output_path.download_id,
@@ -445,7 +455,7 @@ impl Supervisor {
 
     fn emit_progress(&self, ms: i64, status: PretranscodingStatus) {
         self.events
-            .pretranscodings
+            .transcodings
             .emit_progress(&PretranscodingProgress {
                 pretranscoding_id: self.pretranscoding_id,
                 download_id: self.output_path.download_id,
@@ -457,8 +467,8 @@ impl Supervisor {
     }
 
     fn emit_status_update(&self, new_status: PretranscodingStatus) {
-        self.events.pretranscodings.emit_status_update(
-            &crate::api::pretranscodings::PretranscodingStatusUpdate {
+        self.events.transcodings.emit_status_update(
+            &crate::api::transcodings::PretranscodingStatusUpdate {
                 pretranscoding_id: self.pretranscoding_id,
                 download_id: self.output_path.download_id,
                 new_status,

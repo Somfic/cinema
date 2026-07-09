@@ -48,7 +48,7 @@
 		if (audioIndex === null) return;
 		try {
 			starting = true;
-			await api.pretranscodings.enqueue({
+			await api.transcodings.enqueue({
 				download_id: download.id,
 				only_audio: onlyAudio,
 				audio_index: audioIndex,
@@ -65,7 +65,7 @@
 
 	async function cancel(pt: Pretranscoding) {
 		try {
-			await api.pretranscodings.cancel(pt.id);
+			await api.transcodings.cancel(pt.id);
 		} catch (err: unknown) {
 			toast.error(
 				`Cancel failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -75,7 +75,7 @@
 
 	async function remove(pt: Pretranscoding) {
 		try {
-			await api.pretranscodings.remove(pt.id);
+			await api.transcodings.remove(pt.id);
 		} catch (err: unknown) {
 			toast.error(
 				`Remove failed: ${err instanceof Error ? err.message : String(err)}`,

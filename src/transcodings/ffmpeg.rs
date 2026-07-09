@@ -1,4 +1,4 @@
-pub(super) async fn transcode(
+pub(crate) async fn transcode(
     config: &crate::Config,
     source: &crate::downloads::MediaSource,
     copy_video: bool,
@@ -67,7 +67,7 @@ pub(super) async fn transcode(
     command
 }
 
-pub(super) fn local_transcode(
+pub(crate) fn local_transcode(
     start_time: f64,
     path: &std::path::Path,
     playlist_path: &std::path::Path,

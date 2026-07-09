@@ -10,7 +10,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 
 use crate::app::{AppContext, Error};
-use crate::hls;
 
 // Paths come from the `#[draad::raw]` schema (`crate::api::urls`) so the route
 // strings and the frontend's `api.urls.*` builders can't drift. draad owns the
@@ -201,22 +200,25 @@ async fn stream_file(
 }
 
 async fn hls_serve(
+    State(ctx): State<AppContext>,
     Path((session_id, file)): Path<(String, String)>,
 ) -> Result<axum::response::Response, RawError> {
     if file.contains("..") || file.contains('/') {
         return Err(Error::Generic("Invalid path".into()).into());
     }
 
-    let dir = hls::session_dir(&session_id)
+    let dir = ctx
+        .transcodings
+        .live_session_dir(&session_id)
         .await
         .ok_or_else(|| Error::NotFound("HLS session not found".into()))?;
-    hls::touch(&session_id).await;
+    ctx.transcodings.touch_live(&session_id).await;
 
     let full_path = dir.join(&file);
     let bytes = match tokio::fs::read(&full_path).await {
         Ok(b) => b,
         Err(_) => {
-            if let Some(error) = hls::session_error(&session_id).await {
+            if let Some(error) = ctx.transcodings.live_session_error(&session_id).await {
                 return Err(
                     Error::Generic(format!("Stream failed (ffmpeg exited): {error}")).into(),
                 );

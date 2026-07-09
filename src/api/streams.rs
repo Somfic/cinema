@@ -90,7 +90,7 @@ pub trait StreamsApi {
         &self,
         info_hash: String,
         file_idx: i32,
-        audio: i64,
+        audio: i32,
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error>;
@@ -250,87 +250,20 @@ impl StreamsApi for AppContext {
         &self,
         info_hash: String,
         file_idx: i32,
-        audio: i64,
+        audio: i32,
         t: f64,
         only_audio: bool,
     ) -> Result<RemuxSession, Error> {
-        let source = crate::downloads::MediaSource::ensure_and_locate(
-            &self.downloads,
-            &self.storage,
-            &info_hash,
-            file_idx,
-            crate::downloads::DownloadPriority::Stream,
-        )
-        .await?;
-
-        // Fast path: if a cached pretranscoded MP4 exists for the exact same
-        // (info_hash, file_idx, only_audio, audio_index) request, serve it
-        // instead of paying for the live transcode. On any inconsistency
-        // (file missing on disk) we mark the row failed and fall through to
-        // the live path so playback still works.
-        if let Some(cached) =
-            crate::pretranscodings::types::CompletedPretranscoding::find_completed(
-                &self.db,
-                &info_hash,
-                file_idx,
-                only_audio,
-                audio as i32,
-            )
-            .await?
-        {
-            let path = crate::pretranscodings::PretranscodingOutputPath::new(
-                &self.storage,
-                cached.download_id,
-                only_audio,
-                audio as i32,
-            );
-
-            if tokio::fs::metadata(&path).await.is_ok() {
-                let (session_id, playlist_url) =
-                    crate::hls::start_session_from_local(&self.storage, &self.config, path, t)
-                        .await?;
-
-                return Ok(RemuxSession {
-                    session_id,
-                    playlist_url,
-                });
-            } else {
-                tracing::warn!(
-                    id = cached.id,
-                    path = %path.display(),
-                    "Cached pretranscoded MP4 missing on disk; marking failed and falling through to live transcode"
-                );
-                if let Err(err) = sqlx::query!(
-                    "UPDATE pretranscodings SET status = 'failed', error = 'output file missing' WHERE id = $1",
-                    cached.id
-                )
-                .execute(&self.db)
-                .await {
-                    tracing::warn!(id = cached.id, ?err, "Failed to mark pretranscoding as failed, database out of sync!")
-                } else {
-                    self.events.pretranscodings.emit_status_update(&super::pretranscodings::PretranscodingStatusUpdate {
-                        pretranscoding_id: cached.id,
-                        download_id: cached.download_id,
-                        new_status: crate::pretranscodings::types::PretranscodingStatus::Failed
-                    });
-                }
-            }
-        }
-
-        let (session_id, playlist_url) = crate::hls::start_session(
-            &self.storage,
-            &self.config,
-            source,
-            crate::hls::HlsSessionStartInput {
-                audio_index: audio as usize,
-                start_time: t,
-                only_audio,
-            },
-        )
-        .await?;
+        // The manager owns the cache-hit-vs-live-transcode decision, torrent
+        // acquisition at Stream priority, and ffmpeg lifecycle. Consumers
+        // just get back a session id + playlist URL.
+        let session = self
+            .transcodings
+            .start_playback(&info_hash, file_idx, audio, only_audio, t)
+            .await?;
         Ok(RemuxSession {
-            session_id,
-            playlist_url,
+            session_id: session.session_id,
+            playlist_url: session.playlist_url,
         })
     }
 

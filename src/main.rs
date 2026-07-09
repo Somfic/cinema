@@ -12,15 +12,14 @@ mod app;
 mod config;
 mod downloads;
 mod file_system;
-mod hls;
 mod logging;
-mod pretranscodings;
 mod proxy;
 mod raw;
 mod streams;
 mod subtitles;
 mod tmdb;
 mod trailer;
+mod transcodings;
 mod utils;
 mod ws;
 
@@ -135,7 +134,7 @@ async fn run() -> Result<()> {
         config.clone(),
         storage.clone(),
     );
-    let pretranscodings_handle = pretranscodings::Handle::new(
+    let transcodings_handle = transcodings::Handle::new(
         pool.clone(),
         events.clone(),
         downloads_handle.clone(),
@@ -153,7 +152,7 @@ async fn run() -> Result<()> {
         clients: app::ClientRoster::new(),
         http,
         downloads: downloads_handle,
-        pretranscodings: pretranscodings_handle,
+        transcodings: transcodings_handle,
     };
 
     // Initialize torrent engine
@@ -163,15 +162,20 @@ async fn run() -> Result<()> {
         tracing::error!(?err, "Download boot recovery failed");
     }
 
-    if let Err(err) = ctx.pretranscodings.boot().await {
+    if let Err(err) = ctx.transcodings.boot().await {
         tracing::error!(?err, "Pretranscoding boot recovery failed");
     }
 
-    // HLS session cleanup reaper
-    tokio::spawn(async {
+    // Live-session idle reaper (drops HLS sessions the client hasn't
+    // touched in 120s, freeing capacity slots for other work).
+    let reaper_ctx = ctx.clone();
+    let hls_session_reaper = tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            hls::cleanup_idle(120).await;
+            reaper_ctx
+                .transcodings
+                .cleanup_idle_live(std::time::Duration::from_secs(120))
+                .await;
         }
     });
 
@@ -228,9 +232,10 @@ async fn run() -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // Shutdown
-    hls::stop_all().await;
-    ctx.pretranscodings.shutdown().await;
+    hls_session_reaper.abort();
+    // Shutdown. `transcodings.shutdown()` also stops every live HLS
+    // session, so ffmpeg children die before we drop the torrent engine.
+    ctx.transcodings.shutdown().await;
     ctx.downloads.shutdown().await;
     downloads::TorrentEngine::get().shutdown().await;
 

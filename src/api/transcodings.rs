@@ -1,6 +1,6 @@
 use crate::app::{AppContext, Error};
-use crate::pretranscodings::PretranscodingProgress;
-use crate::pretranscodings::types::{Pretranscoding, PretranscodingStatus};
+use crate::transcodings::PretranscodingProgress;
+use crate::transcodings::types::{Pretranscoding, PretranscodingStatus};
 
 #[draad::ty]
 pub struct EnqueuePretranscoding {
@@ -22,8 +22,8 @@ pub struct PretranscodingRemoved {
     pub download_id: i32,
 }
 
-#[draad::api(namespace = "pretranscodings")]
-pub trait PretranscodingsApi {
+#[draad::api(namespace = "transcodings")]
+pub trait TranscodingsApi {
     /// Lists every pretranscoding row across all downloads, newest first
     #[get]
     async fn list(&self) -> Result<Vec<Pretranscoding>, Error>;
@@ -42,28 +42,28 @@ pub trait PretranscodingsApi {
 }
 
 #[draad::api]
-impl PretranscodingsApi for AppContext {
+impl TranscodingsApi for AppContext {
     async fn list(&self) -> Result<Vec<Pretranscoding>, Error> {
         Pretranscoding::find_all(&self.db).await
     }
 
     async fn enqueue(&self, request: EnqueuePretranscoding) -> Result<i32, Error> {
-        self.pretranscodings
+        self.transcodings
             .enqueue(request.download_id, request.only_audio, request.audio_index)
             .await
     }
 
     async fn cancel(&self, id: i32) -> Result<(), Error> {
-        self.pretranscodings.cancel(id).await
+        self.transcodings.cancel(id).await
     }
 
     async fn remove(&self, id: i32) -> Result<(), Error> {
-        self.pretranscodings.remove(id).await
+        self.transcodings.remove(id).await
     }
 }
 
-#[draad::events(namespace = "pretranscodings")]
-pub trait PretranscodingsEvents {
+#[draad::events(namespace = "transcodings")]
+pub trait TranscodingsEvents {
     /// Per-pretranscoding tick with the current transcoded position.
     fn progress(payload: PretranscodingProgress);
 

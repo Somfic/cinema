@@ -47,7 +47,7 @@
 
 			const [ds, pts] = await Promise.all([
 				api.downloads.list(),
-				api.pretranscodings.list(),
+				api.transcodings.list(),
 			]);
 			downloads = ds.filter((it) => !recentlyRemovedDownloads.has(it.id));
 
@@ -117,7 +117,7 @@
 			delete pretranscodings[id];
 		});
 
-		const unsubOnPretranscodingProgress = api.pretranscodingsEvents.onProgress(
+		const unsubOnPretranscodingProgress = api.transcodingsEvents.onProgress(
 			(p) => {
 				const list = pretranscodings[p.download_id];
 				if (!list) {
@@ -139,7 +139,7 @@
 			},
 		);
 		const unsubOnPretranscodingStatusUpdate =
-			api.pretranscodingsEvents.onStatusUpdate((s) => {
+			api.transcodingsEvents.onStatusUpdate((s) => {
 				const list = pretranscodings[s.download_id];
 				if (!list) {
 					load();
@@ -152,7 +152,7 @@
 				}
 				list[idx] = { ...list[idx], status: s.new_status };
 			});
-		const unsubOnPretranscodingRemove = api.pretranscodingsEvents.onRemoved(
+		const unsubOnPretranscodingRemove = api.transcodingsEvents.onRemoved(
 			(p) => {
 				recentlyRemovedPretranscodings.add(p.pretranscoding_id);
 

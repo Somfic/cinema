@@ -1,119 +1,6 @@
-//! Pretranscoding lifecycle. Mirrors [`crate::downloads::manager`]: the DB is
-//! the source of truth, `Handle` owns in-flight supervisors and a capacity
-//! semaphore, and each operation blocks until the requested state is
-//! observable in both the process table and the DB.
+use crate::utils::supervisor_pool::Acquire;
 
-use std::sync::Arc;
-
-use crate::app::{Error, Pool, Storage};
-use crate::config::Config;
-use crate::pretranscodings::PretranscodingOutputPath;
-use crate::pretranscodings::supervisor::Supervisor;
-use crate::pretranscodings::types::PretranscodingStatus;
-use crate::utils::supervisor_pool::{Acquire, SupervisorPool};
-
-/// Cheap, cloneable handle to the pretranscoding subsystem.
-#[derive(Clone)]
-pub struct Handle(Arc<Inner>);
-
-struct Inner {
-    db: Pool,
-    events: crate::Events,
-    downloads_manager: crate::downloads::Handle,
-    config: Arc<Config>,
-    storage: Storage,
-    supervisor_pool: SupervisorPool,
-}
-
-impl Handle {
-    pub fn new(
-        db: Pool,
-        events: crate::Events,
-        downloads_manager: crate::downloads::Handle,
-        config: Arc<Config>,
-        storage: Storage,
-    ) -> Self {
-        let permits = config.max_concurrent_pretranscodings.max(1);
-        let (supervisor_pool, refetch_rx) = SupervisorPool::new("pretranscodings manager", permits);
-        let inner = Arc::new(Inner {
-            db,
-            events,
-            downloads_manager,
-            config,
-            storage,
-            supervisor_pool,
-        });
-
-        let weak = Arc::downgrade(&inner);
-        inner.supervisor_pool.attach_refresh(refetch_rx, move || {
-            let weak = weak.clone();
-            async move {
-                let Some(inner) = weak.upgrade() else {
-                    return crate::utils::supervisor_pool::RefetchResult::Break;
-                };
-
-                Self(inner).refresh().await;
-
-                crate::utils::supervisor_pool::RefetchResult::Continue
-            }
-        });
-
-        Self(inner)
-    }
-
-    /// Cancel all in-flight supervisors and wait for them to drain.
-    pub async fn shutdown(&self) {
-        self.0.supervisor_pool.shutdown().await
-    }
-
-    /// Boot-time recovery. A partial MP4 without its moov atom is unusable, so
-    /// any row left mid-flight from a previous run is marked failed and its
-    /// `.part` file is scrubbed. Also picks up any `queued` rows.
-    pub async fn boot(&self) -> crate::app::Result<()> {
-        // Collect the rows we're about to fail so we can also delete their
-        // partial output files.
-        let interrupted = sqlx::query!(
-            r#"
-                SELECT pt.id, pt.download_id, pt.only_audio, pt.audio_index
-                FROM pretranscodings pt
-                WHERE pt.status = 'transcoding'
-            "#,
-        )
-        .fetch_all(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
-
-        for row in &interrupted {
-            let path = PretranscodingOutputPath::new(
-                &self.0.storage,
-                row.download_id,
-                row.only_audio,
-                row.audio_index,
-            );
-            if let Err(err) = tokio::fs::remove_file(path.with_extension("mp4.part")).await {
-                tracing::warn!(?err, ?path, "Could not remove partial pretranscoding");
-            }
-        }
-
-        let reset = sqlx::query!(
-            "UPDATE pretranscodings SET status = 'failed', error = 'Interrupted at restart' WHERE status = 'transcoding'",
-        )
-        .execute(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
-
-        if reset.rows_affected() > 0 {
-            tracing::info!(
-                count = reset.rows_affected(),
-                "Marked interrupted pretranscodings as failed"
-            );
-        }
-
-        self.refresh().await;
-
-        Ok(())
-    }
-
+impl super::Handle {
     /// Queue a pretranscoding for the given download + audio track + mode.
     /// Idempotent - a duplicate returns the existing row id.
     pub async fn enqueue(
@@ -133,7 +20,9 @@ impl Handle {
         .await?;
 
         if exists.is_none() {
-            return Err(Error::NotFound(format!("Download {download_id} not found")));
+            return Err(crate::app::Error::NotFound(format!(
+                "Download {download_id} not found"
+            )));
         }
 
         // If a queued/transcoding/completed row exists, return it.
@@ -180,7 +69,7 @@ impl Handle {
 
         tx.commit().await?;
 
-        self.emit_status_update(id, download_id, PretranscodingStatus::Queued);
+        self.emit_status_update(id, download_id, super::PretranscodingStatus::Queued);
         self.0.supervisor_pool.nudge().await;
 
         Ok(id)
@@ -198,11 +87,10 @@ impl Handle {
             id
         )
         .fetch_optional(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
 
         if let Some(row) = &row {
-            let path = PretranscodingOutputPath::new(
+            let path = crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
                 row.download_id,
                 row.only_audio,
@@ -216,11 +104,10 @@ impl Handle {
             id,
         )
         .execute(&self.0.db)
-        .await
-        .map_err(Error::DatabaseError)?;
+        .await?;
 
         if let Some(row) = row {
-            self.emit_status_update(id, row.download_id, PretranscodingStatus::Cancelled);
+            self.emit_status_update(id, row.download_id, super::PretranscodingStatus::Cancelled);
         }
 
         Ok(())
@@ -258,7 +145,7 @@ impl Handle {
         tx.commit().await?;
 
         if let Some(row) = row {
-            let path = PretranscodingOutputPath::new(
+            let path = crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
                 row.download_id,
                 row.only_audio,
@@ -271,8 +158,8 @@ impl Handle {
                 tracing::warn!(?err, "Could not remove the pretranscoding part file");
             }
 
-            self.0.events.pretranscodings.emit_removed(
-                &crate::api::pretranscodings::PretranscodingRemoved {
+            self.0.events.transcodings.emit_removed(
+                &crate::api::transcodings::PretranscodingRemoved {
                     pretranscoding_id: id,
                     download_id: row.download_id,
                 },
@@ -310,7 +197,7 @@ impl Handle {
         tx.commit().await?;
 
         for row in &rows {
-            let path = PretranscodingOutputPath::new(
+            let path = crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
                 download_id,
                 row.only_audio,
@@ -323,8 +210,8 @@ impl Handle {
                 tracing::warn!(?err, "Could not remove the pretranscoding part file");
             }
 
-            self.0.events.pretranscodings.emit_removed(
-                &crate::api::pretranscodings::PretranscodingRemoved {
+            self.0.events.transcodings.emit_removed(
+                &crate::api::transcodings::PretranscodingRemoved {
                     pretranscoding_id: row.id,
                     download_id,
                 },
@@ -334,32 +221,7 @@ impl Handle {
         Ok(())
     }
 
-    /// Scan queued rows and start as many as fit under the concurrency cap.
-    async fn refresh(&self) {
-        let queued: Vec<i32> = match sqlx::query_scalar!(
-            "SELECT id FROM pretranscodings WHERE status = 'queued' ORDER BY created_at ASC"
-        )
-        .fetch_all(&self.0.db)
-        .await
-        {
-            Ok(r) => r,
-            Err(err) => {
-                tracing::error!(?err, "Failed to query queued pretranscodings");
-                return;
-            }
-        };
-        let take = self.0.supervisor_pool.available_capacity();
-        for id in queued.into_iter().take(take) {
-            let h = self.clone();
-            self.0.supervisor_pool.spawn_helper(async move {
-                if let Err(err) = h.start(id).await {
-                    tracing::warn!(?err, id, "Pretranscoding refresh: start failed");
-                }
-            });
-        }
-    }
-
-    async fn start(&self, id: i32) -> crate::app::Result<()> {
+    pub(super) async fn start(&self, id: i32) -> crate::app::Result<()> {
         if self.0.supervisor_pool.is_running(id) {
             return Ok(());
         }
@@ -370,7 +232,7 @@ impl Handle {
                     pt.download_id,
                     pt.only_audio,
                     pt.audio_index,
-                    pt.status as "status: PretranscodingStatus",
+                    pt.status as "status: super::PretranscodingStatus",
                     d.info_hash,
                     d.file_idx
                 FROM pretranscodings pt
@@ -381,18 +243,19 @@ impl Handle {
         )
         .fetch_optional(&self.0.db)
         .await
-        .map_err(Error::DatabaseError)?
-        .ok_or_else(|| Error::NotFound(format!("Pretranscoding {id} not found")))?;
+        .map_err(crate::app::Error::DatabaseError)?
+        .ok_or_else(|| crate::app::Error::NotFound(format!("Pretranscoding {id} not found")))?;
 
-        if row.status != PretranscodingStatus::Queued {
+        if row.status != super::PretranscodingStatus::Queued {
             return Ok(());
         }
 
-        let slot = match self
+        let acquire = self
             .0
             .supervisor_pool
-            .try_acquire(id, SupervisorPool::NO_PRIORITY)
-        {
+            .acquire(id, super::TranscodingPriority::Pretranscoding as u8)
+            .await;
+        let slot = match acquire {
             Acquire::Acquired(slot) => slot,
             Acquire::AlreadyRunning | Acquire::NoCapacity => return Ok(()),
         };
@@ -422,13 +285,13 @@ impl Handle {
                 }
             };
 
-            let supervisor = Supervisor::new(
+            let supervisor = crate::transcodings::supervisor::Supervisor::new(
                 self.0.db.clone(),
                 self.0.events.clone(),
                 self.0.config.clone(),
                 id,
                 source,
-                PretranscodingOutputPath::new(
+                crate::transcodings::PretranscodingOutputPath::new(
                     &self.0.storage,
                     row.download_id,
                     row.only_audio,
@@ -453,16 +316,6 @@ impl Handle {
         }
     }
 
-    fn emit_status_update(&self, id: i32, download_id: i32, new_status: PretranscodingStatus) {
-        self.0.events.pretranscodings.emit_status_update(
-            &crate::api::pretranscodings::PretranscodingStatusUpdate {
-                pretranscoding_id: id,
-                download_id,
-                new_status,
-            },
-        );
-    }
-
     async fn fail(&self, id: i32, download_id: i32, error: &str) {
         tracing::warn!(id, "Pretranscode failed: {error}");
         if let Err(err) = sqlx::query!(
@@ -475,6 +328,6 @@ impl Handle {
         {
             tracing::error!(?err, id, "Failed to record failure");
         }
-        self.emit_status_update(id, download_id, PretranscodingStatus::Failed);
+        self.emit_status_update(id, download_id, super::PretranscodingStatus::Failed);
     }
 }

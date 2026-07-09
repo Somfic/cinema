@@ -11,7 +11,7 @@ pub trait HlsApi {
 #[draad::api]
 impl HlsApi for AppContext {
     async fn stop(&self, session_id: String) -> Result<(), Error> {
-        crate::hls::stop_session(&session_id).await;
+        self.transcodings.stop_live(&session_id).await;
         Ok(())
     }
 }

@@ -1,5 +1,9 @@
+pub(crate) mod ffmpeg;
 mod manager;
 mod output_path;
+mod pipeline;
+pub mod probe;
+mod session;
 mod supervisor;
 pub mod types;
 

@@ -140,9 +140,9 @@ pub struct CompletedPretranscoding {
 
 impl CompletedPretranscoding {
     /// Look up a completed pretranscoding whose cached MP4 the streams.remux
-    /// endpoint can reuse. Exact match on all four keys — a full transcode
+    /// endpoint can reuse. Exact match on all four keys: a full transcode
     /// does not satisfy an only-audio request or vice versa.
-    pub async fn find_completed(
+    pub async fn find(
         db: &Pool,
         info_hash: &str,
         file_idx: i32,

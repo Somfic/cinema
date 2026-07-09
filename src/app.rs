@@ -165,5 +165,5 @@ pub struct AppContext {
     pub clients: ClientRoster,
     pub http: Client,
     pub downloads: crate::downloads::Handle,
-    pub pretranscodings: crate::pretranscodings::Handle,
+    pub transcodings: crate::transcodings::Handle,
 }

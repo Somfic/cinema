@@ -97,7 +97,7 @@ impl DownloadsApi for AppContext {
     }
 
     async fn remove(&self, id: i32) -> Result<(), Error> {
-        self.pretranscodings.remove_all_for_download(id).await?;
+        self.transcodings.remove_all_for_download(id).await?;
         self.downloads.remove(id).await
     }
 

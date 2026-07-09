@@ -7,6 +7,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -100,8 +101,6 @@ struct PoolInner {
 }
 
 impl SupervisorPool {
-    pub const NO_PRIORITY: u8 = 0;
-
     pub fn new(subsystem: &'static str, capacity: usize) -> (Self, mpsc::Receiver<()>) {
         let (refresh_tx, refresh_rx) = mpsc::channel::<()>(64);
         (
@@ -228,46 +227,48 @@ impl SupervisorPool {
         }
     }
 
-    pub fn try_acquire(&self, id: i32, priority: u8) -> Acquire {
+    pub async fn acquire(&self, id: i32, priority: u8) -> Acquire {
         let (cancel, guard) = match self.reserve(id, priority) {
             Ok(res) => res,
             Err(acquire) => return acquire,
         };
+
+        // See acquire_evicting for explanation why a lock is needed
+        let lock = self.0.acquire_evict_mutex.lock().await;
 
         let Ok(permit) = self.0.semaphore.clone().try_acquire_owned() else {
             return Acquire::NoCapacity;
         };
 
         guard.commit();
+        drop(lock);
 
         Acquire::Acquired(self.make_slot(id, cancel, permit))
     }
 
-    /// Do not mix [`Self::try_acquire`] and [`Self::acquire_evicting`] on the same pool:
-    /// the mutex only serialises [`Self::acquire_evicting`] callers, so a concurrent
-    /// [`Self::try_acquire`] can steal a permit that [`Self::acquire_evicting`]
-    /// has just freed for itself, leaving the latter hanging indefinitely (while also holding the mutex!)
-    pub async fn acquire_evicting<Fn, Fut, Err>(
+    pub async fn acquire_evicting<Fn, Err>(
         &self,
         id: i32,
         priority: u8,
         on_evict: Fn,
     ) -> Result<Acquire, Err>
     where
-        Fn: FnOnce(i32) -> Fut,
-        Fut: Future<Output = Result<(), Err>>,
+        Fn: AsyncFnOnce(i32) -> Result<(), Err>,
     {
         let (cancel, guard) = match self.reserve(id, priority) {
             Ok(res) => res,
             Err(acquire) => return Ok(acquire),
         };
 
+        // This lock prevents other concurrent callers from stealing the permit that we have just freed
+        // for ourselves. Without it someone could happily fall through the fast path and get their
+        // hands on our permit while we are waiting for `on_evict`
+        let lock = self.0.acquire_evict_mutex.lock().await;
+
         if let Ok(permit) = self.0.semaphore.clone().try_acquire_owned() {
             guard.commit();
             return Ok(Acquire::Acquired(self.make_slot(id, cancel, permit)));
         }
-
-        let lock = self.0.acquire_evict_mutex.lock().await;
 
         let Some(victim) = self.find_evictable(priority) else {
             return Ok(Acquire::NoCapacity);
