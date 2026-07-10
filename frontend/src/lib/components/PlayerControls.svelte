@@ -32,6 +32,8 @@
 		chapters = [],
 		activeTrackUrl,
 		transcoding = { enabled: false, onlyAudio: false },
+		hasAudioPretranscoding = false,
+		hasFullPretranscoding = false,
 		streamStats = null,
 		pieceMap = [],
 		loadingSubtitles = false,
@@ -70,6 +72,12 @@
 		chapters?: Chapter[];
 		activeTrackUrl?: string;
 		transcoding?: { enabled: boolean; onlyAudio: boolean };
+		/** Tint the "Audio" transcoding radio icon - signals a completed
+		 *  audio-only pretranscoding for the current stream is ready to serve. */
+		hasAudioPretranscoding?: boolean;
+		/** Tint the "Audio + video" transcoding radio icon - signals a
+		 *  completed full pretranscoding for the current stream is ready. */
+		hasFullPretranscoding?: boolean;
 		streamStats?: { total_bytes: number; finished: boolean } | null;
 		pieceMap?: number[];
 		loadingSubtitles?: boolean;
@@ -207,11 +215,23 @@
 		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
 	});
 
-	const TRANSCODE_OPTIONS = [
+	const TRANSCODE_OPTIONS = $derived([
 		{ value: "none", label: "None", icon: "Ban" as const },
-		{ value: "audio", label: "Audio", icon: "AudioLines" as const },
-		{ value: "both", label: "Audio + video", icon: "Film" as const },
-	];
+		{
+			value: "audio",
+			label: "Audio",
+			icon: hasAudioPretranscoding
+				? { name: "AudioLines" as const, color: "var(--glow-color-success)" }
+				: ("AudioLines" as const),
+		},
+		{
+			value: "both",
+			label: "Audio + video",
+			icon: hasFullPretranscoding
+				? { name: "Film" as const, color: "var(--glow-color-success)" }
+				: ("Film" as const),
+		},
+	]);
 
 	const transcodingMode = $derived(
 		!transcoding.enabled ? "none" : transcoding.onlyAudio ? "audio" : "both",

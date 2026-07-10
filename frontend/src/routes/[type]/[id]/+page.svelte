@@ -546,6 +546,8 @@
 						: undefined}
 				startTime={playerStartTime}
 				bind:transcoding={session.transcoding}
+				hasAudioPretranscoding={session.hasAudioPretranscoding}
+				hasFullPretranscoding={session.hasFullPretranscoding}
 				onTranscodingChange={(enabled, onlyAudio) =>
 					session.toggleTranscoding(enabled, onlyAudio, playerTime)}
 				streams={session.playingLocal ? [] : streams}

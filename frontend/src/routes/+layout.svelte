@@ -6,6 +6,7 @@
 	import TopBar from "$lib/components/TopBar.svelte";
 	import RemotePrompt from "$lib/components/RemotePrompt.svelte";
 	import { remote } from "$lib/remote.svelte";
+	import { downloadManager } from "$lib/downloads.svelte";
 	import { api } from "$lib/api";
 
 	let { children } = $props();
@@ -13,6 +14,7 @@
 	// Connect, register this client and start tracking presence (browser-only).
 	$effect(() => {
 		remote.init();
+		downloadManager.init();
 		api.onError((err) => {
 			toast.error(`API error: ${err.message}`);
 		});
@@ -82,8 +84,7 @@
 
 	@font-face {
 		font-family: "Subtitle";
-		src: url("/fonts/Helvetica Neue 67 Medium Condensed.otf")
-			format("opentype");
+		src: url("/fonts/Helvetica Neue 67 Medium Condensed.otf") format("opentype");
 		font-display: swap;
 	}
 

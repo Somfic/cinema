@@ -3,6 +3,7 @@
 	import { goto } from "$app/navigation";
 	import { Button, Icon } from "glow";
 	import { remote } from "$lib/remote.svelte";
+	import { downloadManager } from "$lib/downloads.svelte";
 	import PlayerControls from "$lib/components/PlayerControls.svelte";
 	import StreamStatsPopover from "$lib/components/StreamStatsPopover.svelte";
 	import Spinner from "$lib/components/Spinner.svelte";
@@ -10,6 +11,31 @@
 	const tv = $derived(remote.tvState);
 	// Offset shown relative to the player's -0.25s baseline, matching the player.
 	const offsetDisplay = $derived((tv?.subtitleOffset ?? -0.25) + 0.25);
+
+	const hasAudioPretranscoding = $derived(
+		tv?.activeAudioTrack &&
+			tv.activeStreamHash &&
+			tv.activeFileIndex !== undefined
+			? downloadManager.hasCompletedPretranscoding(
+					tv.activeStreamHash,
+					tv.activeFileIndex,
+					true,
+					tv.activeAudioTrack,
+				)
+			: false,
+	);
+	const hasFullPretranscoding = $derived(
+		tv?.activeAudioTrack &&
+			tv.activeStreamHash &&
+			tv.activeFileIndex !== undefined
+			? downloadManager.hasCompletedPretranscoding(
+					tv.activeStreamHash,
+					tv.activeFileIndex,
+					false,
+					tv.activeAudioTrack,
+				)
+			: false,
+	);
 
 	// Minimise: keep the TV playing, go back to browsing on the phone.
 	function minimise() {
@@ -221,6 +247,8 @@
 			subtitlesActive={tv?.subtitlesActive ?? false}
 			activeTrackUrl={tv?.activeTrackUrl}
 			transcoding={tv?.transcoding ?? { enabled: false, onlyAudio: false }}
+			{hasAudioPretranscoding}
+			{hasFullPretranscoding}
 			streamStats={tv?.streamStats ?? null}
 			pieceMap={tv?.pieceMap ?? []}
 			volumeAlwaysOpen

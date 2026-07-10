@@ -1,209 +1,27 @@
 <script lang="ts">
-	import type { Download, Pretranscoding } from "$lib/schema";
-	import { api } from "$lib/api";
+	import type { Download } from "$lib/schema";
+	import { downloadManager } from "$lib/downloads.svelte";
 	import {
 		DOWNLOAD_STATUS_LABEL,
 		formatBytes,
 		pretranscodePercent,
 		progress,
 	} from "$lib/utils";
-	import { Button, Popover, Text, toast } from "glow";
-	import { onDestroy, onMount } from "svelte";
+	import { Button, Popover, Text } from "glow";
 	import { slide } from "svelte/transition";
 	import TranscodePanel from "./TranscodePanel.svelte";
 
 	let expandedId = $state<number | null>(null);
 
+	const badgeCount = $derived(
+		downloadManager.activeDownloadsCount +
+			downloadManager.activePretranscodingCount +
+			downloadManager.liveHlsCount,
+	);
+
 	function toggleTranscode(id: number) {
 		expandedId = expandedId === id ? null : id;
 	}
-
-	let downloads = $state<
-		Array<Download & { download_speed_mbps?: number | null }>
-	>([]);
-
-	// All pretranscodings, grouped by their parent download id. Updated
-	// live from the pretranscodingsEvents socket subscription below.
-	let pretranscodings = $state<Record<number, Pretranscoding[]>>({});
-
-	// Number of live HLS viewer sessions currently holding a slot in the
-	// transcodings semaphore. Hydrated on mount, kept live via hlsEvents.
-	let liveHlsCount = $state(0);
-
-	const activeDownloadsCount = $derived(
-		downloads.filter((d) => d.status === "Queued" || d.status === "Downloading")
-			.length,
-	);
-	const activePretranscodingCount = $derived(
-		Object.values(pretranscodings)
-			.flatMap((p) => p)
-			.filter((p) => p.status === "Queued" || p.status === "Transcoding")
-			.length,
-	);
-	const badgeCount = $derived(
-		activeDownloadsCount + activePretranscodingCount + liveHlsCount,
-	);
-
-	let loading = $state(false);
-	const recentlyRemovedDownloads = new Set<number>();
-	const recentlyRemovedPretranscodings = new Set<number>();
-
-	async function load() {
-		if (loading) {
-			return;
-		}
-
-		try {
-			loading = true;
-			recentlyRemovedDownloads.clear();
-			recentlyRemovedPretranscodings.clear();
-
-			const [ds, pts, lc] = await Promise.all([
-				api.downloads.list(),
-				api.transcodings.list(),
-				api.hls.liveCount(),
-			]);
-			downloads = ds.filter((it) => !recentlyRemovedDownloads.has(it.id));
-			liveHlsCount = lc;
-
-			const grouped: Record<number, Pretranscoding[]> = {};
-			for (const pt of pts) {
-				if (recentlyRemovedPretranscodings.has(pt.id)) {
-					continue;
-				}
-				const parent = downloads.find((d) => d.id === pt.download_id);
-				if (!parent) continue;
-				(grouped[parent.id] ??= []).push(pt);
-			}
-			pretranscodings = grouped;
-		} catch {
-			// silently ignore
-		} finally {
-			loading = false;
-			recentlyRemovedDownloads.clear();
-			recentlyRemovedPretranscodings.clear();
-		}
-	}
-
-	function activePretranscoding(id: number): Pretranscoding | undefined {
-		return pretranscodings[id]?.find(
-			(pt) =>
-				pt.status === "Transcoding" ||
-				pt.status === "Queued" ||
-				pt.status === "Paused",
-		);
-	}
-
-	let unsub: (() => void) | undefined;
-
-	onMount(() => {
-		load();
-
-		const unsubOnDownloadProgress = api.downloadsEvents.onProgress((p) => {
-			const idx = downloads.findIndex((d) => d.id === p.download_id);
-			if (idx === -1) {
-				load();
-				return;
-			}
-			downloads[idx] = {
-				...downloads[idx],
-				downloaded_bytes: p.downloaded_bytes,
-				total_bytes: p.total_bytes,
-				download_speed_mbps: p.download_speed_mbps,
-				status: p.status,
-			};
-		});
-		const unsubOnDownloadStatusUpdate = api.downloadsEvents.onStatusUpdate(
-			(statusUpdate) => {
-				const idx = downloads.findIndex(
-					(d) => d.id === statusUpdate.download_id,
-				);
-				if (idx === -1) {
-					load();
-					return;
-				}
-				downloads[idx] = {
-					...downloads[idx],
-					status: statusUpdate.new_status,
-				};
-			},
-		);
-		const unsubOnDownloadRemove = api.downloadsEvents.onRemoved((id) => {
-			recentlyRemovedDownloads.add(id);
-
-			downloads = downloads.filter((it) => it.id !== id);
-			delete pretranscodings[id];
-		});
-
-		const unsubOnPretranscodingProgress = api.transcodingsEvents.onProgress(
-			(p) => {
-				const list = pretranscodings[p.download_id];
-				if (!list) {
-					// New row: refetch the full list so its metadata lands in state.
-					load();
-					return;
-				}
-				const idx = list.findIndex((x) => x.id === p.pretranscoding_id);
-				if (idx === -1) {
-					load();
-					return;
-				}
-				list[idx] = {
-					...list[idx],
-					transcoded_ms: p.transcoded_ms,
-					total_ms: p.total_ms ?? list[idx].total_ms,
-					status: p.status,
-				};
-			},
-		);
-		const unsubOnPretranscodingStatusUpdate =
-			api.transcodingsEvents.onStatusUpdate((s) => {
-				const list = pretranscodings[s.download_id];
-				if (!list) {
-					load();
-					return;
-				}
-				const idx = list.findIndex((x) => x.id === s.pretranscoding_id);
-				if (idx === -1) {
-					load();
-					return;
-				}
-				list[idx] = { ...list[idx], status: s.new_status };
-			});
-		const unsubOnPretranscodingRemove = api.transcodingsEvents.onRemoved(
-			(p) => {
-				recentlyRemovedPretranscodings.add(p.pretranscoding_id);
-
-				const list = pretranscodings[p.download_id];
-				if (!list) {
-					// A pretranscoding has been removed, but we don't have a download entry for it, so nothing to do
-					return;
-				}
-
-				pretranscodings[p.download_id] = list.filter(
-					(it) => it.id !== p.pretranscoding_id,
-				);
-			},
-		);
-
-		const unsubOnHlsLiveCount = api.hlsEvents.onLiveCount((n) => {
-			liveHlsCount = n;
-		});
-
-		unsub = () => {
-			unsubOnDownloadProgress();
-			unsubOnDownloadStatusUpdate();
-			unsubOnDownloadRemove();
-
-			unsubOnPretranscodingProgress();
-			unsubOnPretranscodingStatusUpdate();
-			unsubOnPretranscodingRemove();
-
-			unsubOnHlsLiveCount();
-		};
-	});
-
-	onDestroy(() => unsub?.());
 
 	function displayTitle(d: Download): string {
 		const title = d.meta?.media_item?.title;
@@ -215,65 +33,6 @@
 	function episodeLabel(d: Download): string | null {
 		if (d.meta?.season == null) return null;
 		return `S${d.meta.season}E${d.meta.episode}`;
-	}
-
-	async function pause(d: Download) {
-		try {
-			await api.downloads.pause(d.id);
-			const idx = downloads.findIndex((x) => x.id === d.id);
-			if (idx !== -1) downloads[idx] = { ...downloads[idx], status: "Paused" };
-		} catch (err: unknown) {
-			toast.error(
-				`Pause failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
-
-	async function resume(d: Download) {
-		try {
-			await api.downloads.resume(d.id);
-			const idx = downloads.findIndex((x) => x.id === d.id);
-			if (idx !== -1) downloads[idx] = { ...downloads[idx], status: "Queued" };
-		} catch (err: unknown) {
-			toast.error(
-				`Resume failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
-
-	async function cancel(d: Download) {
-		try {
-			await api.downloads.cancel(d.id);
-			const idx = downloads.findIndex((x) => x.id === d.id);
-			if (idx !== -1)
-				downloads[idx] = { ...downloads[idx], status: "Cancelled" };
-		} catch (err: unknown) {
-			toast.error(
-				`Cancel failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
-
-	async function remove(d: Download) {
-		try {
-			await api.downloads.remove(d.id);
-			downloads = downloads.filter((x) => x.id !== d.id);
-			delete pretranscodings[d.id];
-		} catch (err: unknown) {
-			toast.error(
-				`Remove failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	}
-
-	async function killAllLive() {
-		try {
-			await api.hls.stopAll();
-		} catch (err: unknown) {
-			toast.error(
-				`Stop all failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
 	}
 </script>
 
@@ -290,25 +49,25 @@
 		<div class="popover-panel">
 			<div class="panel-header">
 				<Text size="lg" weight="semibold">Downloads</Text>
-				{#if liveHlsCount > 0}
+				{#if downloadManager.liveHlsCount > 0}
 					<Button
-						label={`Kill ${liveHlsCount} HLS`}
+						label={`Kill ${downloadManager.liveHlsCount} HLS`}
 						variant="danger"
-						onclick={killAllLive}
+						onclick={() => downloadManager.killAllLive()}
 						class="kill-hls"
 					/>
 				{/if}
 			</div>
-			{#if downloads.length === 0}
+			{#if downloadManager.downloads.length === 0}
 				<div class="empty">
 					<Text size="sm" variant="muted">No downloads yet</Text>
 				</div>
 			{:else}
 				<div class="download-list">
-					{#each downloads as d (d.id)}
+					{#each downloadManager.downloads as d (d.id)}
 						{@const pct = progress(d)}
 						{@const ep = episodeLabel(d)}
-						{@const activePt = activePretranscoding(d.id)}
+						{@const activePt = downloadManager.activePretranscoding(d.id)}
 						{@const ptPct = activePt ? pretranscodePercent(activePt) : null}
 						<div class="download-row">
 							<div class="row-main">
@@ -387,28 +146,28 @@
 										<Button
 											icon="Pause"
 											variant="ghost"
-											onclick={() => pause(d)}
+											onclick={() => downloadManager.pause(d.id)}
 										/>
 									{/if}
 									{#if d.status === "Paused" || d.status === "Failed" || d.status === "Cancelled"}
 										<Button
 											icon="Play"
 											variant="ghost"
-											onclick={() => resume(d)}
+											onclick={() => downloadManager.resume(d.id)}
 										/>
 									{/if}
 									{#if d.status !== "Completed" && d.status !== "Cancelled"}
 										<Button
 											icon="X"
 											variant="ghost"
-											onclick={() => cancel(d)}
+											onclick={() => downloadManager.cancel(d.id)}
 										/>
 									{/if}
 									{#if d.status === "Completed" || d.status === "Cancelled"}
 										<Button
 											icon="Trash"
 											variant="ghost"
-											onclick={() => remove(d)}
+											onclick={() => downloadManager.remove(d.id)}
 										/>
 									{/if}
 									<Button
@@ -426,7 +185,8 @@
 								>
 									<TranscodePanel
 										download={d}
-										pretranscodings={pretranscodings[d.id] ?? []}
+										pretranscodings={downloadManager.pretranscodings[d.id] ??
+											[]}
 										active
 									/>
 								</div>

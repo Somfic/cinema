@@ -90,6 +90,7 @@ export interface TvState {
 	playing: boolean;
 	streams?: Stream[];
 	activeStreamHash?: string;
+	activeFileIndex?: number;
 	audioTracks?: RemoteAudioTrack[];
 	activeAudioTrack?: number;
 	subtitleTracks?: RemoteSubtitleTrack[];

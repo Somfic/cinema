@@ -263,6 +263,7 @@
 			playing: !!session.streamUrl,
 			streams,
 			activeStreamHash: infoHash,
+			activeFileIndex: fileIdx,
 			audioTracks: session.fileAudioTracks.map((t) => ({
 				id: t.stream_index,
 				name: t.name,
@@ -340,6 +341,8 @@
 			streamStats={session.streamStats}
 			pieceMap={session.pieceMap}
 			bind:transcoding={session.transcoding}
+			hasAudioPretranscoding={session.hasAudioPretranscoding}
+			hasFullPretranscoding={session.hasFullPretranscoding}
 			onTranscodingChange={(enabled, onlyAudio) =>
 				session.toggleTranscoding(enabled, onlyAudio, playerTime)}
 			subtitleTracks={session.subtitleTracks}

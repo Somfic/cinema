@@ -58,6 +58,8 @@
 		streamStats = null,
 		pieceMap = [],
 		transcoding = $bindable({ enabled: true, onlyAudio: false }),
+		hasAudioPretranscoding = false,
+		hasFullPretranscoding = false,
 		onTranscodingChange,
 		currentTime = $bindable(0),
 		duration = $bindable(0),
@@ -112,6 +114,8 @@
 			enabled: boolean;
 			onlyAudio: boolean;
 		};
+		hasAudioPretranscoding?: boolean;
+		hasFullPretranscoding?: boolean;
 		onTranscodingChange?: (enabled: boolean, onlyAudio: boolean) => void;
 		paused?: boolean;
 		volume?: number;
@@ -652,6 +656,8 @@
 				subtitlesActive={subtitles.length > 0}
 				{activeTrackUrl}
 				{transcoding}
+				{hasAudioPretranscoding}
+				{hasFullPretranscoding}
 				{streamStats}
 				{pieceMap}
 				{loadingSubtitles}

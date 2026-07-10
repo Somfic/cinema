@@ -5,10 +5,10 @@
 		type DownloadMeta,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
+	import { downloadManager } from "$lib/downloads.svelte";
 	import Spinner from "$lib/components/Spinner.svelte";
 	import { imageUrl, formatBytes, progress } from "$lib/utils";
 	import { Heading, Button, Text, Pill, Modal } from "glow";
-	import { onDestroy, onMount } from "svelte";
 
 	type Category = "all" | "movies" | "tv" | "pretranscoding" | "orphan";
 
@@ -16,8 +16,6 @@
 	let disk = $state<DiskStats | null>(null);
 	let loading = $state(true);
 	let filter = $state<Category>("all");
-
-	let liveHlsCount = $state(0);
 
 	let confirmTarget = $state<CacheEntry | null>(null);
 	let confirmOpen = $state(false);
@@ -48,18 +46,6 @@
 			loading = false;
 		});
 	});
-
-	let unsub: (() => void) | undefined;
-	onMount(() => {
-		api.hls
-			.liveCount()
-			.then((n) => (liveHlsCount = n))
-			.catch(() => {});
-		unsub = api.hlsEvents.onLiveCount((n) => {
-			liveHlsCount = n;
-		});
-	});
-	onDestroy(() => unsub?.());
 
 	let filteredItems = $derived(
 		[...items]
@@ -354,9 +340,10 @@
 				{/if}
 			</Heading>
 
-			{#if liveHlsCount > 0 && disk}
+			{#if downloadManager.liveHlsCount > 0 && disk}
 				<Text size="sm">
-					{liveHlsCount} active transcoding session{liveHlsCount === 1
+					{downloadManager.liveHlsCount} active transcoding session{downloadManager.liveHlsCount ===
+					1
 						? ""
 						: "s"} · {formatBytes(disk.hls_bytes)}
 				</Text>

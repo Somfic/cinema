@@ -1,4 +1,5 @@
 import { api } from "$lib/api";
+import { downloadManager } from "$lib/downloads.svelte";
 import type {
 	AudioTrack,
 	Chapter,
@@ -47,6 +48,23 @@ export class PlaybackSession {
 
 	streamStats = $state<StreamStats | null>(null);
 	pieceMap = $state<number[]>([]);
+
+	// True when a completed pretranscoding for the current stream already
+	// exists for the given mode
+	hasAudioPretranscoding = $derived.by(() => {
+		const s = this.ctx.currentStream();
+		return (
+			!!s &&
+			downloadManager.hasCompletedPretranscoding(s.info_hash, s.file_idx, true, this.activeAudioIdx)
+		);
+	});
+	hasFullPretranscoding = $derived.by(() => {
+		const s = this.ctx.currentStream();
+		return (
+			!!s &&
+			downloadManager.hasCompletedPretranscoding(s.info_hash, s.file_idx, false, this.activeAudioIdx)
+		);
+	});
 
 	#audioPollTimer: ReturnType<typeof setInterval> | undefined;
 	#statsUnsub: (() => void) | undefined;
