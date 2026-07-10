@@ -22,6 +22,8 @@ pub enum PretranscodingStatus {
 pub struct Pretranscoding {
     pub id: i32,
     pub download_id: i32,
+    pub download_info_hash: String,
+    pub download_file_idx: i32,
     pub audio_index: i32,
     pub only_audio: bool,
     pub name: Option<String>,
@@ -38,6 +40,8 @@ pub struct Pretranscoding {
 struct PretranscodingRow {
     id: i32,
     download_id: i32,
+    download_info_hash: String,
+    download_file_idx: i32,
     audio_index: i32,
     only_audio: bool,
     name: Option<String>,
@@ -81,6 +85,8 @@ impl From<PretranscodingRow> for Pretranscoding {
         Self {
             id: r.id,
             download_id: r.download_id,
+            download_info_hash: r.download_info_hash,
+            download_file_idx: r.download_file_idx,
             audio_index: r.audio_index,
             only_audio: r.only_audio,
             name: r.name,
@@ -103,6 +109,8 @@ impl Pretranscoding {
                 SELECT
                     pt.id,
                     d.id as "download_id",
+                    d.info_hash as "download_info_hash",
+                    d.file_idx as "download_file_idx",
                     pt.audio_index,
                     pt.only_audio,
                     d.name,

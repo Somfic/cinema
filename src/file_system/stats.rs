@@ -1,6 +1,6 @@
 use crate::{
     app::{AppContext, Error},
-    file_system,
+    file_system, transcodings,
 };
 
 #[draad::ty]
@@ -15,8 +15,12 @@ pub struct DiskStats {
     cinema_bytes: u64,
     /// Size of data_dir/fs/torrents (all per-info-hash dirs).
     torrents_bytes: u64,
-    /// Size of data_dir/fs/hls (active transcoding sessions).
+    /// Size of data_dir/fs/hls (active live transcoding sessions only).
     hls_bytes: u64,
+    /// Size of data_dir/fs/pretranscoded (background pretranscoding jobs).
+    pretranscoding_bytes: u64,
+    /// Size of data_dir/fs/cache.
+    cache_bytes: u64,
     /// Subtotal of torrent dirs belonging to category=="movies".
     movies_bytes: u64,
     /// Subtotal of torrent dirs belonging to category=="tv".
@@ -30,19 +34,21 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
     let used_bytes = total_bytes.saturating_sub(free_bytes);
 
     let cinema_bytes = file_system::dir_size(&ctx.config.data_dir).await;
-    let hls_bytes = file_system::dir_size(&file_system::hls_root(ctx)).await;
+    let hls_bytes = file_system::dir_size(&ctx.storage.hls_dir()).await;
+    let pretranscoding_bytes = file_system::dir_size(&ctx.storage.pretranscoded_dir()).await;
+    let cache_bytes = file_system::dir_size(&ctx.storage.cache_dir()).await;
 
     // Per-category torrent breakdown matches list_cache_items so the chart and list agree.
     let downloads = crate::downloads::types::Download::find_all(&ctx.db).await?;
 
-    let torrents = file_system::torrents_root(ctx);
+    let torrents = ctx.storage.torrents_dir();
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut movies_bytes: u64 = 0;
     let mut tv_bytes: u64 = 0;
     let mut tracked_bytes: u64 = 0;
 
     for download in downloads {
-        let size = file_system::dir_size(&torrents.join(&download.info_hash)).await;
+        let size = file_system::dir_size(&download.output_path(&ctx.storage)).await;
         seen_hashes.insert(download.info_hash.to_lowercase());
         tracked_bytes = tracked_bytes.saturating_add(size);
         match download
@@ -83,6 +89,8 @@ pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
         cinema_bytes,
         torrents_bytes,
         hls_bytes,
+        pretranscoding_bytes,
+        cache_bytes,
         movies_bytes,
         tv_bytes,
         orphan_bytes,

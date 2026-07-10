@@ -1,16 +1,23 @@
 <script lang="ts">
-	import { type CacheEntry, type DiskStats } from "$lib/schema";
+	import {
+		type CacheEntry,
+		type DiskStats,
+		type DownloadMeta,
+	} from "$lib/schema";
 	import { api } from "$lib/api";
 	import Spinner from "$lib/components/Spinner.svelte";
 	import { imageUrl, formatBytes, progress } from "$lib/utils";
 	import { Heading, Button, Text, Pill, Modal } from "glow";
+	import { onDestroy, onMount } from "svelte";
 
-	type Category = "all" | "movies" | "tv" | "hls" | "orphan";
+	type Category = "all" | "movies" | "tv" | "pretranscoding" | "orphan";
 
 	let items = $state<CacheEntry[]>([]);
 	let disk = $state<DiskStats | null>(null);
 	let loading = $state(true);
 	let filter = $state<Category>("all");
+
+	let liveHlsCount = $state(0);
 
 	let confirmTarget = $state<CacheEntry | null>(null);
 	let confirmOpen = $state(false);
@@ -42,18 +49,30 @@
 		});
 	});
 
+	let unsub: (() => void) | undefined;
+	onMount(() => {
+		api.hls
+			.liveCount()
+			.then((n) => (liveHlsCount = n))
+			.catch(() => {});
+		unsub = api.hlsEvents.onLiveCount((n) => {
+			liveHlsCount = n;
+		});
+	});
+	onDestroy(() => unsub?.());
+
 	let filteredItems = $derived(
 		[...items]
 			.filter((it) => {
 				switch (filter) {
 					case "movies": {
-						return it.download?.meta?.media_item?.media_type === "movie";
+						return meta(it)?.media_item?.media_type === "movie";
 					}
 					case "tv": {
-						return it.download?.meta?.media_item?.media_type === "tv";
+						return meta(it)?.media_item?.media_type === "tv";
 					}
-					case "hls": {
-						return it.kind === "hls";
+					case "pretranscoding": {
+						return it.kind === "pretranscoding";
 					}
 					case "orphan": {
 						return it.kind === "orphan";
@@ -65,6 +84,10 @@
 			})
 			.sort((a, b) => b.disk_bytes - a.disk_bytes),
 	);
+
+	function meta(it: CacheEntry): DownloadMeta | null | undefined {
+		return it.download?.meta ?? it.pretranscoding?.meta;
+	}
 
 	let cinemaUsed = $derived(disk?.cinema_bytes ?? 0);
 	let otherUsed = $derived(
@@ -132,9 +155,12 @@
 				color: "var(--cache-tv, #20c997)",
 			},
 			{
-				key: "hls",
-				label: "HLS",
-				bytes: disk.hls_bytes,
+				// Live HLS + background pretranscodings roll up under one chip; the
+				// item list only shows pretranscodings (live sessions are ephemeral
+				// and are managed from the download-manager popover).
+				key: "pretranscoding",
+				label: "Transcodings",
+				bytes: disk.hls_bytes + disk.pretranscoding_bytes,
 				color: "var(--cache-hls, #ffc107)",
 			},
 			{
@@ -160,6 +186,11 @@
 		try {
 			if (target.kind === "orphan") {
 				await api.cache.orphan(target.info_hash);
+			} else if (
+				target.kind === "pretranscoding" &&
+				target.pretranscoding != null
+			) {
+				await api.transcodings.remove(target.pretranscoding.id);
 			} else if (target.download != null) {
 				await api.downloads.remove(target.download.id);
 			}
@@ -183,15 +214,11 @@
 		if (it.kind === "orphan") {
 			return `Orphaned (${it.info_hash.slice(0, 12)}…)`;
 		}
-		const downloadMeta = it.download?.meta;
-		let t = downloadMeta?.media_item?.title ?? "Untitled";
-		if (
-			downloadMeta?.media_item?.media_type === "tv" &&
-			downloadMeta.season &&
-			downloadMeta.episode
-		) {
-			const s = String(downloadMeta.season).padStart(2, "0");
-			const e = String(downloadMeta.episode).padStart(2, "0");
+		const m = meta(it);
+		let t = m?.media_item?.title ?? "Untitled";
+		if (m?.media_item?.media_type === "tv" && m.season && m.episode) {
+			const s = String(m.season).padStart(2, "0");
+			const e = String(m.episode).padStart(2, "0");
 			t = `${t} · S${s}E${e}`;
 		}
 		return t;
@@ -327,19 +354,24 @@
 				{/if}
 			</Heading>
 
+			{#if liveHlsCount > 0 && disk}
+				<Text size="sm">
+					{liveHlsCount} active transcoding session{liveHlsCount === 1
+						? ""
+						: "s"} · {formatBytes(disk.hls_bytes)}
+				</Text>
+			{/if}
+
 			{#if filteredItems.length === 0}
 				<Text size="sm">Nothing here.</Text>
 			{:else}
 				<ul class="list">
-					{#each filteredItems as it (it.kind + "-" + (it.download?.id ?? it.info_hash))}
+					{#each filteredItems as it (it.kind + "-" + (it.pretranscoding?.id ?? it.download?.id ?? it.info_hash))}
 						<li class="row">
 							<div class="thumb">
-								{#if it.download?.meta?.media_item?.poster_path}
+								{#if meta(it)?.media_item?.poster_path}
 									<img
-										src={imageUrl(
-											it.download.meta.media_item.poster_path,
-											"w200",
-										)}
+										src={imageUrl(meta(it)!.media_item!.poster_path!, "w200")}
 										alt=""
 									/>
 								{:else}
@@ -349,11 +381,19 @@
 							<div class="meta">
 								<Text size="sm">{rowTitle(it)}</Text>
 								<div class="pills">
-									{#if it.download?.meta?.resolution}
-										<Pill label={it.download.meta.resolution} />
+									{#if meta(it)?.resolution}
+										<Pill label={meta(it)!.resolution!} />
 									{/if}
-									{#if it.download?.status && it.download.status !== "Completed"}
+									{#if it.kind === "download" && it.download?.status && it.download.status !== "Completed"}
 										<Pill label={it.download.status} />
+									{/if}
+									{#if it.kind === "pretranscoding" && it.pretranscoding}
+										<Pill
+											label={`${it.pretranscoding.only_audio ? "Only audio" : "Full"} · Track ${it.pretranscoding.audio_index}`}
+										/>
+										{#if it.pretranscoding.status !== "Completed"}
+											<Pill label={it.pretranscoding.status} />
+										{/if}
 									{/if}
 									{#if it.kind === "orphan"}
 										<Pill label="orphan" />
@@ -420,13 +460,11 @@
 	]}
 >
 	<Text size="sm">
-		This stops every active transcoding session and removes transient cache
-		directories. Downloads are not touched.
+		This removes cached trailers and image thumbnails. Downloads,
+		pretranscodings, and active transcoding sessions are not touched.
 	</Text>
 	{#if disk}
-		<Text size="sm"
-			>Will free up to {formatBytes(disk.hls_bytes)} from HLS sessions.</Text
-		>
+		<Text size="sm">Will free up to {formatBytes(disk.cache_bytes)}.</Text>
 	{/if}
 </Modal>
 

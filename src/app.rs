@@ -111,6 +111,32 @@ impl Storage {
     pub fn join(&self, p: impl AsRef<Path>) -> PathBuf {
         self.0.join(p)
     }
+
+    /// Trailers, image thumbnails, and other transient caches
+    pub fn cache_dir(&self) -> PathBuf {
+        self.join("cache")
+    }
+
+    /// Parent directory of every per-info-hash torrent output folder.
+    /// Individual entries live at `torrents_dir(storage).join(info_hash)`
+    /// (see [`Download::output_path`](crate::downloads::types::Download::output_path)).
+    pub fn torrents_dir(&self) -> PathBuf {
+        self.join("torrents")
+    }
+
+    /// Parent directory of every pretranscoded MP4.
+    /// Individual entries live at `storage.pretranscoded_dir().join("{download_id}_{mode}_{audio_index}.mp4")`
+    /// (see [`PretranscodingOutputPath::new`]).
+    pub fn pretranscoded_dir(&self) -> PathBuf {
+        self.join("pretranscoded")
+    }
+
+    /// Parent directory for live HLS session subdirectories
+    /// (`hls/{session_id}/playlist.m3u8` + segments). Populated by the live
+    /// transcoding manager; cleaned up when a session ends.
+    pub fn hls_dir(&self) -> std::path::PathBuf {
+        self.join("hls")
+    }
 }
 
 pub async fn create_storage(config: &Config) -> Result<Storage> {

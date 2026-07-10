@@ -109,6 +109,12 @@ impl From<DownloadRow> for Download {
 }
 
 impl Download {
+    /// Directory holding this download's files on disk:
+    /// `data_dir/fs/torrents/{info_hash}/`.
+    pub fn output_path(&self, storage: &crate::app::Storage) -> std::path::PathBuf {
+        storage.torrents_dir().join(&self.info_hash)
+    }
+
     pub async fn find_all(db: &Pool) -> crate::app::Result<Vec<Self>> {
         let rows = sqlx::query_as!(
             DownloadRow,

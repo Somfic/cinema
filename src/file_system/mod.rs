@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::AppContext;
 use crate::app::Error;
 
 mod cache;
@@ -72,12 +71,4 @@ fn fs_stats(path: &Path) -> Result<(SizeInBytes, SizeInBytes), Error> {
             "fs_stats not supported on this platform".into(),
         ))
     }
-}
-
-fn torrents_root(ctx: &AppContext) -> std::path::PathBuf {
-    ctx.storage.join("torrents")
-}
-
-fn hls_root(ctx: &AppContext) -> std::path::PathBuf {
-    ctx.storage.join("hls")
 }

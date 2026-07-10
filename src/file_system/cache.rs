@@ -1,38 +1,41 @@
 use crate::{
     app::{AppContext, Error},
     file_system,
+    transcodings::{PretranscodingOutputPath, types::Pretranscoding},
 };
 
 #[draad::ty]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     Download,
-    // TODO: HLS is not implemented. The idea is that users can "pretranscode" files (like
-    // queueing a download), which will get this type
-    Hls,
+    Pretranscoding,
     Orphan,
 }
 
 #[draad::ty]
 pub struct CacheEntry {
-    /// "download" for tracked downloads, "orphan" for stray torrent dirs.
+    /// "download" for tracked downloads, "pretranscoding" for background
+    /// transcoding artifacts, "orphan" for stray torrent dirs.
     kind: EntryKind,
+    /// Parent download's info_hash. For orphans this is the on-disk dir name.
     info_hash: String,
-    /// the corresponding download entry. None for orphans
+    /// Corresponding download row. `None` for orphans and pretranscodings.
     download: Option<crate::downloads::types::Download>,
-    /// Actual on-disk size of the torrent directory.
+    /// Corresponding pretranscoding row. `None` unless `kind == Pretranscoding`.
+    pretranscoding: Option<Pretranscoding>,
+    /// Actual on-disk size of the underlying files.
     disk_bytes: u64,
 }
 
 pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error> {
     let downloads = crate::downloads::types::Download::find_all(&ctx.db).await?;
 
-    let torrents = file_system::torrents_root(ctx);
+    let torrents = ctx.storage.torrents_dir();
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<CacheEntry> = Vec::with_capacity(downloads.len());
 
     for download in downloads {
-        let dir = torrents.join(&download.info_hash);
+        let dir = download.output_path(&ctx.storage);
         let disk_bytes = file_system::dir_size(&dir).await;
         seen_hashes.insert(download.info_hash.to_lowercase());
 
@@ -40,6 +43,24 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
             kind: EntryKind::Download,
             info_hash: download.info_hash.clone(),
             download: Some(download),
+            pretranscoding: None,
+            disk_bytes,
+        });
+    }
+
+    for pretransoding in Pretranscoding::find_all(&ctx.db).await? {
+        let path = PretranscodingOutputPath::new(
+            &ctx.storage,
+            pretransoding.download_id,
+            pretransoding.only_audio,
+            pretransoding.audio_index,
+        );
+        let disk_bytes = path.disk_bytes().await;
+        entries.push(CacheEntry {
+            kind: EntryKind::Pretranscoding,
+            info_hash: pretransoding.download_info_hash.clone(),
+            download: None,
+            pretranscoding: Some(pretransoding),
             disk_bytes,
         });
     }
@@ -62,6 +83,7 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
                 kind: EntryKind::Orphan,
                 info_hash: name,
                 download: None,
+                pretranscoding: None,
                 disk_bytes,
             });
         }
@@ -80,7 +102,7 @@ pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<
         return Err(Error::InvalidInput("invalid info_hash".into()));
     }
 
-    let root = file_system::torrents_root(ctx);
+    let root = ctx.storage.torrents_dir();
     let target = root.join(&info_hash);
 
     // Confirm the resolved path is inside the torrents root.
@@ -99,28 +121,23 @@ pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<
     Ok(())
 }
 
+/// Wipe the contents of `data_dir/fs/cache/` (trailers and image thumbnails).
+/// Live HLS sessions, pretranscodings, and torrents are intentionally left alone.
 pub async fn clear_app_cache(ctx: &AppContext) -> Result<(), Error> {
-    ctx.transcodings.stop_all_live().await;
-
-    // Wipe every subdirectory of data_dir/fs/ except `torrents/` (downloads).
-    let root = ctx.storage.path().to_path_buf();
-    if let Ok(mut rd) = tokio::fs::read_dir(&root).await {
-        while let Ok(Some(entry)) = rd.next_entry().await {
-            let name = entry.file_name();
-            if name == std::ffi::OsStr::new("torrents") {
-                continue;
-            }
-            let Ok(ft) = entry.file_type().await else {
-                continue;
-            };
-            let path = entry.path();
-            if ft.is_dir() {
-                let _ = tokio::fs::remove_dir_all(&path).await;
-            } else if ft.is_file() {
-                let _ = tokio::fs::remove_file(&path).await;
-            }
+    let root = &ctx.storage.cache_dir();
+    let Ok(mut rd) = tokio::fs::read_dir(&root).await else {
+        return Ok(());
+    };
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let Ok(ft) = entry.file_type().await else {
+            continue;
+        };
+        let path = entry.path();
+        if ft.is_dir() {
+            let _ = tokio::fs::remove_dir_all(&path).await;
+        } else if ft.is_file() {
+            let _ = tokio::fs::remove_file(&path).await;
         }
     }
-
     Ok(())
 }

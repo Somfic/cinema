@@ -99,4 +99,20 @@ impl PretranscodingOutputPath {
             }
         }
     }
+
+    /// Total on-disk size for this pretranscoding: the final `.mp4` (once
+    /// completed) plus every `.mp4.part.*` segment (during pause/resume).
+    /// Missing files contribute 0.
+    pub async fn disk_bytes(&self) -> u64 {
+        let mut total: u64 = 0;
+        if let Ok(meta) = tokio::fs::metadata(&self.output_path).await {
+            total = total.saturating_add(meta.len());
+        }
+        for (_, path) in self.existing_segments().await {
+            if let Ok(meta) = tokio::fs::metadata(&path).await {
+                total = total.saturating_add(meta.len());
+            }
+        }
+        total
+    }
 }

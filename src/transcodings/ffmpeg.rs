@@ -184,7 +184,10 @@ pub(crate) async fn pretranscode(
 /// Concat-copy the pretranscoded segments into the final MP4 with `+faststart`.
 /// All segments must have been produced with identical encoder parameters,
 /// which holds because `VideoPipeline` is deterministic per `Config`.
-pub(crate) fn concat(list_path: &std::path::Path, out_path: &std::path::Path) -> tokio::process::Command {
+pub(crate) fn concat(
+    list_path: &std::path::Path,
+    out_path: &std::path::Path,
+) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("ffmpeg");
     cmd.args([
         "-hide_banner",
