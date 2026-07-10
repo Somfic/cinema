@@ -3,6 +3,7 @@ $$
     BEGIN
         CREATE TYPE media_type AS ENUM ('movie', 'tv');
         CREATE TYPE download_status AS ENUM ('queued', 'downloading', 'paused', 'completed', 'cancelled', 'failed');
+        CREATE TYPE pretranscoding_status AS ENUM ('queued', 'transcoding', 'paused', 'completed', 'cancelled', 'failed');
         CREATE TYPE collection_kind AS ENUM ('manual', 'ordered');
         CREATE TYPE transcoding_option AS ENUM ('enabled', 'only-audio', 'disabled');
     EXCEPTION
@@ -34,9 +35,11 @@ CREATE TABLE IF NOT EXISTS downloads
     error            TEXT,
     created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at     TIMESTAMP WITH TIME ZONE,
+    output_path      TEXT,
 
     UNIQUE (info_hash, file_idx)
 );
+
 
 CREATE TABLE IF NOT EXISTS download_meta
 (
@@ -50,6 +53,26 @@ CREATE TABLE IF NOT EXISTS download_meta
 
     PRIMARY KEY (info_hash, file_idx)
 );
+
+CREATE TABLE IF NOT EXISTS pretranscodings
+(
+    id             SERIAL PRIMARY KEY,
+    download_id    INTEGER                  NOT NULL REFERENCES downloads (id) ON DELETE CASCADE,
+    audio_index    INTEGER                  NOT NULL,
+    only_audio     BOOLEAN                  NOT NULL,
+
+    transcoded_ms  BIGINT                   NOT NULL DEFAULT 0,
+    total_ms       BIGINT,
+    status         pretranscoding_status    NOT NULL DEFAULT 'queued',
+    error          TEXT,
+    created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at   TIMESTAMP WITH TIME ZONE,
+
+    UNIQUE (download_id, only_audio, audio_index)
+);
+
+CREATE INDEX IF NOT EXISTS pretranscodings_status_idx ON pretranscodings (status);
+CREATE INDEX IF NOT EXISTS pretranscodings_download_id_idx ON pretranscodings (download_id);
 
 CREATE TABLE IF NOT EXISTS watch_history
 (
