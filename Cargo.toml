@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Draad
-draad = { git = "https://github.com/ultrazi0/draad", tag = "v0.4.0-pre.1", features = [
+draad = { git = "https://github.com/Somfic/draad", tag = "v0.4.0", features = [
 	"runtime",
 ] }
 async-trait = "0.1"

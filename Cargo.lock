@@ -838,7 +838,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "draad"
 version = "0.3.0"
-source = "git+https://github.com/ultrazi0/draad?tag=v0.4.0-pre.1#b7e9d3f2905c874087c345a2b76ac7517c3d261c"
+source = "git+https://github.com/Somfic/draad?tag=v0.4.0#48816e175043d4ed0af09bb88d8875d88d97cfbe"
 dependencies = [
  "async-trait",
  "axum",
@@ -854,7 +854,7 @@ dependencies = [
 [[package]]
 name = "draad-codegen"
 version = "0.3.0"
-source = "git+https://github.com/ultrazi0/draad?tag=v0.4.0-pre.1#b7e9d3f2905c874087c345a2b76ac7517c3d261c"
+source = "git+https://github.com/Somfic/draad?tag=v0.4.0#48816e175043d4ed0af09bb88d8875d88d97cfbe"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -865,7 +865,7 @@ dependencies = [
 [[package]]
 name = "draad-macros"
 version = "0.3.0"
-source = "git+https://github.com/ultrazi0/draad?tag=v0.4.0-pre.1#b7e9d3f2905c874087c345a2b76ac7517c3d261c"
+source = "git+https://github.com/Somfic/draad?tag=v0.4.0#48816e175043d4ed0af09bb88d8875d88d97cfbe"
 dependencies = [
  "draad-codegen",
  "proc-macro2",
