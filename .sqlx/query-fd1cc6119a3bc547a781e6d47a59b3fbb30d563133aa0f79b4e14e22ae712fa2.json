@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT pt.download_id, pt.only_audio, pt.audio_index\n                FROM pretranscodings pt\n                JOIN downloads d ON d.id = pt.download_id\n                WHERE pt.id = $1\n                FOR UPDATE OF d\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "download_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "download_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "only_audio",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "only_audio"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "audio_index",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "audio_index"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fd1cc6119a3bc547a781e6d47a59b3fbb30d563133aa0f79b4e14e22ae712fa2"
+}

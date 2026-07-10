@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE pretranscodings SET status = 'failed', error = 'output file missing' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "03b574463640adfc15caa8bb959674e3cb5d037c97d08151c45fb1cf2700c721"
+}

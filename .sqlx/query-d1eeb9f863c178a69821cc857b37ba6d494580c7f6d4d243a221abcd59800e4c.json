@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE pretranscodings\n                SET status = 'transcoding', error = NULL\n                WHERE id = $1 AND status = 'queued'\n                RETURNING transcoded_ms\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transcoded_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "transcoded_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d1eeb9f863c178a69821cc857b37ba6d494580c7f6d4d243a221abcd59800e4c"
+}
