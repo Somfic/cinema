@@ -426,7 +426,7 @@
 {#snippet trailersTab()}
 	<SettingsSection
 		title="YouTube cookies"
-		description="Trailers are fetched via yt-dlp. In Docker (no browser available) YouTube often blocks anonymous requests, upload a cookies.txt exported from a signed-in browser to bypass that."
+		description="Trailers are fetched via yt-dlp. The Docker image already mints YouTube PO tokens in-process, so this is only needed if a title still won't load: upload a cookies.txt exported from a signed-in browser to authenticate requests."
 		variant="plain"
 	>
 		<Field label="Status" layout="horizontal" align="center">

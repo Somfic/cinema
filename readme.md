@@ -14,6 +14,10 @@
 docker run -e CINEMA_TMDB_API_KEY=your_api_key -v ./data:/app/data -p 3000:3000 -p 6881:6881 ghcr.io/somfic/cinema
 ```
 
+```sh
+CINEMA_TMDB_API_KEY=your_api_key docker compose up -d
+```
+
 ### Environment variables
 
 | Variable | Description | Default |
@@ -24,6 +28,9 @@ docker run -e CINEMA_TMDB_API_KEY=your_api_key -v ./data:/app/data -p 3000:3000 
 | `CINEMA_DATABASE_URL` | Database connection string (sqlite/postgres/mysql) | SQLite in data dir |
 | `CINEMA_CONFIG` | Config file path | `cinema.toml` |
 | `CINEMA_TMDB_API_KEY` | TMDB API key (required) | |
+| `CINEMA_YTDLP_POT_BASE_URL` | External bgutil PO-token provider URL. Normally unset — the image mints tokens in-process (script mode). Set only to use a separate provider (see [Trailers](#trailers)) | unset |
+| `CINEMA_YTDLP_COOKIES` | Path to a `cookies.txt` for yt-dlp (overrides the uploaded one) | unset |
+| `CINEMA_YTDLP_COOKIES_FROM_BROWSER` | Browser to read cookies from when no cookies file is set | `chrome` |
 | `CINEMA_STREAM_SOURCES` | Comma-separated stream source URLs | `https://torrentio.strem.fun` |
 | `CINEMA_SUBTITLE_LANGUAGES` | Comma-separated subtitle languages | `en` |
 | `CINEMA_MAX_CONCURRENT_DOWNLOADS` | Max concurrent background downloads | `2` |

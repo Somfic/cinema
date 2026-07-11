@@ -15,6 +15,15 @@ services:
       - POSTGRES_USER=root
       - POSTGRES_PASSWORD=password
 
+  trailers-api:
+    build: https://github.com/Theryston/trailers-api.git
+    ports:
+      - "3456:3000"
+    environment:
+      DATA_FOLDER: /data
+    volumes:
+      - ./data/trailers-api:/data
+
 volumes:
   db-data:
 
