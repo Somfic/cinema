@@ -412,6 +412,7 @@ impl TorrentEngine {
         let id = TorrentIdOrHash::parse(&key.info_hash)
             .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
         let Some(handle) = self.session.get(id) else {
+            self.remove_file(&key.info_hash, key.file_idx).await?;
             return Ok(());
         };
 
@@ -420,12 +421,7 @@ impl TorrentEngine {
 
         self.stream_handles.lock().await.remove(key);
 
-        let path = self.file_path(&key.info_hash, key.file_idx)?;
-        if let Err(err) = tokio::fs::remove_file(path).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(err.into());
-        }
+        self.remove_file(&key.info_hash, key.file_idx).await?;
 
         // If the torrent is empty, stop it and delete the whole folder
         if files.is_empty() {
@@ -455,6 +451,17 @@ impl TorrentEngine {
         }
 
         Ok(files)
+    }
+
+    async fn remove_file(&self, info_hash: &str, file_idx: usize) -> crate::app::Result<()> {
+        let path = self.file_path(info_hash, file_idx)?;
+        if let Err(err) = tokio::fs::remove_file(path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(err.into());
+        }
+
+        Ok(())
     }
 
     /// Remove a whole torrent from the session.
