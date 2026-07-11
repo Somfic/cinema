@@ -93,12 +93,10 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
 }
 
 pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<(), Error> {
-    // Reject anything that could escape the torrents root.
-    if info_hash.is_empty()
-        || info_hash.contains('/')
-        || info_hash.contains('\\')
-        || info_hash.contains("..")
-    {
+    // Reject anything that is not a valid hex (SHA-1)
+    static HASH_REGEX: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^[a-fA-F0-9]{40}$").unwrap());
+    if !HASH_REGEX.is_match(&info_hash) {
         return Err(Error::InvalidInput("invalid info_hash".into()));
     }
 

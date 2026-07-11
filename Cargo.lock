@@ -449,6 +449,7 @@ dependencies = [
  "mime_guess",
  "nu-ansi-term",
  "rand 0.10.1",
+ "regex",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
