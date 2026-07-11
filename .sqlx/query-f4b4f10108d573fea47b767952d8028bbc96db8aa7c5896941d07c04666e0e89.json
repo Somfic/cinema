@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO download_meta (info_hash, file_idx, media_id, season, episode, resolution)\n                SELECT * FROM UNNEST($1::text[], $2::int4[], $3::int4[], $4::int4[], $5::int4[], $6::text[])\n                ON CONFLICT (info_hash, file_idx) DO UPDATE SET\n                    media_id = EXCLUDED.media_id,\n                    season = EXCLUDED.season,\n                    episode = EXCLUDED.episode,\n                    resolution = EXCLUDED.resolution\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int4Array",
+        "Int4Array",
+        "Int4Array",
+        "Int4Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f4b4f10108d573fea47b767952d8028bbc96db8aa7c5896941d07c04666e0e89"
+}

@@ -2,35 +2,37 @@
 name = "cinema"
 version = "0.1.0"
 edition = "2024"
-build = "build.rs"
 
 [[bin]]
 name = "cinema"
 path = "src/main.rs"
 
-[build-dependencies]
-# Same crate, with the codegen feature flipped on for build.rs.
-draad = { version = "0.1.0", features = ["codegen"] }
-
 [dependencies]
-# Schema-driven RPC — proc-macros only at runtime.
-draad = { version = "0.1.0", features = ["runtime"] }
+# Draad
+draad = { git = "https://github.com/Somfic/draad", tag = "v0.4.0", features = [
+	"runtime",
+] }
 async-trait = "0.1"
-ts-rs = "11"
 
 # Web
-axum = { version = "0.8.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["fs"] }
-reqwest = { version = "0.13.2", features = ["json", "stream"] }
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+tower-http = { version = "0.7", features = ["fs"] }
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
 
 # Database
-sqlx = { version = "0.8.6", features = ["any", "sqlite", "postgres", "mysql", "runtime-tokio", "migrate"] }
+sqlx = { version = "0.9.0", features = [
+	"postgres",
+	"chrono",
+	"runtime-tokio",
+	"tls-rustls-aws-lc-rs",
+	"migrate",
+] }
 
 # Async
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 futures = "0.3"
 async-stream = "0.3"
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
@@ -39,7 +41,7 @@ toml = "1.1.0"
 
 
 # Torrent
-librqbit = "8"
+librqbit = { version = "8", features = ["disable-upload"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -55,7 +57,11 @@ nu-ansi-term = "0.50"
 
 # Misc
 urlencoding = "2.1.3"
+url = "2"
 bytes = "1"
 hex = "0.4"
+rand = "0.10"
+regex = "1"
 mime_guess = "2"
 libc = "0.2"
+chrono = { version = "0.4", features = ["serde"] }

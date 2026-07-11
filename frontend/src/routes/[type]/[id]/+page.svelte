@@ -6,31 +6,31 @@
 	import * as topbar from "$lib/topbar.svelte";
 	import {
 		type MediaItem,
-		type MediaType,
 		type Stream,
-		type SubtitleTrack,
-		type SubtitleCue,
-		type SearchResult,
 		type WatchHistoryItem,
+		type MediaType,
+		type TranscodingOption,
 	} from "$lib/schema";
 	import { api } from "$lib/api";
-	import { getDetails, imageUrl, playStream } from "$lib/utils";
+	import { getDetails, imageUrl, rgbToHex } from "$lib/utils";
 	import { remote } from "$lib/remote.svelte";
+	import { PlaybackSession } from "$lib/playback.svelte";
 
-	// This client is a remote-driven TV display.
-	const isTv = $derived(remote.mode === "tv");
-	import { Banner, Button, Spinner, Text } from "glow";
+	import { Banner, Spinner, Glow } from "glow";
 	import CyclingBackdrop from "$lib/components/CyclingBackdrop.svelte";
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import MediaInfo from "$lib/components/MediaInfo.svelte";
 	import SeasonBrowser from "$lib/components/SeasonBrowser.svelte";
 	import EpisodeDetail from "$lib/components/EpisodeDetail.svelte";
+	import DownloadModal from "$lib/components/DownloadModal.svelte";
 
-	type EmbeddedSubtitleTrack = {
-		stream_index: number;
-		language?: string;
-		codec?: string;
-	};
+	// This client is a remote-driven TV display.
+	const isTv = $derived(remote.mode === "tv");
+
+	// ── Download modal ──
+	let downloadModalState = $state<
+		true | { season: number; episode: number } | null
+	>(null);
 
 	// ── Core state ──
 	let item = $state<MediaItem | null>(null);
@@ -41,56 +41,23 @@
 	let error = $state<string | null>(null);
 	let backdropColor = $state("9, 10, 19");
 	let accentColor = $state("228, 228, 231");
+	let palette = $state<string[]>([]);
 
 	// ── Player state ──
 	let selectedStream = $state<Stream | null>(null);
-	let streamUrl = $state<string | null>(null);
-	let subtitleTracks = $state<SubtitleTrack[]>([]);
-	let activeCues = $state<SubtitleCue[]>([]);
-	let activeTrackUrl = $state<string | undefined>(undefined);
-	let similarItems = $state<SearchResult[]>([]);
 	let resumeEntry = $state<WatchHistoryItem | null>(null);
 	let playerTime = $state(0);
 	let playerDuration = $state(0);
 	let playerPaused = $state(true);
 	let playerStartTime = $state(0);
-	let loadingSubtitles = $state(false);
-	let playingLocal = $state(false);
 
-	interface AudioTrackInfo {
-		index: number;
-		stream_index: number;
-		name: string;
-		language: string | null;
-		codec: string;
-	}
-
-	const BROWSER_SAFE_AUDIO = new Set([
-		"aac",
-		"mp3",
-		"opus",
-		"vorbis",
-		"flac",
-	]);
-	interface StreamStats {
-		progress_bytes: number;
-		total_bytes: number;
-		download_speed_mbps: number;
-		peers: number;
-		finished: boolean;
-	}
-	let streamStats = $state<StreamStats | null>(null);
-	let pieceMap = $state<number[]>([]);
-	// Both stats and the piece bitmap arrive via WS push.
-	let statsUnsub: (() => void) | undefined;
-	let piecesUnsub: (() => void) | undefined;
-
-	let fileAudioTracks = $state<AudioTrackInfo[]>([]);
-	let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
-	let activeAudioIdx = $state(0);
-	let mediaDuration = $state(0);
-	let hlsSessionId = $state<string | null>(null);
-	let transcoding = $state({ enabled: false, onlyAudio: false });
+	const session = new PlaybackSession({
+		item: () => item,
+		season: () => selectedSeason,
+		episode: () => selectedEpisode,
+		currentStream: () => selectedStream,
+		onError: (msg) => (error = msg),
+	});
 
 	// ── Derived ──
 	const slideIndex = $derived(
@@ -108,9 +75,8 @@
 	);
 
 	const activeEpisode = $derived(
-		activeSeason?.episodes?.find(
-			(e) => e.episode_number === selectedEpisode,
-		) ?? null,
+		activeSeason?.episodes?.find((e) => e.episode_number === selectedEpisode) ??
+			null,
 	);
 
 	const playerTitle = $derived(
@@ -167,6 +133,115 @@
 		}
 	});
 
+	// Reveal the loading glow only once loading has lasted >500ms — most titles
+	// load near-instantly, so flashing the glow every time is jarring. Until then
+	// the glow stays black (indistinguishable from the dark background); when it
+	// flips true the Glow's own `transition` morphs black → the loading palette
+	// for us, and if the title loads first it morphs straight to its colors.
+	let loadingSlow = $state(false);
+	$effect(() => {
+		if (item) {
+			loadingSlow = false;
+			return;
+		}
+		loadingSlow = false;
+		const t = setTimeout(() => (loadingSlow = true), 500);
+		return () => clearTimeout(t);
+	});
+
+	// ── Glow backdrop palette ──
+	// A dark→vibrant ramp built from the extracted backdrop colors: the darkened
+	// dominant as the base/gap, the vibrant accent (dimmed → full → lightened) as
+	// the flowing light. Kept dim so text over it stays readable.
+	//
+	// While loading there are no extracted colors yet, so use black (invisible)
+	// for the first 500ms, then a vivid cinema-purple palette for a slow load.
+	const BLACK = "#000000";
+	const BLACK_COLORS = [BLACK, BLACK, BLACK, BLACK, BLACK];
+	const DEFAULT_GLOW_BG = "#0a0616";
+	const DEFAULT_GLOW_COLORS = [
+		"#1a0033",
+		"#5b2a9d",
+		"#8b6ded",
+		"#5e7bff",
+		"#c4b5fd",
+	];
+	const glowBg = $derived(
+		item ? rgbToHex(backdropColor, 1.4) : loadingSlow ? DEFAULT_GLOW_BG : BLACK,
+	);
+	// Lift a "r, g, b" swatch so its brightest channel reaches `targetMax`, keeping
+	// hue. Only ever brightens (never dims), so a dark backdrop (e.g. a deep-blue
+	// poster) still yields a visibly glowing hot stop instead of a near-black ramp.
+	function litHex(rgb: string, targetMax: number): string {
+		const [r, g, b] = rgb.split(",").map((s) => Number(s.trim()));
+		const mx = Math.max(r, g, b, 1);
+		return rgbToHex(rgb, Math.max(1, targetMax / mx));
+	}
+	const glowColors = $derived.by(() => {
+		if (!item) return loadingSlow ? DEFAULT_GLOW_COLORS : BLACK_COLORS;
+		// Fall back to the old single-accent brightness ramp when no palette was
+		// extracted.
+		if (!palette.length) {
+			return [
+				rgbToHex(backdropColor, 1.4),
+				rgbToHex(accentColor, 0.8),
+				rgbToHex(accentColor, 1.2),
+				rgbToHex(accentColor, 1.7),
+			];
+		}
+		// Glow takes 5 stops. Reserve the first for the dark dominant base, then
+		// sample up to 4 swatches evenly from the dark→light palette (keeps both
+		// the darkest and the lightest).
+		const MAX = 4;
+		const swatches =
+			palette.length <= MAX
+				? palette
+				: Array.from(
+						{ length: MAX },
+						(_, k) =>
+							palette[Math.round((k * (palette.length - 1)) / (MAX - 1))],
+					);
+		// Lift each swatch toward a rising brightness target (150 → 240 on its
+		// brightest channel) so the ramp always reaches a visible hot stop.
+		const n = swatches.length;
+		const lit = swatches.map((c, i) =>
+			litHex(c, 150 + (n === 1 ? 1 : i / (n - 1)) * 90),
+		);
+		return [rgbToHex(backdropColor, 1.4), ...lit];
+	});
+
+	// Perceptual brightness (luma, 0–1) of the accent color.
+	const accentLuma = $derived.by(() => {
+		const [r, g, b] = accentColor.split(",").map((s) => Number(s.trim()));
+		return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+	});
+	// Lerp between "ray" mode (ribbon 0, flowing sheets) for dark accents and
+	// "ribbon" mode (discrete strips) for bright accents. smoothstep over the
+	// mid-brightness band so the transition is gradual, not a hard switch. During
+	// loading, use flowing "ray" mode for a clean ambient look.
+	const glowRibbon = $derived.by(() => {
+		if (!item) return 0;
+		const t = Math.max(0, Math.min(1, (accentLuma - 0.35) / 0.4));
+		return t * t * (3 - 2 * t);
+	});
+
+	// Which side the backdrop fades into — mirrors the .gradient-right/.left
+	// visibility below. `full` fills the screen with glow: while the title loads
+	// (behind the spinner) and in season-select mode (slide 1, over the blurred
+	// backdrop). `none` when nothing is shown (playing / TV).
+	const glowSide = $derived(
+		!item
+			? "full"
+			: selectedStream !== null || isTv
+				? "none"
+				: slideIndex === 0
+					? "right"
+					: slideIndex === 2
+						? "left"
+						: "full",
+	);
+	const glowVisible = $derived(glowSide !== "none");
+
 	// ── Body style management ──
 	$effect(() => {
 		if (selectedStream) {
@@ -207,20 +282,12 @@
 		item = null;
 		streams = [];
 		error = null;
-		similarItems = [];
 		getDetails(type, id)
 			.then((res) => {
 				item = res;
 				if (selectedSeason !== null && selectedEpisode !== null) {
 					// Episode was selected via URL params — navigate to episode detail
 				}
-				// Fetch similar + watch history in background
-				api.media
-					.similar(type, id)
-					.then((items) => {
-						similarItems = items;
-					})
-					.catch(() => {});
 				api.watch
 					.history()
 					.then((items) => {
@@ -289,7 +356,7 @@
 		if (!item) return;
 		loadingStreams = true;
 		try {
-			streams = await api.streams.movie(item.id);
+			streams = await api.streams.movie(item.tmdb_id);
 			if (streams.length > 0) play(streams[0]);
 		} catch (e: any) {
 			error = e.message;
@@ -302,7 +369,7 @@
 		if (!item) return;
 		loadingStreams = true;
 		try {
-			streams = await api.streams.tv(item.id, season, episode);
+			streams = await api.streams.tv(item.tmdb_id, season, episode);
 			if (streams.length > 0) play(streams[0]);
 		} catch (e: any) {
 			error = e.message;
@@ -342,15 +409,16 @@
 				file_idx: resumeEntry.file_idx,
 			} as Stream,
 			true,
+			{ startAt: playerStartTime, transcoding: resumeEntry.transcoding },
 		);
 
 		// Fetch streams in background so the stream switcher works
 		try {
 			if (item.media_type === "movie") {
-				streams = await api.streams.movie(item.id);
+				streams = await api.streams.movie(item.tmdb_id);
 			} else if (selectedSeason != null && selectedEpisode != null) {
 				streams = await api.streams.tv(
-					item.id,
+					item.tmdb_id,
 					selectedSeason,
 					selectedEpisode,
 				);
@@ -359,7 +427,11 @@
 	}
 
 	// ── Player ──
-	async function play(stream: Stream, fromResume = false) {
+	function play(
+		stream: Stream,
+		fromResume = false,
+		startOptions?: { startAt?: number; transcoding?: TranscodingOption },
+	) {
 		if (!item) return;
 
 		// When acting as a remote, hand playback to the paired TV instead of
@@ -367,7 +439,7 @@
 		if (remote.mode === "remote" && remote.pairedId) {
 			remote.cast({
 				type: item.media_type,
-				id: item.id,
+				id: item.tmdb_id,
 				infoHash: stream.info_hash,
 				fileIdx: stream.file_idx,
 				season: item.media_type === "tv" ? selectedSeason : null,
@@ -378,248 +450,25 @@
 
 		if (!fromResume) playerStartTime = 0;
 		selectedStream = stream;
-		streamUrl = null;
-		stopHlsSession();
 
 		const u = new URL(window.location.href);
 		u.searchParams.set("hash", stream.info_hash);
 		u.searchParams.set("file", String(stream.file_idx));
 		replaceState(u, {});
 
-		playStream(stream.info_hash, stream.file_idx)
-			.then(async (result) => {
-				playingLocal = result.local;
-				streamUrl = result.url;
-				fileAudioTracks = [];
-				activeAudioIdx = 0;
-				pollAudioTracks(stream.info_hash, stream.file_idx);
-				if (!result.local)
-					pollStreamStats(stream.info_hash, stream.file_idx);
-			})
-			.catch((e) => {
+		session
+			.start(stream, startOptions)
+			.then(() => session.loadSubtitles())
+			.catch((e: Error) => {
 				error = e.message;
 				selectedStream = null;
 			});
-
-		loadSubtitles();
-	}
-
-	let audioPollTimer: ReturnType<typeof setInterval> | undefined;
-
-	function pollAudioTracks(infoHash: string, fileIdx: number) {
-		if (audioPollTimer) clearInterval(audioPollTimer);
-
-		const check = async () => {
-			try {
-				const res = await fetch(
-					`/api/stream/${infoHash}/${fileIdx}/audio`,
-				);
-				const data = await res.json();
-				const tracks: AudioTrackInfo[] = data.tracks ?? [];
-				const subs: EmbeddedSubtitleTrack[] = data.subtitles ?? [];
-				if (tracks.length > 0) {
-					if (tracks.length > 1) fileAudioTracks = tracks;
-					if (data.duration) mediaDuration = data.duration;
-					// Auto-switch to HLS remux if default audio codec is unsupported by the browser
-					if (
-						!hlsSessionId &&
-						tracks[0] &&
-						!BROWSER_SAFE_AUDIO.has(tracks[0].codec)
-					) {
-						fileAudioTracks = tracks;
-						transcoding.enabled = true;
-						startHlsRemux(
-							infoHash,
-							fileIdx,
-							0,
-							transcoding.onlyAudio,
-						);
-					}
-				}
-				if (subs.length > 0 && embeddedSubtitleTracks.length === 0) {
-					embeddedSubtitleTracks = subs;
-					// Prepend embedded tracks to subtitle list
-					const embedded: SubtitleTrack[] = subs.map((s) => ({
-						id: `embedded:${s.stream_index}`,
-						language: s.language ?? "und",
-						url: `/api/stream/${infoHash}/${fileIdx}/subtitles/${s.stream_index}`,
-						score: 1000, // embedded subs are perfectly synced
-					}));
-					subtitleTracks = [...embedded, ...subtitleTracks];
-					// Auto-select first embedded track if no track is active
-					if (!activeTrackUrl && embedded.length > 0) {
-						selectSubtitleTrack(embedded[0]);
-					}
-				}
-				if (tracks.length > 0 || subs.length > 0) {
-					clearInterval(audioPollTimer);
-					audioPollTimer = undefined;
-				}
-			} catch {}
-		};
-
-		check();
-		audioPollTimer = setInterval(check, 10_000);
-	}
-
-	function pollStreamStats(infoHash: string, fileIdx: number) {
-		stopStreamStats();
-		streamStats = null;
-		pieceMap = [];
-
-		statsUnsub = api.streamsEvents.onStats((p) => {
-			if (p.info_hash !== infoHash) return;
-			streamStats = {
-				progress_bytes: p.progress_bytes,
-				total_bytes: p.total_bytes,
-				download_speed_mbps: p.download_speed_mbps,
-				peers: p.peers,
-				finished: p.finished,
-			};
-		});
-
-		piecesUnsub = api.streamsEvents.onPieces((p) => {
-			if (p.info_hash !== infoHash || p.file_idx !== fileIdx) return;
-			pieceMap = p.pieces;
-		});
-	}
-
-	function stopStreamStats() {
-		if (statsUnsub) {
-			statsUnsub();
-			statsUnsub = undefined;
-		}
-		if (piecesUnsub) {
-			piecesUnsub();
-			piecesUnsub = undefined;
-		}
-		streamStats = null;
-		pieceMap = [];
-	}
-
-	async function switchAudio(idx: number) {
-		if (!selectedStream) return;
-		activeAudioIdx = idx;
-		await startHlsRemux(
-			selectedStream.info_hash,
-			selectedStream.file_idx,
-			idx,
-			transcoding.onlyAudio,
-			playerTime,
-		);
-	}
-
-	async function toggleTranscoding(enabled: boolean, onlyAudio: boolean) {
-		if (!selectedStream) return;
-		if (enabled) {
-			await startHlsRemux(
-				selectedStream.info_hash,
-				selectedStream.file_idx,
-				activeAudioIdx,
-				onlyAudio,
-				playerTime,
-			);
-		} else {
-			stopHlsSession();
-			const result = await playStream(
-				selectedStream.info_hash,
-				selectedStream.file_idx,
-			);
-			streamUrl = result.url;
-		}
-	}
-
-	async function startHlsRemux(
-		infoHash: string,
-		fileIdx: number,
-		audioIdx: number,
-		onlyAudio: boolean,
-		startAt = 0,
-	) {
-		stopHlsSession();
-		streamUrl = null;
-		try {
-			const t = startAt > 0 ? `&t=${startAt.toFixed(1)}` : "";
-			const res = await fetch(
-				`/api/stream/${infoHash}/${fileIdx}/remux?audio=${audioIdx}${t}&only_audio=${onlyAudio}`,
-				{ method: "POST" },
-			);
-			const data = await res.json();
-			hlsSessionId = data.session_id;
-			streamUrl = data.playlist_url;
-		} catch (e: any) {
-			error = e.message;
-		}
-	}
-
-	function stopHlsSession() {
-		if (hlsSessionId) {
-			fetch(`/api/hls/${hlsSessionId}`, { method: "DELETE" }).catch(
-				() => {},
-			);
-			hlsSessionId = null;
-		}
-	}
-
-	async function loadSubtitles() {
-		if (!item) return;
-		loadingSubtitles = true;
-		try {
-			if (item.media_type === "movie") {
-				subtitleTracks = await api.subtitles.movie(item.id);
-			} else if (selectedSeason !== null && selectedEpisode !== null) {
-				subtitleTracks = await api.subtitles.tv(
-					item.id,
-					selectedSeason,
-					selectedEpisode,
-				);
-			}
-			if (subtitleTracks.length > 0)
-				await selectSubtitleTrack(subtitleTracks[0]);
-		} catch {
-		} finally {
-			loadingSubtitles = false;
-		}
-	}
-
-	async function selectSubtitleTrack(track: SubtitleTrack) {
-		loadingSubtitles = true;
-		activeTrackUrl = track.url;
-		try {
-			if (track.id.startsWith("embedded:")) {
-				// Fetch directly from embedded subtitle extraction endpoint
-				const res = await fetch(track.url);
-				activeCues = await res.json();
-			} else {
-				activeCues = await api.subtitles.cues(track.url);
-			}
-		} catch {
-			activeCues = [];
-		} finally {
-			loadingSubtitles = false;
-		}
-	}
-
-	function disableSubtitles() {
-		activeCues = [];
-		activeTrackUrl = undefined;
 	}
 
 	function stopPlaying() {
-		saveProgress();
-		if (audioPollTimer) {
-			clearInterval(audioPollTimer);
-			audioPollTimer = undefined;
-		}
-		stopStreamStats();
-		stopHlsSession();
+		session.saveProgress(playerTime, playerDuration);
+		session.stop();
 		selectedStream = null;
-		streamUrl = null;
-		subtitleTracks = [];
-		activeCues = [];
-		activeTrackUrl = undefined;
-		fileAudioTracks = [];
-		embeddedSubtitleTracks = [];
 		const u = new URL(window.location.href);
 		u.searchParams.delete("hash");
 		u.searchParams.delete("file");
@@ -644,41 +493,29 @@
 	}
 
 	// ── Progress saving ──
-	function saveProgress() {
-		if (!item || !selectedStream || playerTime <= 0) return;
-		// For TV, don't save without season/episode
-		if (item.media_type === "tv" && (!selectedSeason || !selectedEpisode))
-			return;
-		api.watch.record({
-			media_type: item.media_type,
-			tmdb_id: item.id,
-			title: item.title,
-			poster_path: item.poster_path ?? null,
-			season: selectedSeason ?? null,
-			episode: selectedEpisode ?? null,
-			info_hash: selectedStream.info_hash,
-			file_idx: selectedStream.file_idx,
-			progress: playerTime,
-			duration: playerDuration,
-		});
-	}
-
 	// Save when paused
 	$effect(() => {
 		if (playerPaused && selectedStream && playerTime > 0) {
-			saveProgress();
+			session.saveProgress(playerTime, playerDuration);
 		}
 	});
 
 	// Save periodically every 30s while playing
 	$effect(() => {
 		if (!selectedStream) return;
-		const interval = setInterval(saveProgress, 30000);
+		const interval = setInterval(
+			() => session.saveProgress(playerTime, playerDuration),
+			30000,
+		);
 		return () => clearInterval(interval);
 	});
 
-	// Save on page leave
-	onDestroy(() => saveProgress());
+	// Save on page leave and tear down the session (audio poll timer, stats
+	// subscriptions, backend HLS session) so navigating away doesn't leak them.
+	onDestroy(() => {
+		session.saveProgress(playerTime, playerDuration);
+		session.stop();
+	});
 </script>
 
 <svelte:head>
@@ -686,18 +523,39 @@
 </svelte:head>
 
 {#if error}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div onclick={() => (error = "")}>
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<div role="button" tabindex="0" onclick={() => (error = "")}>
 		<Banner variant="error" label={error} />
 	</div>
 {/if}
+<!-- Single Glow instance, kept mounted across loading → loaded so the WebGL
+     context is never torn down and recreated. `full` fills the screen behind the
+     loading spinner; once loaded it fades into the backdrop's content side. -->
+<div
+	class="glow-fade"
+	class:hidden={!glowVisible}
+	class:full={glowSide === "full"}
+	class:left={glowSide === "left"}
+	class:right={glowSide === "right"}
+>
+	<Glow
+		colors={glowColors}
+		bgColor={glowBg}
+		rotation={52}
+		zoom={7}
+		ribbon={glowRibbon}
+		ribbonWidth={1.3}
+		transition={5000}
+		speed={glowVisible ? 1 : 0}
+	/>
+</div>
 {#if !item}
 	<div class="loading-screen" out:fade={{ duration: 300 }}>
 		<Spinner size={32} />
 	</div>
 {:else}
 	<!-- Backdrop -->
-	<div class="backdrop-container">
+	<div class="backdrop-container" class:blurred={slideIndex === 1}>
 		<CyclingBackdrop
 			images={slideIndex === 2 && episodeBackdrops.length > 0
 				? episodeBackdrops
@@ -707,6 +565,7 @@
 			position={isTv ? "0%" : backdropPosition}
 			bind:dominantColor={backdropColor}
 			bind:accentColor
+			bind:palette
 		/>
 	</div>
 	<div
@@ -732,13 +591,16 @@
 			<MediaInfo
 				{item}
 				{loadingStreams}
-				{similarItems}
 				{resumeEntry}
+				playing={selectedStream !== null}
 				tvMode={isTv}
 				onwatch={loadAndPlayMovieStreams}
 				onresume={resume}
 				onselectseason={selectSeason}
 				onselectepisode={selectEpisode}
+				ondownload={() => {
+					downloadModalState = true;
+				}}
 			/>
 		</div>
 
@@ -764,11 +626,17 @@
 						season={activeSeason}
 						episode={activeEpisode}
 						showTitle={item.title}
-						tmdbId={item.id}
+						tmdbId={item.tmdb_id}
 						{resumeEntry}
 						{loadingStreams}
 						onselectepisode={selectEpisode}
 						onplay={playEpisode}
+						ondownload={(season, episode) => {
+							downloadModalState = {
+								season,
+								episode,
+							};
+						}}
 					/>
 				{/if}
 			</div>
@@ -779,26 +647,30 @@
 	<div class="player-overlay" class:active={selectedStream !== null}>
 		{#if selectedStream}
 			<VideoPlayer
-				src={streamUrl ?? ""}
-				subtitles={activeCues}
-				{streamStats}
-				{pieceMap}
+				src={session.streamUrl ?? ""}
+				subtitles={session.activeCues}
+				streamStats={session.streamStats}
+				pieceMap={session.pieceMap}
 				title={playerTitle}
 				topline={playerTopline}
 				titleImage={item?.logo_path
 					? imageUrl(item.logo_path, "original")
 					: undefined}
-				audioTracks={fileAudioTracks.map((t) => ({
+				audioTracks={session.fileAudioTracks.map((t) => ({
 					id: t.stream_index,
 					name: t.name,
 					lang: t.language ?? undefined,
 				}))}
-				activeAudioTrack={activeAudioIdx}
-				onAudioSelect={(track) => switchAudio(track.id)}
-				knownDuration={hlsSessionId ? mediaDuration : 0}
-				{subtitleTracks}
-				{loadingSubtitles}
-				{activeTrackUrl}
+				activeAudioTrack={session.activeAudioIdx}
+				onAudioSelect={(track) => session.switchAudio(track.id, playerTime)}
+				chapters={session.fileChapters}
+				knownDuration={session.hlsSessionId ? session.mediaDuration : 0}
+				onSeekRestart={session.hlsSessionId
+					? (t) => session.seekRestart(t)
+					: undefined}
+				subtitleTracks={session.subtitleTracks}
+				loadingSubtitles={session.loadingSubtitles}
+				activeTrackUrl={session.activeTrackUrl}
 				accent={accentColor}
 				backdrop={activeEpisode?.stills?.[0]
 					? imageUrl(activeEpisode.stills[0], "original")
@@ -806,27 +678,59 @@
 						? imageUrl(item.backdrops[0], "original")
 						: undefined}
 				startTime={playerStartTime}
-				bind:transcoding
-				onTranscodingChange={toggleTranscoding}
-				streams={playingLocal ? [] : streams}
+				bind:transcoding={session.transcoding}
+				hasAudioPretranscoding={session.hasAudioPretranscoding}
+				hasFullPretranscoding={session.hasFullPretranscoding}
+				onTranscodingChange={(enabled, onlyAudio) =>
+					session.toggleTranscoding(enabled, onlyAudio, playerTime)}
+				streams={session.playingLocal ? [] : streams}
 				activeStreamHash={selectedStream?.info_hash}
-				onStreamSelect={playingLocal ? undefined : switchStream}
+				externalUrl={api.urls.stream(
+					selectedStream.info_hash,
+					selectedStream.file_idx,
+				)}
+				onReveal={() =>
+					selectedStream &&
+					api.streams.reveal(selectedStream.info_hash, selectedStream.file_idx)}
+				onStreamSelect={session.playingLocal ? undefined : switchStream}
 				bind:currentTime={playerTime}
 				bind:duration={playerDuration}
 				bind:paused={playerPaused}
 				onClose={stopPlaying}
-				onSubtitleSelect={selectSubtitleTrack}
-				onSubtitleOff={disableSubtitles}
+				onSubtitleSelect={(t) => session.selectSubtitleTrack(t)}
+				onSubtitleOff={() => session.disableSubtitles()}
 				autoplay
 			/>
 		{/if}
 	</div>
 {/if}
 
+{#if item}
+	<DownloadModal
+		bind:open={
+			() => downloadModalState !== null,
+			(open) => {
+				if (!open) {
+					downloadModalState = null;
+				}
+			}
+		}
+		tmdbId={item.tmdb_id}
+		mediaType={item.media_type}
+		season={typeof downloadModalState === "object"
+			? downloadModalState?.season
+			: null}
+		episode={typeof downloadModalState === "object"
+			? downloadModalState?.episode
+			: null}
+	/>
+{/if}
+
 <style>
 	.loading-screen {
 		position: fixed;
 		inset: 0;
+		z-index: 4;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -844,6 +748,15 @@
 		width: 100%;
 		height: 100%;
 		z-index: 0;
+		transition: filter 0.5s ease;
+	}
+
+	/* Season-select mode: the glow is the backdrop, with the image blurred
+	   softly behind it. `scale` hides the transparent edge bleed the blur
+	   would otherwise pull in. */
+	.backdrop-container.blurred {
+		filter: blur(24px);
+		transform: scale(1.08);
 	}
 
 	@property --tint-r {
@@ -866,7 +779,7 @@
 	.gradient-left {
 		position: fixed;
 		inset: 0;
-		z-index: 0;
+		z-index: 2;
 		pointer-events: none;
 		--tint-r: 9;
 		--tint-g: 10;
@@ -882,10 +795,10 @@
 		background: linear-gradient(
 			to right,
 			transparent 0%,
-			transparent 35%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 52%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.95) 67%,
-			rgb(var(--tint-r), var(--tint-g), var(--tint-b)) 78%
+			transparent 50%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.38) 64%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.54) 77%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 86%
 		);
 	}
 
@@ -893,10 +806,10 @@
 		background: linear-gradient(
 			to left,
 			transparent 0%,
-			transparent 35%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 52%,
-			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.95) 67%,
-			rgb(var(--tint-r), var(--tint-g), var(--tint-b)) 78%
+			transparent 50%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.38) 64%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.54) 77%,
+			rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 86%
 		);
 	}
 
@@ -905,10 +818,74 @@
 		opacity: 0;
 	}
 
+	/* Animated Glow the backdrop fades into, revealed on the content side by a
+	   mask matching the scrim's alpha ramp. Sits behind the scrim gradients. */
+	.glow-fade {
+		position: fixed;
+		inset: 0;
+		/* Above the backdrop image (z0), below the scrim gradients (z2) and
+		   content (z3). It's earlier in the DOM than .backdrop-container now
+		   (single instance kept across load), so it needs an explicit z-index. */
+		z-index: 1;
+		pointer-events: none;
+		opacity: 1;
+		transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	.glow-fade.hidden {
+		opacity: 0;
+	}
+
+	/* Loading state: no side mask — the glow fills the screen behind the spinner,
+	   dimmed so it reads as an ambient background. */
+	.glow-fade.full {
+		mask-image: none;
+		-webkit-mask-image: none;
+		opacity: 0.6;
+	}
+
+	.glow-fade.right {
+		mask-image: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+		-webkit-mask-image: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+	}
+
+	.glow-fade.left {
+		mask-image: linear-gradient(
+			to left,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+		-webkit-mask-image: linear-gradient(
+			to left,
+			rgba(0, 0, 0, 0.13) 0%,
+			rgba(0, 0, 0, 0.13) 50%,
+			rgba(0, 0, 0, 0.6) 64%,
+			rgba(0, 0, 0, 0.95) 77%,
+			#000 86%
+		);
+	}
+
 	/* ── Slider ── */
 	.slider {
 		position: relative;
-		z-index: 1;
+		z-index: 3;
 		display: flex;
 		width: 300vw;
 		height: 100%;
@@ -970,9 +947,27 @@
 			background: linear-gradient(
 				to bottom,
 				transparent 0%,
-				transparent 30%,
-				rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.7) 50%,
-				rgb(var(--tint-r), var(--tint-g), var(--tint-b)) 70%
+				transparent 45%,
+				rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.42) 62%,
+				rgba(var(--tint-r), var(--tint-g), var(--tint-b), 0.6) 80%
+			);
+		}
+
+		.glow-fade.left,
+		.glow-fade.right {
+			mask-image: linear-gradient(
+				to bottom,
+				rgba(0, 0, 0, 0.13) 0%,
+				rgba(0, 0, 0, 0.13) 45%,
+				rgba(0, 0, 0, 0.7) 62%,
+				#000 80%
+			);
+			-webkit-mask-image: linear-gradient(
+				to bottom,
+				rgba(0, 0, 0, 0.13) 0%,
+				rgba(0, 0, 0, 0.13) 45%,
+				rgba(0, 0, 0, 0.7) 62%,
+				#000 80%
 			);
 		}
 

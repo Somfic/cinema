@@ -1,13 +1,19 @@
 use crate::app::{AppContext, Error};
-pub use crate::streams::Stream;
+use crate::downloads::TorrentEngine;
+use crate::streams::Stream;
 use crate::tmdb::{MediaType, TmdbClient};
-use crate::torrent::TorrentEngine;
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
 
 #[draad::ty]
 pub struct StartStream {
     pub url: String,
     pub local: bool,
+}
+
+#[draad::ty]
+pub struct RemuxSession {
+    pub session_id: String,
+    pub playlist_url: String,
 }
 
 #[draad::ty]
@@ -34,9 +40,10 @@ pub struct StreamStatsUpdate {
 
 #[draad::ty]
 pub struct AudioTracks {
-    pub tracks: Vec<crate::torrent::AudioTrack>,
-    pub subtitles: Vec<crate::torrent::EmbeddedSubtitleTrack>,
+    pub tracks: Vec<crate::downloads::AudioTrack>,
+    pub subtitles: Vec<crate::downloads::EmbeddedSubtitleTrack>,
     pub duration: Option<f64>,
+    pub chapters: Vec<crate::downloads::Chapter>,
 }
 
 /// Per-file piece-availability bitmap broadcast over WebSocket. 200 buckets,
@@ -44,31 +51,64 @@ pub struct AudioTracks {
 #[draad::ty]
 pub struct PiecesUpdate {
     pub info_hash: String,
-    pub file_idx: i64,
+    pub file_idx: i32,
     pub pieces: Vec<u8>,
 }
 
 #[draad::api(namespace = "streams")]
 pub trait StreamsApi {
     /// Aggregates available torrent streams for a movie.
+    #[get]
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error>;
 
     /// Aggregates available torrent streams for a specific TV episode.
-    async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<Stream>, Error>;
+    #[get]
+    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error>;
 
     /// Starts a torrent (idempotent) and returns the playback URL.
-    async fn start(&self, info_hash: String, file_idx: i64) -> Result<StartStream, Error>;
+    /// Always creates/updates a `downloads` row so the DB reflects the
+    /// active engine state. When `media` is provided, also populates
+    /// `download_meta` synchronously.
+    #[post]
+    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error>;
+
+    /// Stops a torrent stream. Is equivalent to pausing the download,
+    /// but does not require the download id.
+    #[post]
+    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), Error>;
+
+    /// Reveals the on-disk file for a torrent stream in the server's file
+    /// manager. Only meaningful when the server runs on the user's own machine
+    /// (the self-hosted local case).
+    #[post]
+    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), Error>;
+
+    /// Starts an HLS remux/transcode session for a file and returns its
+    /// playlist URL (feed to hls.js). Callers stop the previous session first.
+    #[post]
+    async fn remux(
+        &self,
+        info_hash: String,
+        file_idx: i32,
+        audio: i32,
+        t: f64,
+        only_audio: bool,
+    ) -> Result<RemuxSession, Error>;
 
     /// Current torrent download stats for a stream.
+    #[get]
     async fn stats(&self, info_hash: String) -> Result<StreamStats, Error>;
 
     /// Per-piece availability bitmap (200 buckets) for a given file in a torrent.
+    #[get]
     async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, Error>;
 
     /// Embedded audio + subtitle tracks + duration for a downloaded file.
+    #[get]
     async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error>;
 
     /// Extracts cues from an embedded subtitle track in the source file.
+    #[get]
     async fn embedded_subtitles(
         &self,
         info_hash: String,
@@ -77,35 +117,154 @@ pub trait StreamsApi {
     ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error>;
 }
 
+/// Reveal a file in the host's file manager — selecting it where the platform
+/// supports it, otherwise opening its containing folder. Best-effort and only
+/// meaningful when the server shares a desktop with the user.
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), Error> {
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(path).spawn()?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Prefer FileManager1's ShowItems (selects the file in its folder),
+        // falling back to opening the parent directory via xdg-open. The URI
+        // must be properly percent-encoded — torrent paths contain spaces and
+        // brackets, and an unencoded file:// URI makes Nautilus report
+        // "'file' locations are not supported".
+        let selected = url::Url::from_file_path(path)
+            .ok()
+            .map(|uri| {
+                Command::new("dbus-send")
+                    .args([
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                    ])
+                    .arg(format!("array:string:{uri}"))
+                    .arg("string:")
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !selected {
+            let dir = path.parent().unwrap_or(path);
+            Command::new("xdg-open").arg(dir).spawn()?;
+        }
+    }
+
+    Ok(())
+}
+
 #[draad::api]
 impl StreamsApi for AppContext {
     async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let item = tmdb.details(MediaType::Movie, id).await?;
+        let item = tmdb.details(MediaType::Movie, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found for this movie".into()))?;
-        let path = format!("movie/{imdb_id}");
-        Ok(streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await)
+
+        let streams = streams_mod::AggregationMediaType::Media {
+            tmdb_id: id,
+            imdb_id,
+        }
+        .aggregate(self)
+        .await;
+
+        Ok(streams)
     }
 
-    async fn tv(&self, id: i64, season: i64, episode: i64) -> Result<Vec<Stream>, Error> {
+    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let item = tmdb.details(MediaType::Tv, id).await?;
+        let item = tmdb.details(MediaType::Tv, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
             .ok_or_else(|| Error::Generic("No IMDB ID found for this show".into()))?;
-        let path = format!("series/{imdb_id}:{season}:{episode}");
-        Ok(streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await)
+
+        let streams = streams_mod::AggregationMediaType::Tv {
+            tmdb_id: id,
+            imdb_id,
+            season,
+            episode,
+        }
+        .aggregate(self)
+        .await;
+
+        Ok(streams)
     }
 
-    async fn start(&self, info_hash: String, file_idx: i64) -> Result<StartStream, Error> {
-        let engine = TorrentEngine::get();
-        engine
-            .start(&info_hash, file_idx as usize, &self.config)
+    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error> {
+        self.downloads
+            .ensure_download(
+                &info_hash,
+                file_idx,
+                crate::downloads::DownloadPriority::Stream,
+            )
             .await?;
         let url = format!("/api/stream/{info_hash}/{file_idx}");
         Ok(StartStream { url, local: false })
+    }
+
+    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), Error> {
+        let id = crate::downloads::types::Download::find_id_by_info_hash_and_file_idx(
+            &self.db, &info_hash, file_idx,
+        )
+        .await?;
+
+        let Some(id) = id else {
+            return Err(crate::app::Error::NotFound(format!(
+                "No download found for {info_hash} ({file_idx})"
+            )));
+        };
+
+        self.downloads.pause(id).await
+    }
+
+    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), Error> {
+        let source = crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
+            &info_hash,
+            file_idx,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
+        reveal_in_file_manager(source.probe_path())
+    }
+
+    async fn remux(
+        &self,
+        info_hash: String,
+        file_idx: i32,
+        audio: i32,
+        t: f64,
+        only_audio: bool,
+    ) -> Result<RemuxSession, Error> {
+        // The manager owns the cache-hit-vs-live-transcode decision, torrent
+        // acquisition at Stream priority, and ffmpeg lifecycle. Consumers
+        // just get back a session id + playlist URL.
+        let session = self
+            .transcodings
+            .start_playback(&info_hash, file_idx, audio, only_audio, t)
+            .await?;
+        Ok(RemuxSession {
+            session_id: session.session_id,
+            playlist_url: session.playlist_url,
+        })
     }
 
     async fn stats(&self, info_hash: String) -> Result<StreamStats, Error> {
@@ -126,16 +285,34 @@ impl StreamsApi for AppContext {
 
     async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, Error> {
         let engine = TorrentEngine::get();
-        Ok(engine.piece_map(&info_hash, file_idx as usize, 200)?)
+        Ok(engine.piece_map(&(info_hash, file_idx as usize).into(), 200)?)
     }
 
     async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error> {
-        let engine = TorrentEngine::get();
-        let path = engine.file_path(&info_hash, file_idx as usize)?;
-        let (tracks, subtitles, duration) = tokio::join!(
-            TorrentEngine::audio_tracks(&path),
-            TorrentEngine::subtitle_tracks(&path),
-            TorrentEngine::probe_duration(&path),
+        // Ensure the download row exists and the engine has what it needs; we
+        // don't need the returned MediaSource here because ffprobe goes through
+        // the loopback HTTP route (which handles disk-vs-engine internally).
+        crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
+            &info_hash,
+            file_idx as i32,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
+
+        // Probe through the local HTTP stream route, not the on-disk file: a
+        // still-downloading torrent is sparse on disk (missing pieces = holes),
+        // so a direct ffprobe fails until the file is complete. The HTTP route
+        // serves through the blocking, range-capable reader the transcode uses,
+        // so ffprobe gets coherent bytes (and can seek to a trailing moov atom).
+        let url = self.stream_url(&info_hash, file_idx);
+
+        let (tracks, subtitles, duration, chapters) = tokio::join!(
+            TorrentEngine::audio_tracks(&url),
+            TorrentEngine::subtitle_tracks(&url),
+            TorrentEngine::probe_duration(&url),
+            TorrentEngine::chapters(&url),
         );
         let allowed: Vec<&str> = self
             .config
@@ -156,6 +333,7 @@ impl StreamsApi for AppContext {
             tracks,
             subtitles,
             duration,
+            chapters,
         })
     }
 
@@ -165,9 +343,20 @@ impl StreamsApi for AppContext {
         file_idx: i64,
         stream_index: i64,
     ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error> {
-        let engine = TorrentEngine::get();
-        let path = engine.file_path(&info_hash, file_idx as usize)?;
-        Ok(TorrentEngine::extract_subtitle_cues(&path, stream_index as usize).await)
+        let url = self.stream_url(&info_hash, file_idx);
+        Ok(TorrentEngine::extract_subtitle_cues(&url, stream_index as usize).await)
+    }
+}
+
+impl AppContext {
+    /// Loopback URL for this file's range-served bytes, so ffprobe/ffmpeg read
+    /// through the blocking torrent reader (the [`crate::urls::STREAM`] route)
+    /// rather than the sparse on-disk file.
+    fn stream_url(&self, info_hash: &str, file_idx: i64) -> String {
+        format!(
+            "http://127.0.0.1:{}/api/stream/{}/{}",
+            self.config.port, info_hash, file_idx
+        )
     }
 }
 

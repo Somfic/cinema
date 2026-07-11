@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    info_hash,\n                    file_idx,\n                    status as \"status: DownloadStatus\",\n                    output_path\n                FROM downloads\n                WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "info_hash",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "info_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "file_idx",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "file_idx"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status: DownloadStatus",
+        "type_info": {
+          "Custom": {
+            "name": "download_status",
+            "kind": {
+              "Enum": [
+                "queued",
+                "downloading",
+                "paused",
+                "completed",
+                "cancelled",
+                "failed"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "output_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "output_path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "507922082e7eda3f2b1c8ea93e19d357f5b2b63317bd223e2c4fb7f56c1a557f"
+}

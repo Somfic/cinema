@@ -1,24 +1,35 @@
-
-use crate::app::{AppContext, Error};
+use crate::{
+    app::{AppContext, Error},
+    tmdb,
+};
 
 #[draad::ty]
 pub struct RecordWatch {
-    pub media_type: String,
     pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
-    pub season: Option<i64>,
-    pub episode: Option<i64>,
+    pub media_type: tmdb::MediaType,
+
     pub info_hash: Option<String>,
-    pub file_idx: Option<i64>,
-    pub progress: Option<f64>,
-    pub duration: Option<f64>,
+    pub file_idx: Option<i32>,
+
+    pub season: Option<i32>,
+    pub episode: Option<i32>,
+    pub progress: Option<f32>,
+    pub duration: Option<f32>,
+    pub transcoding: TranscodingOption,
 }
 
 #[draad::ty]
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::Type)]
+#[sqlx(type_name = "transcoding_option", rename_all = "kebab-case")]
+pub enum TranscodingOption {
+    Enabled,
+    OnlyAudio,
+    Disabled,
+}
+
+#[draad::ty]
 pub struct WatchHistoryItem {
-    pub media_type: String,
+    pub media_type: tmdb::MediaType,
     pub tmdb_id: i64,
     pub title: String,
     pub poster_path: Option<String>,
@@ -28,51 +39,100 @@ pub struct WatchHistoryItem {
     pub file_idx: i64,
     pub progress: f64,
     pub duration: f64,
-    pub last_watched: String,
+    pub transcoding: TranscodingOption,
+    pub last_watched: chrono::DateTime<chrono::Utc>,
 }
 
 #[draad::api(namespace = "watch")]
 pub trait WatchApi {
     /// Inserts the current playback position for a piece of media
+    #[post]
     async fn record(&self, watch: RecordWatch) -> Result<(), Error>;
 
     /// Returns the 20 most-recently-watched items
+    #[get]
     async fn history(&self) -> Result<Vec<WatchHistoryItem>, Error>;
 }
 
 #[draad::api]
 impl WatchApi for AppContext {
     async fn record(&self, watch: RecordWatch) -> Result<(), Error> {
-        sqlx::query(
-            "INSERT INTO watch_history (media_type, tmdb_id, title, poster_path, season, episode, info_hash, file_idx, progress, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(media_type, tmdb_id)
-             DO UPDATE SET title = excluded.title, poster_path = excluded.poster_path, season = excluded.season, episode = excluded.episode, info_hash = excluded.info_hash, file_idx = excluded.file_idx, progress = excluded.progress, duration = excluded.duration, last_watched = datetime('now')"
+        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+
+        let media_id =
+            crate::tmdb::MediaItem::ensure_exists(watch.tmdb_id, watch.media_type, &mut tx, self)
+                .await?;
+
+        // Best-effort link to the download row used as the playback source.
+        let download_id = if let Some(hash) = watch.info_hash.as_deref() {
+            sqlx::query_scalar!(
+                "SELECT id FROM downloads WHERE info_hash = $1 AND file_idx = $2 LIMIT 1",
+                hash,
+                watch.file_idx.unwrap_or(0),
+            )
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(Error::DatabaseError)?
+        } else {
+            None
+        };
+
+        sqlx::query!(
+            "
+                INSERT INTO watch_history
+                    (media_id, download_id, season, episode, progress, duration, transcoding)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (media_id) DO UPDATE SET
+                    download_id  = EXCLUDED.download_id,
+                    season       = EXCLUDED.season,
+                    episode      = EXCLUDED.episode,
+                    progress     = EXCLUDED.progress,
+                    duration     = EXCLUDED.duration,
+                    transcoding  = EXCLUDED.transcoding,
+                    last_watched = CURRENT_TIMESTAMP
+            ",
+            media_id,
+            download_id,
+            watch.season.unwrap_or(0),
+            watch.episode.unwrap_or(0),
+            watch.progress.unwrap_or(0.0),
+            watch.duration.unwrap_or(0.0),
+            watch.transcoding as TranscodingOption,
         )
-        .bind(&watch.media_type)
-        .bind(watch.tmdb_id)
-        .bind(&watch.title)
-        .bind(&watch.poster_path)
-        .bind(watch.season.unwrap_or(0))
-        .bind(watch.episode.unwrap_or(0))
-        .bind(&watch.info_hash)
-        .bind(watch.file_idx.unwrap_or(0))
-        .bind(watch.progress.unwrap_or(0.0))
-        .bind(watch.duration.unwrap_or(0.0))
-        .execute(&self.db)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| Error::Generic(e.to_string()))?;
+        .map_err(Error::DatabaseError)?;
+
+        tx.commit().await.map_err(Error::DatabaseError)?;
         Ok(())
     }
 
     async fn history(&self) -> Result<Vec<WatchHistoryItem>, Error> {
-        let items = sqlx::query_as::<_, WatchHistoryItem>(
-            "SELECT media_type, tmdb_id, title, poster_path, season, episode, info_hash, file_idx, progress, duration, last_watched
-             FROM watch_history ORDER BY last_watched DESC LIMIT 20"
+        let items = sqlx::query_as!(
+            WatchHistoryItem,
+            r#"SELECT
+                mi.media_type as "media_type: tmdb::MediaType",
+                mi.tmdb_id,
+                mi.title,
+                mi.poster_path,
+                wh.season,
+                wh.episode,
+                d.info_hash as "info_hash?",
+                COALESCE(d.file_idx, 0) as "file_idx!",
+                wh.progress,
+                wh.duration,
+                wh.transcoding as "transcoding: TranscodingOption",
+                wh.last_watched
+            FROM watch_history wh
+            JOIN media_items mi ON mi.id = wh.media_id
+            LEFT JOIN downloads d ON d.id = wh.download_id
+            ORDER BY wh.last_watched DESC
+            LIMIT 20"#
         )
         .fetch_all(&self.db)
         .await
-        .map_err(|e| Error::Generic(e.to_string()))?;
+        .map_err(Error::DatabaseError)?;
+
         Ok(items)
     }
 }

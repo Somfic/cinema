@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE pretranscodings SET status = 'queued', error = NULL WHERE id = $1 AND status = 'paused' RETURNING download_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "download_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "download_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c278ed24841269ef41985f4ce1098536eeb4e33271fc4523cafec9596ffb5696"
+}

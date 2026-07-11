@@ -7,24 +7,67 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post};
-use serde::Deserialize;
+use axum::routing::get;
 
 use crate::app::{AppContext, Error};
-use crate::hls;
-use crate::torrent::TorrentEngine;
 
+// Paths come from the `#[draad::raw]` schema (`crate::api::urls`) so the route
+// strings and the frontend's `api.urls.*` builders can't drift. draad owns the
+// URL contract; the byte-serving handlers below stay hand-written.
 pub fn router() -> Router<AppContext> {
     Router::new()
-        .route("/stream/{info_hash}/{file_idx}", get(stream_file))
-        .route(
-            "/stream/{info_hash}/{file_idx}/remux",
-            post(stream_remux_hls),
-        )
-        .route("/hls/{session_id}/{file}", get(hls_serve))
-        .route("/hls/{session_id}", delete(hls_stop_raw))
-        .route("/image/{*path}", get(image_proxy))
-        .route("/files/{*path}", get(serve_file))
+        .route(crate::urls::STREAM, get(stream_file))
+        .route(crate::urls::HLS, get(hls_serve))
+        .route(crate::urls::IMAGE, get(image_proxy))
+        .route(crate::urls::FILE, get(serve_file))
+        .route(crate::urls::TRAILER, get(serve_trailer))
+}
+
+#[derive(serde::Deserialize)]
+struct TrailerQuery {
+    /// Title and release year, used to look the trailer up via the trailers-api
+    /// fallback when YouTube resolution fails.
+    title: Option<String>,
+    year: Option<String>,
+}
+
+async fn serve_trailer(
+    State(ctx): State<AppContext>,
+    Path(key): Path<String>,
+    Query(query): Query<TrailerQuery>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Result<axum::response::Response, RawError> {
+    // Download via yt-dlp on the first request (no-op once cached), then range-serve
+    // the file so seeking works. yt-dlp does the fetching so client-bound YouTube
+    // CDN URLs — which 403 when handed straight to ffmpeg — resolve correctly.
+    let path = crate::trailer::ensure_cached(
+        &ctx.storage,
+        &key,
+        query.title.as_deref(),
+        query.year.as_deref(),
+    )
+    .await?;
+
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_| Error::NotFound("trailer not found".into()))?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| Error::Generic("failed to open trailer".into()))?;
+
+    let range_header = req
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let mut response =
+        serve_range_response(file, metadata.len(), range_header.as_deref(), "video/mp4")?;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("public, max-age=86400"),
+    );
+    Ok(response)
 }
 
 async fn image_proxy(
@@ -71,10 +114,10 @@ async fn image_proxy(
         .to_string();
     let bytes = res.bytes().await.map_err(Error::from)?;
 
-    if let Some(parent) = cache_path.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            tracing::warn!("failed to create image cache dir {}: {e}", parent.display());
-        }
+    if let Some(parent) = cache_path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        tracing::warn!("failed to create image cache dir {}: {e}", parent.display());
     }
     if let Err(e) = tokio::fs::write(&cache_path, &bytes).await {
         tracing::warn!("failed to write image cache {}: {e}", cache_path.display());
@@ -95,9 +138,19 @@ async fn stream_file(
     Path((info_hash, file_idx)): Path<(String, usize)>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, RawError> {
-    let engine = TorrentEngine::get();
-    engine.start(&info_hash, file_idx, &ctx.config).await?;
-    let reader = engine.stream(&info_hash, file_idx)?;
+    // Ensure the download is progressing (or completed), and get a reader over
+    // wherever its bytes live: disk for a completed download, engine stream
+    // for one still in flight.
+    let source = crate::downloads::MediaSource::ensure_and_locate(
+        &ctx.downloads,
+        &ctx.storage,
+        &info_hash,
+        file_idx as i32,
+        crate::downloads::DownloadPriority::Stream,
+    )
+    .await?;
+
+    let reader = source.open_reader().await?;
     let total_size = reader.len;
 
     let range_header = req
@@ -109,58 +162,26 @@ async fn stream_file(
     serve_range_response(reader, total_size, range_header.as_deref(), "video/mp4")
 }
 
-#[derive(Deserialize)]
-struct RemuxParams {
-    #[serde(default)]
-    audio: usize,
-    #[serde(default)]
-    t: f64,
-    #[serde(default)]
-    only_audio: bool,
-}
-
-async fn stream_remux_hls(
-    State(ctx): State<AppContext>,
-    Path((info_hash, file_idx)): Path<(String, usize)>,
-    Query(params): Query<RemuxParams>,
-) -> Result<axum::response::Response, RawError> {
-    let engine = TorrentEngine::get();
-    engine.start(&info_hash, file_idx, &ctx.config).await?;
-
-    let (session_id, playlist_url) = hls::start_session(
-        &ctx.storage,
-        &ctx.config,
-        hls::HlsSessionStartInput {
-            info_hash,
-            file_idx,
-            audio_index: params.audio,
-            start_time: params.t,
-            only_audio: params.only_audio,
-        },
-    )
-    .await?;
-
-    let body = serde_json::json!({ "session_id": session_id, "playlist_url": playlist_url });
-    Ok((StatusCode::OK, axum::Json(body)).into_response())
-}
-
 async fn hls_serve(
+    State(ctx): State<AppContext>,
     Path((session_id, file)): Path<(String, String)>,
 ) -> Result<axum::response::Response, RawError> {
     if file.contains("..") || file.contains('/') {
         return Err(Error::Generic("Invalid path".into()).into());
     }
 
-    let dir = hls::session_dir(&session_id)
+    let dir = ctx
+        .transcodings
+        .live_session_dir(&session_id)
         .await
         .ok_or_else(|| Error::NotFound("HLS session not found".into()))?;
-    hls::touch(&session_id).await;
+    ctx.transcodings.touch_live(&session_id).await;
 
     let full_path = dir.join(&file);
     let bytes = match tokio::fs::read(&full_path).await {
         Ok(b) => b,
         Err(_) => {
-            if let Some(error) = hls::session_error(&session_id).await {
+            if let Some(error) = ctx.transcodings.live_session_error(&session_id).await {
                 return Err(
                     Error::Generic(format!("Stream failed (ffmpeg exited): {error}")).into(),
                 );
@@ -181,11 +202,6 @@ async fn hls_serve(
         .header(header::CACHE_CONTROL, cache)
         .body(axum::body::Body::from(bytes))
         .unwrap())
-}
-
-async fn hls_stop_raw(Path(session_id): Path<String>) -> StatusCode {
-    hls::stop_session(&session_id).await;
-    StatusCode::NO_CONTENT
 }
 
 async fn serve_file(

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE pretranscodings SET status = 'failed', error = 'Interrupted at restart' WHERE status = 'transcoding'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5a70925e61806aa28dffbdab9e132c589cf5199a362a4ab156a0b42d15a975cd"
+}

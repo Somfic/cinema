@@ -1,10 +1,10 @@
 use crate::app::{AppContext, Error};
-pub use crate::tmdb::SearchResult;
-use crate::tmdb::TmdbClient;
+use crate::tmdb::{SearchResult, TmdbClient};
 
 #[draad::api(namespace = "search")]
 pub trait SearchApi {
     /// Full-text search across TMDB titles
+    #[get]
     async fn search(&self, q: String) -> Result<Vec<SearchResult>, Error>;
 }
 

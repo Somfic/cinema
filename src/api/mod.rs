@@ -1,9 +1,14 @@
+pub mod cache;
 pub mod collections;
 pub mod downloads;
 pub mod hls;
 pub mod media;
 pub mod remote;
 pub mod search;
+pub mod settings;
 pub mod streams;
 pub mod subtitles;
+pub mod trailer;
+pub mod transcodings;
+pub mod urls;
 pub mod watch;

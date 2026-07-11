@@ -11,20 +11,26 @@ mod api;
 mod app;
 mod config;
 mod downloads;
-mod hls;
+mod file_system;
 mod logging;
 mod proxy;
 mod raw;
 mod streams;
 mod subtitles;
 mod tmdb;
-pub(crate) mod torrent;
+mod trailer;
+mod transcodings;
+mod utils;
 mod ws;
 
-use app::{AppContext, EventBus, Result};
+use app::{AppContext, Result};
 use config::Config;
 
-draad::include_generated!(crate::AppContext, crate::EventBus);
+draad::include_generated!(
+    crate::AppContext,
+    draad::runtime::EventBus,
+    custom_ts = "custom"
+);
 
 #[derive(Parser)]
 #[command(name = "cinema", about = "Cinema media server")]
@@ -90,7 +96,7 @@ async fn run() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .event_format(logging::CinemaFormatter)
+        // .event_format(logging::CinemaFormatter)
         .init();
 
     let cli = Cli::parse();
@@ -116,75 +122,68 @@ async fn run() -> Result<()> {
     // Initialize core services
     let pool = app::create_pool(&config).await?;
     let storage = app::create_storage(&config).await?;
-    let events = app::EventBus::new();
+    let event_bus = draad::runtime::EventBus::new();
+    let events = Events::new(event_bus.clone());
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
+
+    let downloads_handle = downloads::Handle::new(
+        pool.clone(),
+        events.clone(),
+        config.clone(),
+        storage.clone(),
+    );
+    let transcodings_handle = transcodings::Handle::new(
+        pool.clone(),
+        events.clone(),
+        downloads_handle.clone(),
+        config.clone(),
+        storage.clone(),
+    );
 
     let ctx = AppContext {
         db: pool,
         storage,
         config: config.clone(),
+        event_bus,
         events,
-        presence: app::Presence::default(),
+        conns: draad::runtime::Conns::new(),
+        clients: app::ClientRoster::new(),
         http,
+        downloads: downloads_handle,
+        transcodings: transcodings_handle,
     };
 
     // Initialize torrent engine
-    torrent::TorrentEngine::init(&config, &ctx.storage, ctx.http.clone()).await?;
+    downloads::TorrentEngine::init(&ctx).await?;
 
-    // Start download manager
-    let manager = downloads::DownloadManager::new(ctx.clone());
-    tokio::spawn(manager.run());
+    if let Err(err) = ctx.downloads.boot().await {
+        tracing::error!(?err, "Download boot recovery failed");
+    }
 
-    // HLS session cleanup reaper
-    tokio::spawn(async {
+    if let Err(err) = ctx.transcodings.boot().await {
+        tracing::error!(?err, "Pretranscoding boot recovery failed");
+    }
+
+    // Live-session idle reaper (drops HLS sessions the client hasn't
+    // touched in 120s, freeing capacity slots for other work).
+    let reaper_ctx = ctx.clone();
+    let hls_session_reaper = tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            hls::cleanup_idle(120).await;
+            reaper_ctx
+                .transcodings
+                .cleanup_idle_live(std::time::Duration::from_secs(120))
+                .await;
         }
     });
 
     // stream stats
-    {
-        let events = Events::new(ctx.events.clone());
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(333)).await;
-                let engine = torrent::TorrentEngine::get();
-                for hash in engine.active_info_hashes() {
-                    let Ok(stats) = engine.stats(&hash) else {
-                        continue;
-                    };
-                    let (download_speed_mbps, peers) = match &stats.live {
-                        Some(live) => (live.download_speed.mbps, live.snapshot.peer_stats.live),
-                        None => (0.0, 0),
-                    };
-                    events.streams.emit_stats(&api::streams::StreamStatsUpdate {
-                        info_hash: hash,
-                        progress_bytes: stats.progress_bytes,
-                        total_bytes: stats.total_bytes,
-                        download_speed_mbps,
-                        peers,
-                        finished: stats.finished,
-                    });
-                }
-                // Piece bitmaps for files currently being streamed. Only
-                // pushed for active streams (not every file in every
-                // torrent), keeping the wire chatter bounded.
-                for (hash, file_idx) in engine.active_streams().await {
-                    let Ok(pieces) = engine.piece_map(&hash, file_idx, 200) else {
-                        continue;
-                    };
-                    events.streams.emit_pieces(&api::streams::PiecesUpdate {
-                        info_hash: hash,
-                        file_idx: file_idx as i64,
-                        pieces,
-                    });
-                }
-            }
-        });
-    }
+    let events = ctx.events.clone();
+    tokio::spawn(crate::downloads::TorrentEngine::stream_stats_supervisor(
+        events,
+    ));
 
     // Build router
     let mut router = Router::new();
@@ -197,48 +196,17 @@ async fn run() -> Result<()> {
     info!("mounting ws at /api/ws");
     router = router.nest("/api/ws", ws::router().with_state(ctx.clone()));
 
-    // Mount the raw HTTP endpoints (range video, HLS segments, image proxy).
-    info!("mounting raw routes at /api");
-    router = router.nest("/api", raw::router().with_state(ctx.clone()));
+    // Mount the raw byte-serving routes (range video, HLS segments, image
+    // proxy). Their paths come from the `#[draad::raw]` schema and are
+    // absolute, so merge them flat rather than nesting under `/api`.
+    info!("mounting raw byte routes");
+    router = router.merge(raw::router().with_state(ctx.clone()));
 
     // Frontend: dev proxy or static files
     if cli.dev {
+        // The vite dev server is started alongside the backend by `just dev`
+        // (via concurrently); here we just proxy the UI through to it.
         let dev_port = 5174u16;
-
-        // Kill any existing process on the dev port
-        if let Ok(out) = tokio::process::Command::new("lsof")
-            .args(["-ti", &format!(":{dev_port}")])
-            .output()
-            .await
-        {
-            let pids = String::from_utf8_lossy(&out.stdout);
-            for pid in pids.split_whitespace() {
-                let _ = tokio::process::Command::new("kill").arg(pid).output().await;
-            }
-            if !pids.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-        }
-
-        let frontend_dir = PathBuf::from("frontend");
-        if frontend_dir.join("package.json").exists() {
-            info!("starting vite dev server on port {dev_port}");
-            let _child = tokio::process::Command::new("bun")
-                .args([
-                    "run",
-                    "dev",
-                    "--",
-                    "--port",
-                    &dev_port.to_string(),
-                    "--strictPort",
-                ])
-                .current_dir(&frontend_dir)
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .kill_on_drop(true)
-                .spawn();
-        }
-
         info!("proxying ui → http://localhost:{dev_port}");
         let dev_proxy = proxy::DevProxy::new(dev_port);
         router = router.fallback(move |req: axum::extract::Request| {
@@ -264,9 +232,12 @@ async fn run() -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // Shutdown
-    hls::stop_all().await;
-    torrent::TorrentEngine::get().shutdown().await;
+    hls_session_reaper.abort();
+    // Shutdown. `transcodings.shutdown()` also stops every live HLS
+    // session, so ffmpeg children die before we drop the torrent engine.
+    ctx.transcodings.shutdown().await;
+    ctx.downloads.shutdown().await;
+    downloads::TorrentEngine::get().shutdown().await;
 
     Ok(())
 }

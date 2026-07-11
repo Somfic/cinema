@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
-	import { Button, ButtonGroup, Icon } from "glow";
+	import { Button, Icon } from "glow";
 	import { getGoBack, getFocusSearch } from "$lib/topbar.svelte";
 	import { remote } from "$lib/remote.svelte";
+	import DownloadsPopover from "./DownloadsPopover.svelte";
 
 	// Cast affordance (mobile only).
 	function handleCast() {
@@ -28,13 +29,11 @@
 		page.url.pathname === "/" || page.url.pathname === base + "/",
 	);
 
-	let parentPath = $derived(base);
-
 	async function handleHome() {
 		if (isRoot) {
 			getFocusSearch()?.();
 		} else {
-			await goto(base);
+			await goto("/");
 			requestAnimationFrame(() => getFocusSearch()?.());
 		}
 	}
@@ -72,29 +71,25 @@
 			<div class="cast-button">
 				<Button
 					icon="Cast"
-					tooltip={remote.mode === "remote"
-						? "Disconnect"
-						: "Cast to TV"}
+					tooltip={remote.mode === "remote" ? "Disconnect" : "Cast to TV"}
 					onclick={handleCast}
 				/>
 			</div>
 		{/if}
-		<Button
-			icon="List"
-			variant="ghost"
-			onclick={() => goto("/collections")}
-		/>
+		<DownloadsPopover />
+		<Button icon="HardDrive" variant="ghost" onclick={() => goto("/cache")} />
+		<Button icon="Settings" variant="ghost" onclick={() => goto("/settings")} />
 	</div>
 </header>
 
 <style lang="scss">
-	@use "glow/src/lib/style/theme.scss" as *;
+	@use "glow/styles/theme" as *;
 
 	.top-bar {
 		display: flex;
 		align-items: center;
 		padding: 0.5rem 1rem;
-		background-color: $bg-surface;
+		background-color: rgba($bg-surface, 0.2);
 		border-bottom: $border;
 		min-height: 3rem;
 		position: relative;

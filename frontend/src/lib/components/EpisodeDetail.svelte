@@ -1,19 +1,18 @@
 <script lang="ts">
 	import type { Season, Episode, WatchHistoryItem } from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
-	import { Text } from "glow";
+	import { Text, Button } from "glow";
 	import PlayCard from "./PlayCard.svelte";
-	import DownloadButton from "./DownloadButton.svelte";
 
 	let {
 		season,
 		episode,
 		showTitle,
-		tmdbId,
 		resumeEntry,
 		loadingStreams = false,
 		onselectepisode,
 		onplay,
+		ondownload,
 	}: {
 		season: Season;
 		episode: Episode;
@@ -23,6 +22,7 @@
 		loadingStreams?: boolean;
 		onselectepisode: (season: number, episode: number) => void;
 		onplay?: () => void;
+		ondownload?: (season: number, episode: number) => void;
 	} = $props();
 
 	const canResume = $derived(
@@ -52,19 +52,36 @@
 			<button
 				class="episode-row"
 				class:active={ep.episode_number === episode.episode_number}
-				onclick={() =>
-					onselectepisode(season.season_number, ep.episode_number)}
+				onclick={() => onselectepisode(season.season_number, ep.episode_number)}
 			>
 				<img
 					class="ep-thumb"
 					src={ep.stills[0] ? imageUrl(ep.stills[0], "w185") : ""}
 					alt=""
 				/>
-				<div class="ep-info">
-					<Text size="xs" variant="muted"
-						>Episode {ep.episode_number}</Text
+				<div
+					style="display: flex; align-items: center; justify-content: space-between; flex-grow: 1; gap: 0.25rem"
+				>
+					<div class="ep-info">
+						<Text size="xs" variant="muted">Episode {ep.episode_number}</Text>
+						<Text size="sm" weight="semibold">{ep.name}</Text>
+					</div>
+					<span
+						role="none"
+						onclick={(event) => event.stopPropagation()}
+						onkeydown={(event) => {
+							event.stopPropagation();
+							event.preventDefault();
+						}}
 					>
-					<Text size="sm" weight="semibold">{ep.name}</Text>
+						<Button
+							variant="ghost"
+							icon="Download"
+							onclick={() => {
+								ondownload?.(season.season_number, ep.episode_number);
+							}}
+						></Button>
+					</span>
 				</div>
 			</button>
 		{/each}
@@ -97,23 +114,13 @@
 						: undefined}
 				label="S{season.season_number} E{episode.episode_number}"
 				action={canResume ? "Continue" : (episode.name ?? "Play")}
-				remaining={remainingMin
-					? `${remainingMin} min left`
-					: undefined}
+				remaining={remainingMin ? `${remainingMin} min left` : undefined}
 				progress={progressPct}
 				loading={loadingStreams}
 				onclick={onplay}
 			/>
 		{/if}
 	</div>
-
-	<!-- <DownloadButton
-		mediaType="tv"
-		{tmdbId}
-		title={showTitle}
-		season={season.season_number}
-		episode={episode.episode_number}
-	/> -->
 </div>
 
 <style>

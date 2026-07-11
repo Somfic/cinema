@@ -1,9 +1,5 @@
 <script lang="ts">
-	import {
-		type MediaItem,
-		type SearchResult,
-		type WatchHistoryItem,
-	} from "$lib/schema";
+	import { type MediaItem, type WatchHistoryItem } from "$lib/schema";
 	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import {
@@ -15,10 +11,10 @@
 		Modal,
 		useModal,
 		Data,
+		Media,
 	} from "glow";
 	import type { IconName, DataItem } from "glow";
 	import PlayCard from "./PlayCard.svelte";
-	import DownloadButton from "./DownloadButton.svelte";
 
 	// Map TMDB genre names to glow (lucide) icons
 	const GENRE_ICONS: Record<string, IconName> = {
@@ -60,9 +56,10 @@
 		onwatch,
 		onselectseason,
 		onselectepisode,
-		similarItems = [],
 		resumeEntry,
 		onresume,
+		ondownload,
+		playing = false,
 		tvMode = false,
 	}: {
 		item: MediaItem;
@@ -70,14 +67,29 @@
 		onwatch?: () => void;
 		onselectseason?: (seasonNumber: number) => void;
 		onselectepisode?: (season: number, episode: number) => void;
-		similarItems?: SearchResult[];
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
-		/** When true this is a TV display: show the hero/meta only, no controls. */
+		ondownload?: () => void;
+		playing?: boolean;
 		tvMode?: boolean;
 	} = $props();
 
 	const infoModal = useModal();
+
+	const trailerKeys = $derived.by(() => {
+		const shuffle = <T,>(arr: T[]): T[] => {
+			const a = [...arr];
+			for (let i = a.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[a[i], a[j]] = [a[j], a[i]];
+			}
+			return a;
+		};
+		const yt = (item.videos ?? []).filter((v) => v.site === "YouTube");
+		const keysOfType = (type: string) =>
+			shuffle(yt.filter((v) => v.video_type === type)).map((v) => v.key);
+		return [...keysOfType("Trailer"), ...keysOfType("Teaser")];
+	});
 
 	const releaseYear = $derived(item.release_date?.slice(0, 4));
 	const runtimeLabel = $derived(
@@ -86,31 +98,49 @@
 			: undefined,
 	);
 
+	// Live-updating countdown to the next episode's air date.
+	let now = $state(Date.now());
+	$effect(() => {
+		const id = setInterval(() => (now = Date.now()), 60_000);
+		return () => clearInterval(id);
+	});
+	const nextEpisodeLabel = $derived.by(() => {
+		const next = item.next_episode;
+		if (!next?.air_date) return undefined;
+		// TMDB returns YYYY-MM-DD; treat as midnight UTC.
+		const airMs = Date.parse(`${next.air_date}T00:00:00Z`);
+		if (Number.isNaN(airMs)) return undefined;
+		const diffMs = airMs - now;
+		const prefix = `S${next.season_number}E${next.episode_number}`;
+		if (diffMs <= 0) return `${prefix} aired`;
+		const days = Math.floor(diffMs / 86_400_000);
+		const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
+		if (days >= 1) return `${prefix} in ${days}d ${hours}h`;
+		const minutes = Math.max(1, Math.floor(diffMs / 60_000));
+		if (hours >= 1) return `${prefix} in ${hours}h ${minutes % 60}m`;
+		return `${prefix} in ${minutes}m`;
+	});
+
 	let onWatchlist = $state(false);
 	let isFavorite = $state(false);
-	let isWatched = $state(false);
 	let watchlistLoading = $state(false);
 	let favoriteLoading = $state(false);
-	let watchedLoading = $state(false);
 
 	$effect(() => {
 		api.collections
-			.contains("watchlist", item.media_type, item.id)
+			.contains("watchlist", item.media_type, item.tmdb_id)
 			.then((res) => {
 				onWatchlist = res.in_collection;
 			})
 			.catch(() => {});
 		api.collections
-			.contains("favorites", item.media_type, item.id)
+			.contains("favorites", item.media_type, item.tmdb_id)
 			.then((res) => {
 				isFavorite = res.in_collection;
 			})
 			.catch(() => {});
 		api.collections
-			.contains("watched", item.media_type, item.id)
-			.then((res) => {
-				isWatched = res.in_collection;
-			})
+			.contains("watched", item.media_type, item.tmdb_id)
 			.catch(() => {});
 	});
 
@@ -123,13 +153,13 @@
 		setLoading(true);
 		try {
 			if (current) {
-				await api.collections.remove(name, item.media_type, item.id);
+				await api.collections.remove(name, item.media_type, item.tmdb_id);
 				setState(false);
 			} else {
 				await api.collections.add({
 					collection: name,
 					media_type: item.media_type,
-					tmdb_id: item.id,
+					tmdb_id: item.tmdb_id,
 					title: item.title,
 					poster_path: item.poster_path ?? null,
 				});
@@ -169,9 +199,7 @@
 		tvResume
 			? item.seasons
 					?.find((s) => s.season_number === resumeEntry!.season)
-					?.episodes?.find(
-						(e) => e.episode_number === resumeEntry!.episode,
-					)
+					?.episodes?.find((e) => e.episode_number === resumeEntry!.episode)
 			: null,
 	);
 	const firstSeason = $derived(item.seasons?.[0]);
@@ -217,16 +245,18 @@
 						)
 				: undefined,
 	);
+
+	const logoSrc = $derived(
+		item.logo_path ? imageUrl(item.logo_path, "original") : null,
+	);
 </script>
 
 <div class="sidebar" class:tv={tvMode}>
 	<div class="title-area">
-		{#if item.logo_path}
-			<img
-				class="logo"
-				src={imageUrl(item.logo_path, "original")}
-				alt={item.title}
-			/>
+		{#if logoSrc}
+			<div class="logo">
+				<Media src={logoSrc} alt={item.title} fit="contain" lazy={false} />
+			</div>
 		{:else}
 			<h1 class="title">{item.title}</h1>
 		{/if}
@@ -248,9 +278,7 @@
 			{/if}
 			{#if item.seasons}
 				<Text as="span" variant="secondary" size="sm">
-					{item.seasons.length} season{item.seasons.length > 1
-						? "s"
-						: ""}
+					{item.seasons.length} season{item.seasons.length > 1 ? "s" : ""}
 				</Text>
 			{/if}
 			{#if item.rating}
@@ -258,14 +286,17 @@
 					>★ {item.rating.toFixed(1)}</Text
 				>
 			{/if}
+			{#if nextEpisodeLabel}
+				<Text as="span" variant="secondary" size="sm">
+					{nextEpisodeLabel}
+				</Text>
+			{/if}
 		</div>
 		{#if !tvMode}
 			<Button
 				variant="ghost"
 				icon={isFavorite ? { name: "Heart", fill: true } : "Heart"}
-				tooltip={isFavorite
-					? "Remove from favorites"
-					: "Add to favorites"}
+				tooltip={isFavorite ? "Remove from favorites" : "Add to favorites"}
 				loading={favoriteLoading}
 				onclick={() =>
 					toggleCollection(
@@ -277,12 +308,8 @@
 			/>
 			<Button
 				variant="ghost"
-				icon={onWatchlist
-					? { name: "Bookmark", fill: true }
-					: "Bookmark"}
-				tooltip={onWatchlist
-					? "Remove from watchlist"
-					: "Add to watchlist"}
+				icon={onWatchlist ? { name: "Bookmark", fill: true } : "Bookmark"}
+				tooltip={onWatchlist ? "Remove from watchlist" : "Add to watchlist"}
 				loading={watchlistLoading}
 				onclick={() =>
 					toggleCollection(
@@ -303,29 +330,32 @@
 					variant="ghost"
 					icon="LayoutGrid"
 					tooltip="Browse episodes"
-					onclick={() =>
-						onselectseason(item.seasons![0].season_number)}
+					onclick={() => onselectseason(item.seasons![0].season_number)}
 				/>
 			{/if}
 		{/if}
-		<!-- <DownloadButton
-			mediaType={item.media_type}
-			tmdbId={item.id}
-			title={item.title}
-			posterPath={item.poster_path ?? null}
-		/> -->
+		{#if !tvMode && ondownload && item.media_type === "movie"}
+			<Button
+				variant="ghost"
+				icon="Download"
+				tooltip="Download"
+				onclick={ondownload}
+			/>
+		{/if}
 	</div>
 
 	{#if !tvMode && item.media_type === "movie" && (movieResume ? onresume : onwatch)}
 		<PlayCard
 			image={movieBackdrop}
+			{trailerKeys}
+			title={item.title}
+			year={releaseYear}
+			active={!playing}
 			label={item.title}
 			action={movieResume
 				? (item.tagline ?? "Continue")
 				: (item.tagline ?? "Watch")}
-			remaining={movieResume
-				? `${movieRemainingMin} min left`
-				: undefined}
+			remaining={movieResume ? `${movieRemainingMin} min left` : undefined}
 			progress={movieResume ? movieProgress : 0}
 			loading={!movieResume && loadingStreams}
 			onclick={movieResume ? onresume! : onwatch!}
@@ -335,6 +365,10 @@
 	{#if !tvMode && item.seasons?.length && tvOnclick}
 		<PlayCard
 			image={tvImage}
+			{trailerKeys}
+			title={item.title}
+			year={releaseYear}
+			active={!playing}
 			label={tvLabel}
 			action={tvAction}
 			remaining={tvRemaining}
@@ -425,9 +459,7 @@
 				<div class="person-meta">
 					<Text size="sm">{person.name}</Text>
 					{#if person.character}
-						<Text size="xs" variant="secondary"
-							>{person.character}</Text
-						>
+						<Text size="xs" variant="secondary">{person.character}</Text>
 					{/if}
 				</div>
 			</div>
@@ -493,10 +525,7 @@
 					} satisfies DataItem),
 				item.directors?.length &&
 					({
-						label:
-							item.directors.length > 1
-								? "Directors"
-								: "Director",
+						label: item.directors.length > 1 ? "Directors" : "Director",
 						icon: "Clapperboard",
 						render: directorsVal,
 					} satisfies DataItem),
@@ -530,11 +559,21 @@
 		min-height: 0;
 	}
 
+	/* Box for the <Media> logo — Media fills its parent and contains the logo
+	   within. Media crossfades it in once loaded; 0.95 opacity lets the moving
+	   glow behind subtly show through the logo. */
 	.logo {
-		object-fit: contain;
-		max-width: 100%;
-		max-height: 30vh;
+		width: 100%;
+		height: 30vh;
+		opacity: 0.95;
 		filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.6));
+	}
+
+	/* Contain the logo within the box, horizontally centered (right-aligned in TV
+	   mode via the override below). */
+	.logo :global(.media),
+	.logo :global(img) {
+		object-position: center center;
 	}
 
 	.title {
@@ -569,8 +608,9 @@
 		align-items: flex-end;
 	}
 
-	.sidebar.tv .logo {
-		margin-left: auto;
+	.sidebar.tv .logo :global(.media),
+	.sidebar.tv .logo :global(img) {
+		object-position: right center;
 	}
 
 	.sidebar.tv .actions-row {
@@ -660,8 +700,13 @@
 		}
 
 		.logo {
-			max-width: 100%;
 			width: 100%;
+			height: 22vh;
+		}
+
+		.logo :global(.media),
+		.logo :global(img) {
+			object-position: center center;
 		}
 
 		.title {

@@ -10,23 +10,16 @@ jobs:
     name: backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      # `cargo build` runs `build.rs`, which invokes draad codegen and writes
-      # `_generated.rs` into `OUT_DIR`. The ts-rs per-type bindings come from
-      # `cargo test export_bindings`; then a second build with `CINEMA_EMIT_TS=1`
-      # has draad emit the `frontend/src/lib/schema/*.ts` files for the
-      # frontend job.
-      - name: Generate schema + build
-        run: |
-          cargo test --quiet export_bindings
-          CINEMA_EMIT_TS=1 cargo build
+      - name: Build
+        run: cargo build --locked
         env:
-          TS_RS_EXPORT_DIR: ${{ github.workspace }}/target/draad-bindings
+          SQLX_OFFLINE: true
 
       - name: Upload generated TS schema
         uses: actions/upload-artifact@v4
@@ -39,7 +32,7 @@ jobs:
     needs: backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
 
@@ -48,8 +41,14 @@ jobs:
           name: ts-schema
           path: frontend/src/lib/schema
 
-      - run: bun install
+      - name: Install bun
+        run: bun install
         working-directory: frontend
 
-      - run: bun run build
+      - name: Check TypeScript
+        run: bun run check
+        working-directory: frontend
+
+      - name: Build
+        run: bun run build
         working-directory: frontend

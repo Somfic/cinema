@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE downloads\n                SET status = 'queued',\n                    error = NULL\n                WHERE id = $1 AND status IN ('paused', 'cancelled', 'failed')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ce64057bb96a4291398765ac07b8afae301e5c55e7d0f2ef3be4bc71bb90359f"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT pt.id, pt.download_id, pt.only_audio, pt.audio_index\n                FROM pretranscodings pt\n                WHERE pt.status = 'transcoding'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "download_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "download_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "only_audio",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "only_audio"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "audio_index",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "audio_index"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d14cb74d3f53090ec22451f7b27f6111397b726efc13c363a5680a8f2d95dad0"
+}

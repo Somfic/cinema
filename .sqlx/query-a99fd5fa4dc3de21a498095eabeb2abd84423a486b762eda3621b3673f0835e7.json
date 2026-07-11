@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO watch_history\n                    (media_id, download_id, season, episode, progress, duration, transcoding)\n                VALUES ($1, $2, $3, $4, $5, $6, $7)\n                ON CONFLICT (media_id) DO UPDATE SET\n                    download_id  = EXCLUDED.download_id,\n                    season       = EXCLUDED.season,\n                    episode      = EXCLUDED.episode,\n                    progress     = EXCLUDED.progress,\n                    duration     = EXCLUDED.duration,\n                    transcoding  = EXCLUDED.transcoding,\n                    last_watched = CURRENT_TIMESTAMP\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Float4",
+        "Float4",
+        {
+          "Custom": {
+            "name": "transcoding_option",
+            "kind": {
+              "Enum": [
+                "enabled",
+                "only-audio",
+                "disabled"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a99fd5fa4dc3de21a498095eabeb2abd84423a486b762eda3621b3673f0835e7"
+}

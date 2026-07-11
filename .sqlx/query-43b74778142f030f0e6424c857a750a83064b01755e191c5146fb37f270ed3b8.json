@@ -1,0 +1,285 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    pt.id,\n                    d.id as \"download_id\",\n                    d.info_hash as \"download_info_hash\",\n                    d.file_idx as \"download_file_idx\",\n                    pt.audio_index,\n                    pt.only_audio,\n                    d.name,\n                    pt.transcoded_ms,\n                    pt.total_ms,\n                    pt.status as \"status: PretranscodingStatus\",\n                    pt.error,\n                    pt.created_at,\n                    pt.completed_at,\n                    dm.info_hash IS NOT NULL as \"meta_exists!: bool\",\n                    mi.media_type as \"media_type?: tmdb::MediaType\",\n                    mi.tmdb_id as \"tmdb_id?\",\n                    mi.title as \"title?\",\n                    mi.poster_path as \"poster_path?\",\n                    dm.season as \"season?\",\n                    dm.episode as \"episode?\",\n                    dm.resolution as \"resolution?\"\n                FROM pretranscodings pt\n                JOIN downloads d ON d.id = pt.download_id\n                LEFT JOIN download_meta dm ON dm.info_hash = d.info_hash AND dm.file_idx = d.file_idx\n                LEFT JOIN media_items mi ON mi.id = dm.media_id\n                ORDER BY pt.created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "download_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "download_info_hash",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "info_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "download_file_idx",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "file_idx"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "audio_index",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "audio_index"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "only_audio",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "only_audio"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "transcoded_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "transcoded_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "total_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "total_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "status: PretranscodingStatus",
+        "type_info": {
+          "Custom": {
+            "name": "pretranscoding_status",
+            "kind": {
+              "Enum": [
+                "queued",
+                "transcoding",
+                "completed",
+                "cancelled",
+                "failed",
+                "paused"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "completed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "completed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "meta_exists!: bool",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "media_type?: tmdb::MediaType",
+        "type_info": {
+          "Custom": {
+            "name": "media_type",
+            "kind": {
+              "Enum": [
+                "movie",
+                "tv"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "media_type"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "tmdb_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "tmdb_id"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "title?",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "poster_path?",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "poster_path"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "season?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "download_meta",
+            "name": "season"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "episode?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "download_meta",
+            "name": "episode"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "resolution?",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "download_meta",
+            "name": "resolution"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      null,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "43b74778142f030f0e6424c857a750a83064b01755e191c5146fb37f270ed3b8"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT info_hash, file_idx FROM downloads WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "info_hash",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "info_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "file_idx",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "file_idx"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "661d7cd43a04e74947ae9a90a6efb325e7c8b12413e5a8250956b57730530256"
+}
