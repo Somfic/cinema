@@ -13,7 +13,7 @@ pub trait CacheApi {
     async fn orphan(&self, info_hash: String) -> Result<(), Error>;
 
     // POST /cache/clear-app-cache
-    /// Stop HLS sessions and wipe all the cached data except for torrents
+    /// Wipe app cache; live HLS sessions, pretranscodings, and torrents are not touched.
     async fn clear_app_cache(&self) -> Result<(), Error>;
 
     // GET
