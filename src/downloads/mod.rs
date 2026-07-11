@@ -93,11 +93,3 @@ const TORRENT_CACHES: &[&str] = &[
 pub struct TorrentHandle {
     pub managed: Arc<ManagedTorrent>,
 }
-
-impl TorrentHandle {
-    /// Get download progress: (downloaded_bytes, total_bytes)
-    pub fn progress(&self) -> (u64, u64) {
-        let stats = self.managed.stats();
-        (stats.progress_bytes, stats.total_bytes)
-    }
-}

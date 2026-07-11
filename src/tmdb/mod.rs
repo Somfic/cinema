@@ -445,20 +445,6 @@ impl TmdbClient {
         }
     }
 
-    pub async fn ping(&self) -> crate::app::Result<String> {
-        let url = format!(
-            "https://api.themoviedb.org/3/authentication?api_key={}",
-            self.api_key
-        );
-        let res = self.client.get(&url).send().await?;
-        let status = res.status();
-        if status.is_success() {
-            Ok("authenticated".into())
-        } else {
-            Err(crate::app::Error::Generic(status.to_string()))
-        }
-    }
-
     pub async fn search(&self, query: &str) -> crate::app::Result<Vec<SearchResult>> {
         // Normalize hyphens to periods (e.g. "wall-e" → "wall.e" matches "WALL·E")
         let query = query.replace('-', ".");
