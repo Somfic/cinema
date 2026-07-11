@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
-use crate::app::{Error, Result, Storage};
+use crate::app::{CinemaError, Result, Storage};
 
 const FORMAT: &str =
     "bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/18";
@@ -117,7 +117,7 @@ pub async fn ensure_cached(
     year: Option<&str>,
 ) -> Result<PathBuf> {
     if !is_valid_key(key) {
-        return Err(Error::NotFound("invalid trailer key".into()));
+        return Err(CinemaError::NotFound("invalid trailer key".into()));
     }
 
     let dir = cache_dir(storage);
@@ -143,26 +143,25 @@ pub async fn ensure_cached(
     let tmp_path = dir.join(format!("{key}.part.mp4"));
 
     let youtube_url = format!("https://www.youtube.com/watch?v={key}");
-    let result = match download_trailer(storage, &youtube_url, &tmp_path, &format!("trailer {key}"))
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(yt_err) => match (trailers_api_url(), title) {
-            (Some(base), Some(title)) => {
-                tracing::warn!(
-                    "youtube trailer {key} failed ({yt_err}); trying trailers-api for {title:?}"
-                );
-                trailers_api_download(&base, title, year, &tmp_path)
+    let result =
+        match download_trailer(storage, &youtube_url, &tmp_path, &format!("trailer {key}")).await {
+            Ok(()) => Ok(()),
+            Err(yt_err) => match (trailers_api_url(), title) {
+                (Some(base), Some(title)) => {
+                    tracing::warn!(
+                        "youtube trailer {key} failed ({yt_err}); trying trailers-api for {title:?}"
+                    );
+                    trailers_api_download(&base, title, year, &tmp_path)
                     .await
                     .map_err(|api_err| {
-                        Error::Generic(format!(
+                        CinemaError::Generic(format!(
                             "youtube failed ({yt_err}); trailers-api fallback failed ({api_err})"
                         ))
                     })
-            }
-            _ => Err(yt_err),
-        },
-    };
+                }
+                _ => Err(yt_err),
+            },
+        };
 
     match result {
         Ok(()) => {
@@ -204,15 +203,15 @@ async fn download_trailer(
     let output = tokio::time::timeout(DOWNLOAD_TIMEOUT, cmd.output())
         .await
         .map_err(|_| {
-            Error::Generic(format!(
+            CinemaError::Generic(format!(
                 "yt-dlp timed out after {}s for {label}",
                 DOWNLOAD_TIMEOUT.as_secs()
             ))
         })?
-        .map_err(|e| Error::Generic(format!("failed to spawn yt-dlp: {e}")))?;
+        .map_err(|e| CinemaError::Generic(format!("failed to spawn yt-dlp: {e}")))?;
 
     if !output.status.success() {
-        return Err(Error::Generic(format!(
+        return Err(CinemaError::Generic(format!(
             "yt-dlp failed for {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -243,16 +242,18 @@ async fn trailers_api_download(
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| Error::Generic(format!("trailers-api submit failed: {e}")))?
+        .map_err(|e| CinemaError::Generic(format!("trailers-api submit failed: {e}")))?
         .json()
         .await
-        .map_err(|e| Error::Generic(format!("trailers-api submit parse failed: {e}")))?;
+        .map_err(|e| CinemaError::Generic(format!("trailers-api submit parse failed: {e}")))?;
 
     // 2) Poll until the job finishes.
     let deadline = tokio::time::Instant::now() + TRAILERS_API_TIMEOUT;
     let file_url = loop {
         if tokio::time::Instant::now() >= deadline {
-            return Err(Error::Generic(format!("trailers-api timed out for {title:?}")));
+            return Err(CinemaError::Generic(format!(
+                "trailers-api timed out for {title:?}"
+            )));
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -262,22 +263,22 @@ async fn trailers_api_download(
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| Error::Generic(format!("trailers-api poll failed: {e}")))?
+            .map_err(|e| CinemaError::Generic(format!("trailers-api poll failed: {e}")))?
             .json()
             .await
-            .map_err(|e| Error::Generic(format!("trailers-api poll parse failed: {e}")))?;
+            .map_err(|e| CinemaError::Generic(format!("trailers-api poll parse failed: {e}")))?;
 
         match status.status.as_str() {
             "done" => match status.trailers.into_iter().next() {
                 Some(t) => break t.url,
                 None => {
-                    return Err(Error::Generic(format!(
+                    return Err(CinemaError::Generic(format!(
                         "trailers-api returned no trailer for {title:?}"
                     )));
                 }
             },
             "error" | "no_trailers" | "cancelled" => {
-                return Err(Error::Generic(format!(
+                return Err(CinemaError::Generic(format!(
                     "trailers-api {} for {title:?}",
                     status.status
                 )));
@@ -294,10 +295,10 @@ async fn trailers_api_download(
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| Error::Generic(format!("trailers-api download failed: {e}")))?
+        .map_err(|e| CinemaError::Generic(format!("trailers-api download failed: {e}")))?
         .bytes()
         .await
-        .map_err(|e| Error::Generic(format!("trailers-api read failed: {e}")))?;
+        .map_err(|e| CinemaError::Generic(format!("trailers-api read failed: {e}")))?;
     tokio::fs::write(dest, &bytes).await?;
     Ok(())
 }
@@ -330,7 +331,7 @@ pub fn cached_path(storage: &Storage, key: &str) -> Option<PathBuf> {
 
 pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {
     if !is_valid_key(key) {
-        return Err(Error::NotFound("invalid trailer key".into()));
+        return Err(CinemaError::NotFound("invalid trailer key".into()));
     }
     let dir = cache_dir(storage);
     let meta_path = dir.join(format!("{key}.json"));

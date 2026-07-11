@@ -129,7 +129,7 @@ impl AggregationMediaType {
             .db
             .begin()
             .await
-            .map_err(crate::app::Error::DatabaseError)
+            .map_err(crate::app::CinemaError::DatabaseError)
         {
             Ok(tx) => tx,
             Err(err) => {

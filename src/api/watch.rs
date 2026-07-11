@@ -1,5 +1,5 @@
 use crate::{
-    app::{AppContext, Error},
+    app::{AppContext, CinemaError},
     tmdb,
 };
 
@@ -47,17 +47,17 @@ pub struct WatchHistoryItem {
 pub trait WatchApi {
     /// Inserts the current playback position for a piece of media
     #[post]
-    async fn record(&self, watch: RecordWatch) -> Result<(), Error>;
+    async fn record(&self, watch: RecordWatch) -> Result<(), CinemaError>;
 
     /// Returns the 20 most-recently-watched items
     #[get]
-    async fn history(&self) -> Result<Vec<WatchHistoryItem>, Error>;
+    async fn history(&self) -> Result<Vec<WatchHistoryItem>, CinemaError>;
 }
 
 #[draad::api]
 impl WatchApi for AppContext {
-    async fn record(&self, watch: RecordWatch) -> Result<(), Error> {
-        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+    async fn record(&self, watch: RecordWatch) -> Result<(), CinemaError> {
+        let mut tx = self.db.begin().await.map_err(CinemaError::DatabaseError)?;
 
         let media_id =
             crate::tmdb::MediaItem::ensure_exists(watch.tmdb_id, watch.media_type, &mut tx, self)
@@ -72,7 +72,7 @@ impl WatchApi for AppContext {
             )
             .fetch_optional(&mut *tx)
             .await
-            .map_err(Error::DatabaseError)?
+            .map_err(CinemaError::DatabaseError)?
         } else {
             None
         };
@@ -101,13 +101,13 @@ impl WatchApi for AppContext {
         )
         .execute(&mut *tx)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
-        tx.commit().await.map_err(Error::DatabaseError)?;
+        tx.commit().await.map_err(CinemaError::DatabaseError)?;
         Ok(())
     }
 
-    async fn history(&self) -> Result<Vec<WatchHistoryItem>, Error> {
+    async fn history(&self) -> Result<Vec<WatchHistoryItem>, CinemaError> {
         let items = sqlx::query_as!(
             WatchHistoryItem,
             r#"SELECT
@@ -131,7 +131,7 @@ impl WatchApi for AppContext {
         )
         .fetch_all(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(items)
     }

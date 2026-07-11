@@ -11,10 +11,10 @@ use crate::config::Config;
 
 // ── Error ──
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, CinemaError>;
 
 #[derive(thiserror::Error, Debug)]
-pub enum Error {
+pub enum CinemaError {
     #[error("config error: {0}")]
     TomlError(#[from] toml::de::Error),
     #[error("database error: {0}")]
@@ -46,21 +46,25 @@ pub enum Error {
 // error type owns its HTTP mapping (0.1 routed it through a generated shim).
 // The body shape — `{ kind, message }` — matches the frontend's
 // `schema/error.ts::RpcErrorPayload`.
-impl axum::response::IntoResponse for Error {
+impl axum::response::IntoResponse for CinemaError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
         let (status, kind) = match &self {
-            Error::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
-            Error::InvalidInput(_) => (StatusCode::BAD_REQUEST, "InvalidInput"),
-            Error::HttpClientError(_) => (StatusCode::BAD_GATEWAY, "HttpClient"),
-            Error::TomlError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Toml"),
-            Error::DatabaseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database"),
-            Error::ConfigReadError { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "ConfigRead"),
-            Error::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Io"),
-            Error::MigrationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Migration"),
-            Error::AddressParseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "AddressParse"),
-            Error::Generic(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Generic"),
-            Error::JsonError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Json"),
+            CinemaError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
+            CinemaError::InvalidInput(_) => (StatusCode::BAD_REQUEST, "InvalidInput"),
+            CinemaError::HttpClientError(_) => (StatusCode::BAD_GATEWAY, "HttpClient"),
+            CinemaError::TomlError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Toml"),
+            CinemaError::DatabaseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database"),
+            CinemaError::ConfigReadError { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "ConfigRead")
+            }
+            CinemaError::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Io"),
+            CinemaError::MigrationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Migration"),
+            CinemaError::AddressParseError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "AddressParse")
+            }
+            CinemaError::Generic(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Generic"),
+            CinemaError::JsonError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Json"),
         };
         let body = axum::Json(serde_json::json!({
             "kind": kind,

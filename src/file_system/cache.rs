@@ -1,5 +1,5 @@
 use crate::{
-    app::{AppContext, Error},
+    app::{AppContext, CinemaError},
     file_system,
     transcodings::{PretranscodingOutputPath, types::Pretranscoding},
 };
@@ -27,7 +27,7 @@ pub struct CacheEntry {
     disk_bytes: u64,
 }
 
-pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error> {
+pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, CinemaError> {
     let downloads = crate::downloads::types::Download::find_all(&ctx.db).await?;
 
     let torrents = ctx.storage.torrents_dir();
@@ -92,12 +92,12 @@ pub async fn list_cache_items(ctx: &AppContext) -> Result<Vec<CacheEntry>, Error
     Ok(entries)
 }
 
-pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<(), Error> {
+pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<(), CinemaError> {
     // Reject anything that is not a valid hex (SHA-1)
     static HASH_REGEX: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"^[a-fA-F0-9]{40}$").unwrap());
     if !HASH_REGEX.is_match(&info_hash) {
-        return Err(Error::InvalidInput("invalid info_hash".into()));
+        return Err(CinemaError::InvalidInput("invalid info_hash".into()));
     }
 
     let root = ctx.storage.torrents_dir();
@@ -109,7 +109,7 @@ pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<
     if let (Some(r), Some(t)) = (canon_root, canon_target)
         && !t.starts_with(&r)
     {
-        return Err(Error::InvalidInput("invalid info_hash".into()));
+        return Err(CinemaError::InvalidInput("invalid info_hash".into()));
     }
 
     if target.exists() {
@@ -121,7 +121,7 @@ pub async fn delete_cache_orphan(ctx: &AppContext, info_hash: String) -> Result<
 
 /// Wipe the contents of `data_dir/fs/cache/` (trailers and image thumbnails).
 /// Live HLS sessions, pretranscodings, and torrents are intentionally left alone.
-pub async fn clear_app_cache(ctx: &AppContext) -> Result<(), Error> {
+pub async fn clear_app_cache(ctx: &AppContext) -> Result<(), CinemaError> {
     let root = &ctx.storage.cache_dir();
     let Ok(mut rd) = tokio::fs::read_dir(&root).await else {
         return Ok(());

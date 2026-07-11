@@ -97,7 +97,7 @@ impl TorrentEngine {
         let session = Session::new_with_opts(output_folder, opts)
             .await
             .map_err(|e| {
-                crate::app::Error::Generic(format!("Failed to init torrent session: {e}"))
+                crate::app::CinemaError::Generic(format!("Failed to init torrent session: {e}"))
             })?;
 
         let api = Api::new(session.clone(), None);
@@ -114,7 +114,9 @@ impl TorrentEngine {
                 stream_handles: tokio::sync::Mutex::new(HashMap::new()),
                 validation_locks: std::sync::Mutex::new(HashMap::new()),
             })
-            .map_err(|_| crate::app::Error::Generic("Torrent engine already initialized".into()))?;
+            .map_err(|_| {
+                crate::app::CinemaError::Generic("Torrent engine already initialized".into())
+            })?;
 
         tracing::info!("Torrent engine initialized");
         Ok(())
@@ -268,7 +270,7 @@ impl TorrentEngine {
                         .add_torrent(add, Some(make_opts()))
                         .await
                         .map_err(|e| {
-                            crate::app::Error::Generic(format!("Failed to add torrent: {e}"))
+                            crate::app::CinemaError::Generic(format!("Failed to add torrent: {e}"))
                         })?
                 }
             }
@@ -284,14 +286,18 @@ impl TorrentEngine {
             self.session
                 .add_torrent(add, Some(make_opts()))
                 .await
-                .map_err(|e| crate::app::Error::Generic(format!("Failed to add torrent: {e}")))?
+                .map_err(|e| {
+                    crate::app::CinemaError::Generic(format!("Failed to add torrent: {e}"))
+                })?
         };
 
         let managed = match response {
             AddTorrentResponse::Added(_, handle) => handle,
             AddTorrentResponse::AlreadyManaged(_, handle) => handle,
             AddTorrentResponse::ListOnly(_) => {
-                return Err(crate::app::Error::Generic("Torrent was list-only".into()));
+                return Err(crate::app::CinemaError::Generic(
+                    "Torrent was list-only".into(),
+                ));
             }
         };
 
@@ -319,7 +325,7 @@ impl TorrentEngine {
                 });
             }
             Ok(Err(e)) => {
-                return Err(crate::app::Error::Generic(format!(
+                return Err(crate::app::CinemaError::Generic(format!(
                     "Torrent init failed: {e}"
                 )));
             }
@@ -333,7 +339,7 @@ impl TorrentEngine {
                 self.span.in_scope(|| {
                     tracing::warn!(info_hash, peers, timeout = ?config.torrent_validation_timeout, "Torrent metadata timeout");
                 });
-                return Err(crate::app::Error::Generic(format!(
+                return Err(crate::app::CinemaError::Generic(format!(
                     "Timed out waiting for torrent metadata ({peers} peers found but metadata exchange incomplete)"
                 )));
             }
@@ -348,17 +354,17 @@ impl TorrentEngine {
     /// sequential pieces from the start of the file (32MB lookahead).
     pub(super) async fn select_file(&self, key: &EngineKey) -> crate::app::Result<()> {
         let id = TorrentIdOrHash::parse(&key.info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
         let handle = self
             .session
             .get(id)
-            .ok_or_else(|| crate::app::Error::Generic("Torrent not in session".into()))?;
+            .ok_or_else(|| crate::app::CinemaError::Generic("Torrent not in session".into()))?;
 
         if handle.is_paused() {
             self.session
                 .unpause(&handle)
                 .await
-                .map_err(|e| crate::app::Error::Generic(format!("Failed to unpause: {e}")))?;
+                .map_err(|e| crate::app::CinemaError::Generic(format!("Failed to unpause: {e}")))?;
         }
 
         let mut files: std::collections::HashSet<usize> = handle
@@ -371,7 +377,9 @@ impl TorrentEngine {
                 .update_only_files(&handle, &files)
                 .await
                 .map_err(|e| {
-                    crate::app::Error::Generic(format!("Failed to update file selection: {e}"))
+                    crate::app::CinemaError::Generic(format!(
+                        "Failed to update file selection: {e}"
+                    ))
                 })?;
         }
 
@@ -389,7 +397,7 @@ impl TorrentEngine {
     /// in which case it is removed. Files are kept on disk.
     pub(super) async fn stop(&self, key: &EngineKey) -> crate::app::Result<()> {
         let id = TorrentIdOrHash::parse(&key.info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
         let Some(handle) = self.session.get(id) else {
             return Ok(());
         };
@@ -410,7 +418,7 @@ impl TorrentEngine {
     /// Remove a whole torrent and delete its downloaded files.
     pub(super) async fn stop_and_delete(&self, key: &EngineKey) -> crate::app::Result<()> {
         let id = TorrentIdOrHash::parse(&key.info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
         let Some(handle) = self.session.get(id) else {
             self.remove_file(&key.info_hash, key.file_idx).await?;
             return Ok(());
@@ -446,7 +454,9 @@ impl TorrentEngine {
                 .update_only_files(&handle, &files)
                 .await
                 .map_err(|e| {
-                    crate::app::Error::Generic(format!("Failed to update file selection: {e}"))
+                    crate::app::CinemaError::Generic(format!(
+                        "Failed to update file selection: {e}"
+                    ))
                 })?;
         }
 
@@ -470,7 +480,7 @@ impl TorrentEngine {
         if let Ok(id) = TorrentIdOrHash::parse(info_hash) {
             let name = self.session.get(id).and_then(|h| h.name());
             self.session.delete(id, delete_files).await.map_err(|err| {
-                crate::app::Error::Generic(format!("Could not stop the torrent: {err}"))
+                crate::app::CinemaError::Generic(format!("Could not stop the torrent: {err}"))
             })?;
             self.span.in_scope(|| {
                 tracing::info!(
@@ -503,7 +513,7 @@ impl TorrentEngine {
     /// and does not deselect the last file.
     pub(super) async fn pause(&self, key: &EngineKey) -> crate::app::Result<()> {
         let id = TorrentIdOrHash::parse(&key.info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
         let Some(handle) = self.session.get(id) else {
             return Ok(());
         };
@@ -514,7 +524,7 @@ impl TorrentEngine {
             self.session
                 .pause(&handle)
                 .await
-                .map_err(|e| crate::app::Error::Generic(format!("Failed to pause: {e}")))?;
+                .map_err(|e| crate::app::CinemaError::Generic(format!("Failed to pause: {e}")))?;
         }
 
         Ok(())
@@ -528,12 +538,11 @@ impl TorrentEngine {
         file_idx: usize,
     ) -> crate::app::Result<TorrentFileReader> {
         let id = TorrentIdOrHash::parse(info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
 
-        let file_stream = self
-            .api
-            .api_stream(id, file_idx)
-            .map_err(|e| crate::app::Error::Generic(format!("Failed to create stream: {e}")))?;
+        let file_stream = self.api.api_stream(id, file_idx).map_err(|e| {
+            crate::app::CinemaError::Generic(format!("Failed to create stream: {e}"))
+        })?;
 
         let len = file_stream.len();
         Ok(TorrentFileReader {
@@ -549,18 +558,18 @@ impl TorrentEngine {
         file_idx: usize,
     ) -> crate::app::Result<std::path::PathBuf> {
         let id = TorrentIdOrHash::parse(info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
 
         let details = self.api.api_torrent_details(id).map_err(|e| {
-            crate::app::Error::Generic(format!("Failed to get torrent details: {e}"))
+            crate::app::CinemaError::Generic(format!("Failed to get torrent details: {e}"))
         })?;
 
         let files = details
             .files
-            .ok_or_else(|| crate::app::Error::Generic("No file metadata available".into()))?;
+            .ok_or_else(|| crate::app::CinemaError::Generic("No file metadata available".into()))?;
 
         let file = files.get(file_idx).ok_or_else(|| {
-            crate::app::Error::Generic(format!("File index {file_idx} not found"))
+            crate::app::CinemaError::Generic(format!("File index {file_idx} not found"))
         })?;
 
         let mut path = std::path::PathBuf::from(&details.output_folder);
@@ -884,11 +893,11 @@ impl TorrentEngine {
     /// Get stats for an active torrent by info hash.
     pub fn stats(&self, info_hash: &str) -> crate::app::Result<librqbit::TorrentStats> {
         let id = TorrentIdOrHash::parse(info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
         let handle = self
             .session
             .get(id)
-            .ok_or_else(|| crate::app::Error::Generic("Torrent not found".into()))?;
+            .ok_or_else(|| crate::app::CinemaError::Generic("Torrent not found".into()))?;
         Ok(handle.stats())
     }
 
@@ -897,13 +906,13 @@ impl TorrentEngine {
     /// of each bucket (0 = no pieces, 255 = all pieces downloaded).
     pub fn piece_map(&self, key: &EngineKey, bucket_count: usize) -> crate::app::Result<Vec<u8>> {
         let id = TorrentIdOrHash::parse(&key.info_hash)
-            .map_err(|e| crate::app::Error::Generic(format!("Invalid info hash: {e}")))?;
+            .map_err(|e| crate::app::CinemaError::Generic(format!("Invalid info hash: {e}")))?;
 
         // Get the file's piece range from torrent metadata
         let handle = self
             .session
             .get(id)
-            .ok_or_else(|| crate::app::Error::Generic("Torrent not found".into()))?;
+            .ok_or_else(|| crate::app::CinemaError::Generic("Torrent not found".into()))?;
 
         let piece_range = handle
             .with_metadata(|meta| {
@@ -913,15 +922,14 @@ impl TorrentEngine {
                     .and_then(|mut iter| iter.nth(key.file_idx))
                     .map(|f| f.pieces)
             })
-            .map_err(|e| crate::app::Error::Generic(format!("No metadata: {e}")))?
+            .map_err(|e| crate::app::CinemaError::Generic(format!("No metadata: {e}")))?
             .ok_or_else(|| {
-                crate::app::Error::Generic(format!("File index {} not found", key.file_idx))
+                crate::app::CinemaError::Generic(format!("File index {} not found", key.file_idx))
             })?;
 
-        let dump = self
-            .api
-            .api_dump_haves(id)
-            .map_err(|e| crate::app::Error::Generic(format!("Failed to get piece map: {e}")))?;
+        let dump = self.api.api_dump_haves(id).map_err(|e| {
+            crate::app::CinemaError::Generic(format!("Failed to get piece map: {e}"))
+        })?;
 
         // Parse the debug output of BitSlice which looks like:
         // "BitSlice<u8, Msb0> [1, 0, 1, 1, 0, ...]"

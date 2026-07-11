@@ -199,13 +199,13 @@ impl super::Handle {
             Acquire::AlreadyRunning => {
                 // Should be impossible: live pool ids are unique + monotonic.
                 let _ = tokio::fs::remove_dir_all(&dir).await;
-                return Err(crate::app::Error::Generic(format!(
+                return Err(crate::app::CinemaError::Generic(format!(
                     "Live session pool id collision ({pool_id})"
                 )));
             }
             Acquire::NoCapacity => {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
-                return Err(crate::app::Error::Generic(
+                return Err(crate::app::CinemaError::Generic(
                     "No capacity for a new live stream. Close another stream and retry".into(),
                 ));
             }
@@ -296,7 +296,7 @@ impl super::Handle {
                     }
                 }
 
-                Err(crate::app::Error::Generic(String::from("Transcoding has been cancelled")))
+                Err(crate::app::CinemaError::Generic(String::from("Transcoding has been cancelled")))
             }
             res = setup => res
         }

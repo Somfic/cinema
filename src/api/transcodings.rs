@@ -1,4 +1,4 @@
-use crate::app::{AppContext, Error};
+use crate::app::{AppContext, CinemaError};
 use crate::transcodings::PretranscodingProgress;
 use crate::transcodings::types::{Pretranscoding, PretranscodingStatus};
 
@@ -26,54 +26,54 @@ pub struct PretranscodingRemoved {
 pub trait TranscodingsApi {
     /// Lists every pretranscoding row across all downloads, newest first
     #[get]
-    async fn list(&self) -> Result<Vec<Pretranscoding>, Error>;
+    async fn list(&self) -> Result<Vec<Pretranscoding>, CinemaError>;
 
     /// Queue a pretranscoding job. Idempotent: an existing queued/running/completed
     /// row for the same (download, only_audio, audio_index) is returned unchanged.
-    async fn enqueue(&self, request: EnqueuePretranscoding) -> Result<i32, Error>;
+    async fn enqueue(&self, request: EnqueuePretranscoding) -> Result<i32, CinemaError>;
 
     /// Pause a running or queued pretranscoding. ffmpeg is signalled cleanly
     /// so the partial segment stays valid; `resume` continues from where it
     /// left off.
-    async fn pause(&self, id: i32) -> Result<(), Error>;
+    async fn pause(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Resume a paused pretranscoding, picking up from its saved checkpoint.
-    async fn resume(&self, id: i32) -> Result<(), Error>;
+    async fn resume(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Cancel a running or queued pretranscoding. The partial output file is
     /// removed; the row is kept in `cancelled` state so the user can see it.
-    async fn cancel(&self, id: i32) -> Result<(), Error>;
+    async fn cancel(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Delete the pretranscoding row and remove its cached MP4 from disk.
     #[delete]
-    async fn remove(&self, id: i32) -> Result<(), Error>;
+    async fn remove(&self, id: i32) -> Result<(), CinemaError>;
 }
 
 #[draad::api]
 impl TranscodingsApi for AppContext {
-    async fn list(&self) -> Result<Vec<Pretranscoding>, Error> {
+    async fn list(&self) -> Result<Vec<Pretranscoding>, CinemaError> {
         Pretranscoding::find_all(&self.db).await
     }
 
-    async fn enqueue(&self, request: EnqueuePretranscoding) -> Result<i32, Error> {
+    async fn enqueue(&self, request: EnqueuePretranscoding) -> Result<i32, CinemaError> {
         self.transcodings
             .enqueue(request.download_id, request.only_audio, request.audio_index)
             .await
     }
 
-    async fn pause(&self, id: i32) -> Result<(), Error> {
+    async fn pause(&self, id: i32) -> Result<(), CinemaError> {
         self.transcodings.pause(id).await
     }
 
-    async fn resume(&self, id: i32) -> Result<(), Error> {
+    async fn resume(&self, id: i32) -> Result<(), CinemaError> {
         self.transcodings.resume(id).await
     }
 
-    async fn cancel(&self, id: i32) -> Result<(), Error> {
+    async fn cancel(&self, id: i32) -> Result<(), CinemaError> {
         self.transcodings.cancel(id).await
     }
 
-    async fn remove(&self, id: i32) -> Result<(), Error> {
+    async fn remove(&self, id: i32) -> Result<(), CinemaError> {
         self.transcodings.remove(id).await
     }
 }

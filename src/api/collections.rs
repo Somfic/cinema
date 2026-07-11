@@ -1,4 +1,4 @@
-use crate::app::Error;
+use crate::app::CinemaError;
 use crate::{app::AppContext, tmdb::MediaType};
 
 use crate::tmdb;
@@ -64,7 +64,7 @@ pub struct ReorderItem {
 pub trait CollectionsApi {
     /// Adds an item to a named collection
     #[post]
-    async fn add(&self, item: CollectionRequest) -> Result<(), Error>;
+    async fn add(&self, item: CollectionRequest) -> Result<(), CinemaError>;
 
     /// Removes an item from a collection
     #[delete]
@@ -73,11 +73,11 @@ pub trait CollectionsApi {
         collection: String,
         media_type: String, // draad doesn't allow enums in DELETE
         id: i64,
-    ) -> Result<(), Error>;
+    ) -> Result<(), CinemaError>;
 
     /// Lists items in a single collection, ordered by position then added time
     #[get]
-    async fn get(&self, collection: String) -> Result<Vec<CollectionItem>, Error>;
+    async fn get(&self, collection: String) -> Result<Vec<CollectionItem>, CinemaError>;
 
     /// Whether the given item is in the given collection
     #[get]
@@ -86,38 +86,39 @@ pub trait CollectionsApi {
         collection: String,
         media_type: String, // draad doesn't allow enums in GET
         id: i64,
-    ) -> Result<CollectionStatus, Error>;
+    ) -> Result<CollectionStatus, CinemaError>;
 
     /// Lists every collection definition (user + system), ordered by position
     #[get]
-    async fn list_defs(&self) -> Result<Vec<CollectionDef>, Error>;
+    async fn list_defs(&self) -> Result<Vec<CollectionDef>, CinemaError>;
 
     /// Creates (or upserts) a collection definition
     #[put]
-    async fn create_def(&self, def: CreateCollection) -> Result<(), Error>;
+    async fn create_def(&self, def: CreateCollection) -> Result<(), CinemaError>;
 
     /// Deletes a collection definition and all its items. System defs can't
     /// be deleted
     #[delete]
-    async fn delete_def(&self, slug: String) -> Result<(), Error>;
+    async fn delete_def(&self, slug: String) -> Result<(), CinemaError>;
 
     /// Hides/unhides a collection from the UI without deleting its items
     #[patch]
-    async fn set_visibility(&self, slug: String, hidden: bool) -> Result<(), Error>;
+    async fn set_visibility(&self, slug: String, hidden: bool) -> Result<(), CinemaError>;
 
     /// Reorders the list of collection definitions
     #[patch]
-    async fn reorder_defs(&self, slugs: Vec<String>) -> Result<(), Error>;
+    async fn reorder_defs(&self, slugs: Vec<String>) -> Result<(), CinemaError>;
 
     /// Reorders items within a single collection
     #[patch]
-    async fn reorder(&self, collection: String, items: Vec<ReorderItem>) -> Result<(), Error>;
+    async fn reorder(&self, collection: String, items: Vec<ReorderItem>)
+    -> Result<(), CinemaError>;
 }
 
 #[draad::api]
 impl CollectionsApi for AppContext {
-    async fn add(&self, item: CollectionRequest) -> Result<(), Error> {
-        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+    async fn add(&self, item: CollectionRequest) -> Result<(), CinemaError> {
+        let mut tx = self.db.begin().await.map_err(CinemaError::DatabaseError)?;
 
         let media_id =
             crate::tmdb::MediaItem::ensure_exists(item.tmdb_id, item.media_type, &mut tx, self)
@@ -134,15 +135,20 @@ impl CollectionsApi for AppContext {
         )
         .execute(&mut *tx)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
-        tx.commit().await.map_err(Error::DatabaseError)?;
+        tx.commit().await.map_err(CinemaError::DatabaseError)?;
         Ok(())
     }
 
-    async fn remove(&self, collection: String, media_type: String, id: i64) -> Result<(), Error> {
+    async fn remove(
+        &self,
+        collection: String,
+        media_type: String,
+        id: i64,
+    ) -> Result<(), CinemaError> {
         let media_type: tmdb::MediaType = serde_json::from_str(&media_type).map_err(|_| {
-            Error::InvalidInput(String::from("Invalid values passed for media_type"))
+            CinemaError::InvalidInput(String::from("Invalid values passed for media_type"))
         })?;
         sqlx::query!(
             "
@@ -155,12 +161,12 @@ impl CollectionsApi for AppContext {
         )
         .execute(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(())
     }
 
-    async fn get(&self, collection: String) -> Result<Vec<CollectionItem>, Error> {
+    async fn get(&self, collection: String) -> Result<Vec<CollectionItem>, CinemaError> {
         let items = sqlx::query_as!(
             CollectionItem,
             r#"SELECT
@@ -179,7 +185,7 @@ impl CollectionsApi for AppContext {
         )
         .fetch_all(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(items)
     }
@@ -189,7 +195,7 @@ impl CollectionsApi for AppContext {
         collection: String,
         media_type: String,
         id: i64,
-    ) -> Result<CollectionStatus, Error> {
+    ) -> Result<CollectionStatus, CinemaError> {
         let media_type = MediaType::try_from(media_type)?;
         let exists: Option<bool> = sqlx::query_scalar!(
             r#"SELECT EXISTS (
@@ -203,14 +209,14 @@ impl CollectionsApi for AppContext {
         )
         .fetch_one(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(CollectionStatus {
             in_collection: exists.unwrap_or(false),
         })
     }
 
-    async fn list_defs(&self) -> Result<Vec<CollectionDef>, Error> {
+    async fn list_defs(&self) -> Result<Vec<CollectionDef>, CinemaError> {
         let defs = sqlx::query_as!(
             CollectionDef,
             r#"SELECT
@@ -225,12 +231,12 @@ impl CollectionsApi for AppContext {
         )
         .fetch_all(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(defs)
     }
 
-    async fn create_def(&self, def: CreateCollection) -> Result<(), Error> {
+    async fn create_def(&self, def: CreateCollection) -> Result<(), CinemaError> {
         sqlx::query!(
             "INSERT INTO collection_meta (slug, title, kind)
             VALUES ($1, $2, $3)
@@ -243,21 +249,21 @@ impl CollectionsApi for AppContext {
         )
         .execute(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(())
     }
 
-    async fn delete_def(&self, slug: String) -> Result<(), Error> {
+    async fn delete_def(&self, slug: String) -> Result<(), CinemaError> {
         let system = sqlx::query!("SELECT system FROM collection_meta WHERE slug = $1", slug)
             .fetch_optional(&self.db)
             .await
-            .map_err(Error::DatabaseError)?
+            .map_err(CinemaError::DatabaseError)?
             .map(|rec| rec.system)
             .unwrap_or(false);
 
         if system {
-            return Err(Error::Generic(
+            return Err(CinemaError::Generic(
                 "system collections cannot be deleted".to_string(),
             ));
         }
@@ -266,12 +272,12 @@ impl CollectionsApi for AppContext {
         sqlx::query!("DELETE FROM collection_meta WHERE slug = $1", slug)
             .execute(&self.db)
             .await
-            .map_err(Error::DatabaseError)?;
+            .map_err(CinemaError::DatabaseError)?;
 
         Ok(())
     }
 
-    async fn set_visibility(&self, slug: String, hidden: bool) -> Result<(), Error> {
+    async fn set_visibility(&self, slug: String, hidden: bool) -> Result<(), CinemaError> {
         sqlx::query!(
             "UPDATE collection_meta SET hidden = $1 WHERE slug = $2",
             hidden,
@@ -279,12 +285,12 @@ impl CollectionsApi for AppContext {
         )
         .execute(&self.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         Ok(())
     }
 
-    async fn reorder_defs(&self, slugs: Vec<String>) -> Result<(), Error> {
+    async fn reorder_defs(&self, slugs: Vec<String>) -> Result<(), CinemaError> {
         for (idx, slug) in slugs.iter().enumerate() {
             sqlx::query!(
                 "UPDATE collection_meta SET position = $1 WHERE slug = $2",
@@ -293,12 +299,16 @@ impl CollectionsApi for AppContext {
             )
             .execute(&self.db)
             .await
-            .map_err(Error::DatabaseError)?;
+            .map_err(CinemaError::DatabaseError)?;
         }
         Ok(())
     }
 
-    async fn reorder(&self, collection: String, items: Vec<ReorderItem>) -> Result<(), Error> {
+    async fn reorder(
+        &self,
+        collection: String,
+        items: Vec<ReorderItem>,
+    ) -> Result<(), CinemaError> {
         for (idx, item) in items.iter().enumerate() {
             sqlx::query!(
                 "
@@ -314,7 +324,7 @@ impl CollectionsApi for AppContext {
             )
             .execute(&self.db)
             .await
-            .map_err(Error::DatabaseError)?;
+            .map_err(CinemaError::DatabaseError)?;
         }
         Ok(())
     }

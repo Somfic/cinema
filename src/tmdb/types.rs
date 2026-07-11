@@ -56,13 +56,13 @@ pub enum MediaType {
 }
 
 impl TryFrom<String> for MediaType {
-    type Error = crate::app::Error;
+    type Error = crate::app::CinemaError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.as_str() {
             "movie" => Ok(MediaType::Movie),
             "tv" => Ok(MediaType::Tv),
-            _ => Err(crate::app::Error::InvalidInput(format!(
+            _ => Err(crate::app::CinemaError::InvalidInput(format!(
                 "Incorrect media type: \"{value}\""
             ))),
         }
@@ -153,7 +153,7 @@ impl MediaItem {
         )
         .fetch_one(conn)
         .await
-        .map_err(crate::app::Error::DatabaseError)
+        .map_err(crate::app::CinemaError::DatabaseError)
     }
 
     pub async fn ensure_exists(
@@ -169,7 +169,7 @@ impl MediaItem {
         )
         .fetch_optional(&mut *conn)
         .await
-        .map_err(crate::app::Error::DatabaseError)?;
+        .map_err(crate::app::CinemaError::DatabaseError)?;
 
         if let Some(id) = id {
             return Ok(id);

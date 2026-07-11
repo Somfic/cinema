@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    app::{Error, Pool},
+    app::{CinemaError, Pool},
     tmdb,
 };
 
@@ -187,7 +187,7 @@ impl Download {
         )
         .fetch_one(&mut **tx)
         .await
-        .map_err(Error::DatabaseError)
+        .map_err(CinemaError::DatabaseError)
     }
 
     /// Reset a download from a terminal/idle state so it can be re-started.

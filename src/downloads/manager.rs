@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use super::TorrentEngine;
-use crate::app::{Error, Pool, Storage};
+use crate::app::{CinemaError, Pool, Storage};
 use crate::config::Config;
 use crate::downloads::types::DownloadStatus;
 use crate::utils::supervisor_pool::{Acquire, SupervisorPool};
@@ -84,7 +84,7 @@ impl Handle {
             sqlx::query!("UPDATE downloads SET status = 'queued' WHERE status = 'downloading'")
                 .execute(&self.0.db)
                 .await
-                .map_err(Error::DatabaseError)?;
+                .map_err(CinemaError::DatabaseError)?;
 
         if reset.rows_affected() > 0 {
             tracing::info!(
@@ -106,13 +106,18 @@ impl Handle {
         file_idx: i32,
         priority: DownloadPriority,
     ) -> crate::app::Result<(i32, StartOutcome)> {
-        let mut tx = self.0.db.begin().await.map_err(Error::DatabaseError)?;
+        let mut tx = self
+            .0
+            .db
+            .begin()
+            .await
+            .map_err(CinemaError::DatabaseError)?;
 
         let id = super::types::Download::upsert(&mut tx, info_hash, file_idx).await?;
 
         super::types::Download::reset_for_restart(&mut tx, id).await?;
 
-        tx.commit().await.map_err(Error::DatabaseError)?;
+        tx.commit().await.map_err(CinemaError::DatabaseError)?;
 
         Ok((id, self.start(id, priority).await?))
     }
@@ -144,7 +149,7 @@ impl Handle {
         )
         .fetch_optional(&self.0.db)
         .await?
-        .ok_or_else(|| Error::NotFound(format!("Download {id} not found")))?;
+        .ok_or_else(|| CinemaError::NotFound(format!("Download {id} not found")))?;
 
         if row.status == DownloadStatus::Completed {
             return Ok(StartOutcome::AlreadyComplete {
@@ -347,7 +352,7 @@ impl Handle {
     }
 }
 
-async fn fail(db: &Pool, id: i32, err: &Error) {
+async fn fail(db: &Pool, id: i32, err: &CinemaError) {
     tracing::error!(id, error = %err, "Download failed");
     if let Err(err) = sqlx::query!(
         "UPDATE downloads SET status = 'failed', error = $1 WHERE id = $2 AND status NOT IN ('cancelled', 'paused')",

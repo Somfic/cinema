@@ -120,7 +120,7 @@ impl MediaSource {
         match self {
             Self::Disk { path } => TorrentFileReader::open_disk(path)
                 .await
-                .map_err(crate::app::Error::IoError),
+                .map_err(crate::app::CinemaError::IoError),
             Self::Engine {
                 info_hash,
                 file_idx,

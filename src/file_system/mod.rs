@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::app::Error;
+use crate::app::CinemaError;
 
 mod cache;
 mod stats;
@@ -44,19 +44,19 @@ async fn dir_size(path: &Path) -> SizeInBytes {
 
 /// Filesystem stats for the volume containing `path`.
 /// Returns (total_bytes, free_bytes available to non-root).
-fn fs_stats(path: &Path) -> Result<(SizeInBytes, SizeInBytes), Error> {
+fn fs_stats(path: &Path) -> Result<(SizeInBytes, SizeInBytes), CinemaError> {
     #[cfg(unix)]
     {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
 
         let c_path = CString::new(path.as_os_str().as_bytes())
-            .map_err(|e| Error::Generic(format!("invalid path for statvfs: {e}")))?;
+            .map_err(|e| CinemaError::Generic(format!("invalid path for statvfs: {e}")))?;
 
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         let rc = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
         if rc != 0 {
-            return Err(Error::IoError(std::io::Error::last_os_error()));
+            return Err(CinemaError::IoError(std::io::Error::last_os_error()));
         }
 
         let frsize = stat.f_frsize;
@@ -67,7 +67,7 @@ fn fs_stats(path: &Path) -> Result<(SizeInBytes, SizeInBytes), Error> {
     }
     #[cfg(not(unix))]
     {
-        Err(Error::Generic(
+        Err(CinemaError::Generic(
             "fs_stats not supported on this platform".into(),
         ))
     }

@@ -1,4 +1,4 @@
-use crate::app::{AppContext, Error};
+use crate::app::{AppContext, CinemaError};
 use crate::downloads::DownloadProgress;
 use crate::downloads::types::Download;
 use crate::streams as streams_mod;
@@ -28,26 +28,26 @@ pub struct DownloadStatusUpdate {
 pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
     #[get]
-    async fn list(&self) -> Result<Vec<Download>, Error>;
+    async fn list(&self) -> Result<Vec<Download>, CinemaError>;
 
     /// Queue a new download. If `info_hash`/`file_idx` are omitted, picks the
     /// best stream matching the requested resolution. Returns the download id
-    async fn enqueue(&self, request: EnqueueDownload) -> Result<i32, Error>;
+    async fn enqueue(&self, request: EnqueueDownload) -> Result<i32, CinemaError>;
 
     /// Temporarily pause. Files stay on disk; resume picks up where it left off.
     #[delete]
-    async fn pause(&self, id: i32) -> Result<(), Error>;
+    async fn pause(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Resume a paused or cancelled download. Also re-runs a failed download
-    async fn resume(&self, id: i32) -> Result<(), Error>;
+    async fn resume(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Stop the download but keep the files. Distinct from `pause` in intent
     /// (user no longer wants this download).
-    async fn cancel(&self, id: i32) -> Result<(), Error>;
+    async fn cancel(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Stop and wipe. Removes the row and deletes files from disk
     #[post]
-    async fn remove(&self, id: i32) -> Result<(), Error>;
+    async fn remove(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Bandwidth/size estimates per available resolution
     #[get]
@@ -55,16 +55,16 @@ pub trait DownloadsApi {
         &self,
         media_type: String,
         tmdb_id: i64,
-    ) -> Result<Vec<ResolutionEstimate>, Error>;
+    ) -> Result<Vec<ResolutionEstimate>, CinemaError>;
 }
 
 #[draad::api]
 impl DownloadsApi for AppContext {
-    async fn list(&self) -> Result<Vec<Download>, Error> {
+    async fn list(&self) -> Result<Vec<Download>, CinemaError> {
         crate::downloads::types::Download::find_all(&self.db).await
     }
 
-    async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, Error> {
+    async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, CinemaError> {
         let (id, _) = self
             .downloads
             .ensure_download(
@@ -77,26 +77,26 @@ impl DownloadsApi for AppContext {
         Ok(id)
     }
 
-    async fn pause(&self, id: i32) -> Result<(), Error> {
+    async fn pause(&self, id: i32) -> Result<(), CinemaError> {
         self.downloads.pause(id).await
     }
 
-    async fn resume(&self, id: i32) -> Result<(), Error> {
+    async fn resume(&self, id: i32) -> Result<(), CinemaError> {
         // Reset terminal/idle state so start treats it as a fresh launch.
-        let mut tx = self.db.begin().await.map_err(Error::DatabaseError)?;
+        let mut tx = self.db.begin().await.map_err(CinemaError::DatabaseError)?;
         crate::downloads::types::Download::reset_for_restart(&mut tx, id).await?;
-        tx.commit().await.map_err(Error::DatabaseError)?;
+        tx.commit().await.map_err(CinemaError::DatabaseError)?;
         self.downloads
             .start(id, crate::downloads::DownloadPriority::Background)
             .await?;
         Ok(())
     }
 
-    async fn cancel(&self, id: i32) -> Result<(), Error> {
+    async fn cancel(&self, id: i32) -> Result<(), CinemaError> {
         self.downloads.cancel(id).await
     }
 
-    async fn remove(&self, id: i32) -> Result<(), Error> {
+    async fn remove(&self, id: i32) -> Result<(), CinemaError> {
         self.transcodings.remove_all_for_download(id).await?;
         self.downloads.remove(id).await
     }
@@ -105,13 +105,13 @@ impl DownloadsApi for AppContext {
         &self,
         media_type: String,
         tmdb_id: i64,
-    ) -> Result<Vec<ResolutionEstimate>, Error> {
+    ) -> Result<Vec<ResolutionEstimate>, CinemaError> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
         let mt = MediaType::try_from(media_type)?;
         let item = tmdb.details(mt, tmdb_id, &self.db).await?;
         let imdb_id = item
             .imdb_id
-            .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
+            .ok_or_else(|| CinemaError::Generic("No IMDB ID found".into()))?;
         let media_type = match mt {
             MediaType::Movie => streams_mod::AggregationMediaType::Media { tmdb_id, imdb_id },
             MediaType::Tv => streams_mod::AggregationMediaType::Tv {

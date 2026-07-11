@@ -67,7 +67,7 @@ impl DownloadMeta {
         )
         .execute(&mut **tx)
         .await
-        .map_err(crate::app::Error::DatabaseError)?;
+        .map_err(crate::app::CinemaError::DatabaseError)?;
 
         Ok(())
     }

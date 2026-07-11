@@ -1,5 +1,5 @@
 use crate::{
-    app::{AppContext, Error},
+    app::{AppContext, CinemaError},
     file_system,
 };
 
@@ -29,7 +29,7 @@ pub struct DiskStats {
     orphan_bytes: u64,
 }
 
-pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, Error> {
+pub async fn get_cache_disk(ctx: &AppContext) -> Result<DiskStats, CinemaError> {
     let (total_bytes, free_bytes) = file_system::fs_stats(&ctx.config.data_dir)?;
     let used_bytes = total_bytes.saturating_sub(free_bytes);
 

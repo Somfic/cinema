@@ -71,10 +71,9 @@ pub(super) async fn spawn_live_ffmpeg(
     pool_id: i32,
     input_display: String,
 ) -> crate::app::Result<LiveSession> {
-    let mut child = command
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| crate::app::Error::Generic(format!("Failed to start ffmpeg HLS: {e}")))?;
+    let mut child = command.kill_on_drop(true).spawn().map_err(|e| {
+        crate::app::CinemaError::Generic(format!("Failed to start ffmpeg HLS: {e}"))
+    })?;
 
     // For Engine sources we need to pump bytes into ffmpeg's stdin (so it
     // blocks on missing pieces rather than hitting EOF). Disk sources use
@@ -82,10 +81,9 @@ pub(super) async fn spawn_live_ffmpeg(
     let write_task = if let Some(source) = source
         && matches!(source.ffmpeg_input_spec(), FfmpegInputSpec::Pipe)
     {
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| crate::app::Error::Generic("Failed to open ffmpeg stdin".into()))?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            crate::app::CinemaError::Generic("Failed to open ffmpeg stdin".into())
+        })?;
         Some(source.spawn_stdin_pump(stdin).await?)
     } else {
         None
@@ -181,7 +179,7 @@ pub(super) async fn wait_for_playlist_ready(
     let result = tokio::time::timeout(max_startup, async {
         loop {
             if let Some(error) = exit_error.borrow().clone() {
-                return Err(crate::app::Error::Generic(format!(
+                return Err(crate::app::CinemaError::Generic(format!(
                     "ffmpeg failed: {error}"
                 )));
             }
@@ -201,7 +199,7 @@ pub(super) async fn wait_for_playlist_ready(
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(crate::app::Error::Generic(String::from(
+        Err(_) => Err(crate::app::CinemaError::Generic(String::from(
             "ffmpeg startup timeout",
         ))),
     }

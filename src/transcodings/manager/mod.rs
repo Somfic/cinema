@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 
-use crate::app::{Error, Pool, Storage};
+use crate::app::{CinemaError, Pool, Storage};
 use crate::config::Config;
 use crate::transcodings::PretranscodingOutputPath;
 use crate::transcodings::session::SessionMap;
@@ -129,7 +129,7 @@ impl Handle {
         )
         .fetch_all(&self.0.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         for row in &interrupted {
             let path = PretranscodingOutputPath::new(
@@ -146,7 +146,7 @@ impl Handle {
         )
         .execute(&self.0.db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
 
         if reset.rows_affected() > 0 {
             tracing::info!(

@@ -20,7 +20,7 @@ impl super::Handle {
         .await?;
 
         if exists.is_none() {
-            return Err(crate::app::Error::NotFound(format!(
+            return Err(crate::app::CinemaError::NotFound(format!(
                 "Download {download_id} not found"
             )));
         }
@@ -294,8 +294,10 @@ impl super::Handle {
         )
         .fetch_optional(&self.0.db)
         .await
-        .map_err(crate::app::Error::DatabaseError)?
-        .ok_or_else(|| crate::app::Error::NotFound(format!("Pretranscoding {id} not found")))?;
+        .map_err(crate::app::CinemaError::DatabaseError)?
+        .ok_or_else(|| {
+            crate::app::CinemaError::NotFound(format!("Pretranscoding {id} not found"))
+        })?;
 
         if row.status != super::PretranscodingStatus::Queued {
             return Ok(());

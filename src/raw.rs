@@ -9,7 +9,7 @@ use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::get;
 
-use crate::app::{AppContext, Error};
+use crate::app::{AppContext, CinemaError};
 
 // Paths come from the `#[draad::raw]` schema (`crate::api::urls`) so the route
 // strings and the frontend's `api.urls.*` builders can't drift. draad owns the
@@ -50,10 +50,10 @@ async fn serve_trailer(
 
     let metadata = tokio::fs::metadata(&path)
         .await
-        .map_err(|_| Error::NotFound("trailer not found".into()))?;
+        .map_err(|_| CinemaError::NotFound("trailer not found".into()))?;
     let file = tokio::fs::File::open(&path)
         .await
-        .map_err(|_| Error::Generic("failed to open trailer".into()))?;
+        .map_err(|_| CinemaError::Generic("failed to open trailer".into()))?;
 
     let range_header = req
         .headers()
@@ -82,7 +82,9 @@ async fn image_proxy(
 
     let cache_path = ctx.storage.join("cache/images").join(&path);
     if cache_path.exists() {
-        let bytes = tokio::fs::read(&cache_path).await.map_err(Error::from)?;
+        let bytes = tokio::fs::read(&cache_path)
+            .await
+            .map_err(CinemaError::from)?;
         let content_type = mime_guess::from_path(&cache_path)
             .first_or_octet_stream()
             .to_string();
@@ -102,9 +104,9 @@ async fn image_proxy(
         .get(&url)
         .send()
         .await
-        .map_err(Error::from)?
+        .map_err(CinemaError::from)?
         .error_for_status()
-        .map_err(|e| Error::Generic(e.to_string()))?;
+        .map_err(|e| CinemaError::Generic(e.to_string()))?;
 
     let content_type = res
         .headers()
@@ -112,7 +114,7 @@ async fn image_proxy(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("image/jpeg")
         .to_string();
-    let bytes = res.bytes().await.map_err(Error::from)?;
+    let bytes = res.bytes().await.map_err(CinemaError::from)?;
 
     if let Some(parent) = cache_path.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
@@ -167,14 +169,14 @@ async fn hls_serve(
     Path((session_id, file)): Path<(String, String)>,
 ) -> Result<axum::response::Response, RawError> {
     if file.contains("..") || file.contains('/') {
-        return Err(Error::Generic("Invalid path".into()).into());
+        return Err(CinemaError::Generic("Invalid path".into()).into());
     }
 
     let dir = ctx
         .transcodings
         .live_session_dir(&session_id)
         .await
-        .ok_or_else(|| Error::NotFound("HLS session not found".into()))?;
+        .ok_or_else(|| CinemaError::NotFound("HLS session not found".into()))?;
     ctx.transcodings.touch_live(&session_id).await;
 
     let full_path = dir.join(&file);
@@ -182,11 +184,12 @@ async fn hls_serve(
         Ok(b) => b,
         Err(_) => {
             if let Some(error) = ctx.transcodings.live_session_error(&session_id).await {
-                return Err(
-                    Error::Generic(format!("Stream failed (ffmpeg exited): {error}")).into(),
-                );
+                return Err(CinemaError::Generic(format!(
+                    "Stream failed (ffmpeg exited): {error}"
+                ))
+                .into());
             }
-            return Err(Error::NotFound(format!("HLS file not found: {file}")).into());
+            return Err(CinemaError::NotFound(format!("HLS file not found: {file}")).into());
         }
     };
 
@@ -210,16 +213,16 @@ async fn serve_file(
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, RawError> {
     if path.contains("..") {
-        return Err(Error::Generic("Invalid path".into()).into());
+        return Err(CinemaError::Generic("Invalid path".into()).into());
     }
     let full_path = ctx.storage.join(&path);
 
     let metadata = tokio::fs::metadata(&full_path)
         .await
-        .map_err(|_| Error::Generic("File not found".into()))?;
+        .map_err(|_| CinemaError::Generic("File not found".into()))?;
     let file = tokio::fs::File::open(&full_path)
         .await
-        .map_err(|_| Error::Generic("Failed to open file".into()))?;
+        .map_err(|_| CinemaError::Generic("Failed to open file".into()))?;
 
     let total_size = metadata.len();
     let content_type = if path.ends_with(".mp4") {
@@ -320,19 +323,19 @@ fn serve_range_response<R: tokio::io::AsyncRead + tokio::io::AsyncSeek + Send + 
     }
 }
 
-struct RawError(Error);
+struct RawError(CinemaError);
 
 impl IntoResponse for RawError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self.0 {
-            Error::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            CinemaError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             err => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
         };
         (status, message).into_response()
     }
 }
 
-impl<E: Into<Error>> From<E> for RawError {
+impl<E: Into<CinemaError>> From<E> for RawError {
     fn from(e: E) -> Self {
         RawError(e.into())
     }

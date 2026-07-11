@@ -1,4 +1,4 @@
-use crate::app::{AppContext, Error};
+use crate::app::{AppContext, CinemaError};
 use crate::downloads::TorrentEngine;
 use crate::streams::Stream;
 use crate::tmdb::{MediaType, TmdbClient};
@@ -59,29 +59,29 @@ pub struct PiecesUpdate {
 pub trait StreamsApi {
     /// Aggregates available torrent streams for a movie.
     #[get]
-    async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error>;
+    async fn movie(&self, id: i64) -> Result<Vec<Stream>, CinemaError>;
 
     /// Aggregates available torrent streams for a specific TV episode.
     #[get]
-    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error>;
+    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, CinemaError>;
 
     /// Starts a torrent (idempotent) and returns the playback URL.
     /// Always creates/updates a `downloads` row so the DB reflects the
     /// active engine state. When `media` is provided, also populates
     /// `download_meta` synchronously.
     #[post]
-    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error>;
+    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, CinemaError>;
 
     /// Stops a torrent stream. Is equivalent to pausing the download,
     /// but does not require the download id.
     #[post]
-    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), Error>;
+    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), CinemaError>;
 
     /// Reveals the on-disk file for a torrent stream in the server's file
     /// manager. Only meaningful when the server runs on the user's own machine
     /// (the self-hosted local case).
     #[post]
-    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), Error>;
+    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), CinemaError>;
 
     /// Starts an HLS remux/transcode session for a file and returns its
     /// playlist URL (feed to hls.js). Callers stop the previous session first.
@@ -93,19 +93,23 @@ pub trait StreamsApi {
         audio: i32,
         t: f64,
         only_audio: bool,
-    ) -> Result<RemuxSession, Error>;
+    ) -> Result<RemuxSession, CinemaError>;
 
     /// Current torrent download stats for a stream.
     #[get]
-    async fn stats(&self, info_hash: String) -> Result<StreamStats, Error>;
+    async fn stats(&self, info_hash: String) -> Result<StreamStats, CinemaError>;
 
     /// Per-piece availability bitmap (200 buckets) for a given file in a torrent.
     #[get]
-    async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, Error>;
+    async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, CinemaError>;
 
     /// Embedded audio + subtitle tracks + duration for a downloaded file.
     #[get]
-    async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error>;
+    async fn audio_tracks(
+        &self,
+        info_hash: String,
+        file_idx: i64,
+    ) -> Result<AudioTracks, CinemaError>;
 
     /// Extracts cues from an embedded subtitle track in the source file.
     #[get]
@@ -114,13 +118,13 @@ pub trait StreamsApi {
         info_hash: String,
         file_idx: i64,
         stream_index: i64,
-    ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error>;
+    ) -> Result<Vec<crate::subtitles::SubtitleCue>, CinemaError>;
 }
 
 /// Reveal a file in the host's file manager — selecting it where the platform
 /// supports it, otherwise opening its containing folder. Best-effort and only
 /// meaningful when the server shares a desktop with the user.
-fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), Error> {
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), CinemaError> {
     use std::process::Command;
 
     #[cfg(target_os = "macos")]
@@ -171,12 +175,12 @@ fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), Error> {
 
 #[draad::api]
 impl StreamsApi for AppContext {
-    async fn movie(&self, id: i64) -> Result<Vec<Stream>, Error> {
+    async fn movie(&self, id: i64) -> Result<Vec<Stream>, CinemaError> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
         let item = tmdb.details(MediaType::Movie, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
-            .ok_or_else(|| Error::Generic("No IMDB ID found for this movie".into()))?;
+            .ok_or_else(|| CinemaError::Generic("No IMDB ID found for this movie".into()))?;
 
         let streams = streams_mod::AggregationMediaType::Media {
             tmdb_id: id,
@@ -188,12 +192,12 @@ impl StreamsApi for AppContext {
         Ok(streams)
     }
 
-    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, Error> {
+    async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, CinemaError> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
         let item = tmdb.details(MediaType::Tv, id, &self.db).await?;
         let imdb_id = item
             .imdb_id
-            .ok_or_else(|| Error::Generic("No IMDB ID found for this show".into()))?;
+            .ok_or_else(|| CinemaError::Generic("No IMDB ID found for this show".into()))?;
 
         let streams = streams_mod::AggregationMediaType::Tv {
             tmdb_id: id,
@@ -207,7 +211,7 @@ impl StreamsApi for AppContext {
         Ok(streams)
     }
 
-    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, Error> {
+    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, CinemaError> {
         self.downloads
             .ensure_download(
                 &info_hash,
@@ -219,14 +223,14 @@ impl StreamsApi for AppContext {
         Ok(StartStream { url, local: false })
     }
 
-    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), Error> {
+    async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), CinemaError> {
         let id = crate::downloads::types::Download::find_id_by_info_hash_and_file_idx(
             &self.db, &info_hash, file_idx,
         )
         .await?;
 
         let Some(id) = id else {
-            return Err(crate::app::Error::NotFound(format!(
+            return Err(crate::app::CinemaError::NotFound(format!(
                 "No download found for {info_hash} ({file_idx})"
             )));
         };
@@ -234,7 +238,7 @@ impl StreamsApi for AppContext {
         self.downloads.pause(id).await
     }
 
-    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), Error> {
+    async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), CinemaError> {
         let source = crate::downloads::MediaSource::ensure_and_locate(
             &self.downloads,
             &self.storage,
@@ -253,7 +257,7 @@ impl StreamsApi for AppContext {
         audio: i32,
         t: f64,
         only_audio: bool,
-    ) -> Result<RemuxSession, Error> {
+    ) -> Result<RemuxSession, CinemaError> {
         // The manager owns the cache-hit-vs-live-transcode decision, torrent
         // acquisition at Stream priority, and ffmpeg lifecycle. Consumers
         // just get back a session id + playlist URL.
@@ -267,7 +271,7 @@ impl StreamsApi for AppContext {
         })
     }
 
-    async fn stats(&self, info_hash: String) -> Result<StreamStats, Error> {
+    async fn stats(&self, info_hash: String) -> Result<StreamStats, CinemaError> {
         let engine = TorrentEngine::get();
         let stats = engine.stats(&info_hash)?;
         let (download_speed_mbps, peers) = match &stats.live {
@@ -283,12 +287,16 @@ impl StreamsApi for AppContext {
         })
     }
 
-    async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, Error> {
+    async fn pieces(&self, info_hash: String, file_idx: i64) -> Result<Vec<u8>, CinemaError> {
         let engine = TorrentEngine::get();
         Ok(engine.piece_map(&(info_hash, file_idx as usize).into(), 200)?)
     }
 
-    async fn audio_tracks(&self, info_hash: String, file_idx: i64) -> Result<AudioTracks, Error> {
+    async fn audio_tracks(
+        &self,
+        info_hash: String,
+        file_idx: i64,
+    ) -> Result<AudioTracks, CinemaError> {
         // Ensure the download row exists and the engine has what it needs; we
         // don't need the returned MediaSource here because ffprobe goes through
         // the loopback HTTP route (which handles disk-vs-engine internally).
@@ -342,7 +350,7 @@ impl StreamsApi for AppContext {
         info_hash: String,
         file_idx: i64,
         stream_index: i64,
-    ) -> Result<Vec<crate::subtitles::SubtitleCue>, Error> {
+    ) -> Result<Vec<crate::subtitles::SubtitleCue>, CinemaError> {
         let url = self.stream_url(&info_hash, file_idx);
         Ok(TorrentEngine::extract_subtitle_cues(&url, stream_index as usize).await)
     }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::app::{Error, Result};
+use crate::app::{CinemaError, Result};
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -52,7 +52,7 @@ impl Config {
         match std::fs::read_to_string(path) {
             Ok(content) => Ok(toml::from_str(&content)?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml::from_str("")?),
-            Err(e) => Err(Error::ConfigReadError {
+            Err(e) => Err(CinemaError::ConfigReadError {
                 path: path.display().to_string(),
                 source: e,
             }),

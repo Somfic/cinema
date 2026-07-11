@@ -1,5 +1,5 @@
 use crate::{
-    app::{Error, Pool},
+    app::{CinemaError, Pool},
     downloads::types::DownloadMeta,
     tmdb,
 };
@@ -137,7 +137,7 @@ impl Pretranscoding {
         )
         .fetch_all(db)
         .await
-        .map_err(Error::DatabaseError)?;
+        .map_err(CinemaError::DatabaseError)?;
         Ok(rows.into_iter().map(Self::from).collect())
     }
 }
@@ -180,6 +180,6 @@ impl CompletedPretranscoding {
         )
         .fetch_optional(db)
         .await
-        .map_err(Error::DatabaseError)
+        .map_err(CinemaError::DatabaseError)
     }
 }
