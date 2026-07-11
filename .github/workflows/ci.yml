@@ -16,6 +16,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Clippy check
+        run: cargo clippy -- -D warnings
+        env:
+          SQLX_OFFLINE: true
+
       - name: Build
         run: cargo build --locked
         env:
