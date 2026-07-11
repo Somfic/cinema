@@ -13,7 +13,7 @@
 	const offsetDisplay = $derived((tv?.subtitleOffset ?? -0.25) + 0.25);
 
 	const hasAudioPretranscoding = $derived(
-		tv?.activeAudioTrack &&
+		tv?.activeAudioTrack != null &&
 			tv.activeStreamHash &&
 			tv.activeFileIndex !== undefined
 			? downloadManager.hasCompletedPretranscoding(
@@ -25,7 +25,7 @@
 			: false,
 	);
 	const hasFullPretranscoding = $derived(
-		tv?.activeAudioTrack &&
+		tv?.activeAudioTrack != null &&
 			tv.activeStreamHash &&
 			tv.activeFileIndex !== undefined
 			? downloadManager.hasCompletedPretranscoding(
