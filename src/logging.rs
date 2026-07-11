@@ -1,3 +1,5 @@
+#![allow(dead_code)] // TODO: decide what to do with it
+
 use std::fmt;
 
 use nu_ansi_term::{Color, Style};
