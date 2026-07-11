@@ -119,6 +119,16 @@ impl Supervisor {
                     "The supervisor for download #{} has failed consecutively {consecutive_failures} times. Aborting",
                     self.download_id
                 );
+                if let Err(err) = sqlx::query!(
+                    "UPDATE downloads SET status = 'failed', error = $1 WHERE id = $2 AND status NOT IN ('cancelled', 'paused')",
+                    format!("Could not write to disk {consecutive_failures} consecutive times"),
+                    self.download_id
+                )
+                .execute(&self.db)
+                .await
+                {
+                    tracing::error!(?err, self.download_id, "Failed to record failure status");
+                }
                 break;
             }
 
