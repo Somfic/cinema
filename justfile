@@ -13,7 +13,7 @@ install:
 # Run backend (--dev) and the vite dev server side by side.
 dev: schema
     cd frontend && bunx concurrently -k -n backend,frontend -c blue,green \
-        "cd .. && cargo run -- --dev" \
+        "cd .. && cargo run" \
         "bun run dev -- --strictPort"
 
 build: schema

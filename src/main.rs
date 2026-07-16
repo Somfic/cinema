@@ -13,7 +13,6 @@ mod config;
 mod downloads;
 mod file_system;
 mod logging;
-mod proxy;
 mod raw;
 mod streams;
 mod subtitles;
@@ -202,26 +201,15 @@ async fn run() -> Result<()> {
     info!("mounting raw byte routes");
     router = router.merge(raw::router().with_state(ctx.clone()));
 
-    // Frontend: dev proxy or static files
-    if cli.dev {
-        // The vite dev server is started alongside the backend by `just dev`
-        // (via concurrently); here we just proxy the UI through to it.
-        let dev_port = 5174u16;
-        info!("proxying ui → http://localhost:{dev_port}");
-        let dev_proxy = proxy::DevProxy::new(dev_port);
-        router = router.fallback(move |req: axum::extract::Request| {
-            proxy::dev_proxy_handler(axum::extract::State(dev_proxy.clone()), req)
-        });
-    } else {
-        let build_dir = PathBuf::from("frontend/build");
-        if build_dir.exists() {
-            info!("mounting ui at /");
-            let fallback = ServeFile::new(build_dir.join("index.html"));
-            let service = ServeDir::new(&build_dir)
-                .append_index_html_on_directories(true)
-                .fallback(fallback);
-            router = router.fallback_service(service);
-        }
+    // Serve static frontend files
+    let build_dir = PathBuf::from("frontend/build");
+    if build_dir.exists() {
+        info!("mounting ui at /");
+        let fallback = ServeFile::new(build_dir.join("index.html"));
+        let service = ServeDir::new(&build_dir)
+            .append_index_html_on_directories(true)
+            .fallback(fallback);
+        router = router.fallback_service(service);
     }
 
     // Start server
