@@ -15,6 +15,7 @@
 		FieldRow,
 		FileUpload,
 		Input,
+		RadioInput,
 		SettingsSection,
 		SettingsShell,
 		Tabs,
@@ -23,6 +24,7 @@
 		toast,
 		sortable,
 	} from "glow";
+	import { settings, Fanciness } from "$lib/settings.svelte";
 
 	const CONTINUE_SLUG = "continue";
 
@@ -245,6 +247,12 @@
 					label: "Cookies",
 					icon: "Film",
 					content: trailersTab,
+				},
+				{
+					id: "appearance",
+					label: "Appearance",
+					icon: "Sparkles",
+					content: appearanceTab,
 				},
 			]}
 		/>
@@ -480,6 +488,46 @@
 	</SettingsSection>
 {/snippet}
 
+{#snippet appearanceTab()}
+	<SettingsSection
+		title="Visual effects"
+		description="Per-device setting stored in this browser. Higher levels look better but cost more GPU; lower it if cinema feels laggy."
+		variant="plain"
+	>
+		<Field label="Fanciness" layout="vertical">
+			<span class="fanciness-radio">
+				<RadioInput
+					options={[
+						{
+							value: Fanciness.Potato,
+							label: "Sorry, my machine is a potato",
+							disabled: true,
+							tooltip: {
+								content: "Not supported",
+								position: "bottom",
+							},
+						},
+						{ value: Fanciness.Ok, label: "Ok" },
+						{
+							value: Fanciness.Fancy,
+							label: "Fancy",
+							disabled: true,
+							tooltip: { content: "Not available (yet)", position: "bottom" },
+						},
+						{ value: Fanciness.SuperFancy, label: "Super fancy" },
+					]}
+					value={settings.fanciness}
+					onChange={(v) => {
+						if (v) {
+							settings.setFanciness(v);
+						}
+					}}
+				/>
+			</span>
+		</Field>
+	</SettingsSection>
+{/snippet}
+
 <style>
 	.page {
 		max-width: 880px;
@@ -565,6 +613,10 @@
 		border-radius: 0.25rem;
 		background: rgba(255, 255, 255, 0.06);
 		flex-shrink: 0;
+	}
+
+	.fanciness-radio > :global(.radio-input) {
+		width: 100%;
 	}
 
 	.spacer {

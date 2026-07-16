@@ -14,6 +14,7 @@
 	import { api } from "$lib/api";
 	import { getDetails, imageUrl, rgbToHex } from "$lib/utils";
 	import { remote } from "$lib/remote.svelte";
+	import { settings } from "$lib/settings.svelte";
 	import { PlaybackSession } from "$lib/playback.svelte";
 
 	import { Banner, Spinner, Glow } from "glow";
@@ -531,24 +532,26 @@
 <!-- Single Glow instance, kept mounted across loading → loaded so the WebGL
      context is never torn down and recreated. `full` fills the screen behind the
      loading spinner; once loaded it fades into the backdrop's content side. -->
-<div
-	class="glow-fade"
-	class:hidden={!glowVisible}
-	class:full={glowSide === "full"}
-	class:left={glowSide === "left"}
-	class:right={glowSide === "right"}
->
-	<Glow
-		colors={glowColors}
-		bgColor={glowBg}
-		rotation={52}
-		zoom={7}
-		ribbon={glowRibbon}
-		ribbonWidth={1.3}
-		transition={5000}
-		speed={glowVisible ? 1 : 0}
-	/>
-</div>
+{#if settings.animations.glow}
+	<div
+		class="glow-fade"
+		class:hidden={!glowVisible}
+		class:full={glowSide === "full"}
+		class:left={glowSide === "left"}
+		class:right={glowSide === "right"}
+	>
+		<Glow
+			colors={glowColors}
+			bgColor={glowBg}
+			rotation={52}
+			zoom={7}
+			ribbon={glowRibbon}
+			ribbonWidth={1.3}
+			transition={5000}
+			speed={glowVisible ? 1 : 0}
+		/>
+	</div>
+{/if}
 {#if !item}
 	<div class="loading-screen" out:fade={{ duration: 300 }}>
 		<Spinner size={32} />
