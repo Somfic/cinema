@@ -147,9 +147,7 @@ impl CollectionsApi for AppContext {
         media_type: String,
         id: i64,
     ) -> Result<(), CinemaError> {
-        let media_type: tmdb::MediaType = serde_json::from_str(&media_type).map_err(|_| {
-            CinemaError::InvalidInput(String::from("Invalid values passed for media_type"))
-        })?;
+        let media_type = tmdb::MediaType::try_from(media_type)?;
         sqlx::query!(
             "
                 DELETE FROM collections
