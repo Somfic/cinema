@@ -142,6 +142,12 @@
 									{/if}
 								</div>
 								<div class="row-actions">
+									<Button
+										icon="Cpu"
+										variant="ghost"
+										selected={expandedId === d.id}
+										onclick={() => toggleTranscode(d.id)}
+									/>
 									{#if d.status === "Downloading" || d.status === "Queued"}
 										<Button
 											icon="Pause"
@@ -166,16 +172,10 @@
 									{#if d.status === "Completed" || d.status === "Cancelled"}
 										<Button
 											icon="Trash"
-											variant="ghost"
+											variant="danger"
 											onclick={() => downloadManager.remove(d.id)}
 										/>
 									{/if}
-									<Button
-										icon="Cpu"
-										variant="ghost"
-										selected={expandedId === d.id}
-										onclick={() => toggleTranscode(d.id)}
-									/>
 								</div>
 							</div>
 							{#if expandedId === d.id}
@@ -371,7 +371,7 @@
 
 	.row-actions {
 		display: flex;
-		gap: 0.1rem;
+		gap: 0.3rem;
 		flex-shrink: 0;
 	}
 </style>
