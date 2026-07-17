@@ -90,6 +90,7 @@
 		align-items: center;
 		padding: 0.5rem 1rem;
 		background-color: rgba($bg-surface, 0.2);
+		backdrop-filter: blur(10px);
 		border-bottom: $border;
 		min-height: 3rem;
 		position: relative;
