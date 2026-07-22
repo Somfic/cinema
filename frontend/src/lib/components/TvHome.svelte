@@ -1,12 +1,30 @@
 <script lang="ts">
 	import { Button, Icon, Glow } from "glow";
 	import { remote } from "$lib/remote.svelte";
+
+	// Same text-safe pool as the title page, chosen fresh each time the TV home
+	// mounts. `dither` and `halftone` are excluded: buttons sit on top of this.
+	const GLOW_PATTERNS = [
+		"fold",
+		"aurora",
+		"curl",
+		"ink",
+		"oilfilm",
+		"marble",
+		"caustics",
+		"prism",
+		"soapfilm",
+		"mesh",
+	] as const;
+	const glowPattern =
+		GLOW_PATTERNS[Math.floor(Math.random() * GLOW_PATTERNS.length)];
 </script>
 
 <div class="tv-home">
 	<Glow
+		pattern={glowPattern}
 		colors={["#700000", "#008cff", "#75daff", "#ff0026", "#ff3626"]}
-		ribbon={1}
+		morph={1}
 		ribbonWidth={0.5}
 		rotation={52}
 		zoom={9}
