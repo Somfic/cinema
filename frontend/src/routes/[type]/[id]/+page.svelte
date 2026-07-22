@@ -245,11 +245,41 @@
 		const [r, g, b] = accentColor.split(",").map((s) => Number(s.trim()));
 		return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 	});
-	// Lerp between "ray" mode (ribbon 0, flowing sheets) for dark accents and
-	// "ribbon" mode (discrete strips) for bright accents. smoothstep over the
+	// A fresh backdrop pattern each time a title page opens.
+	//
+	// Listed explicitly rather than derived from the library's PATTERN_NAMES:
+	// this is an editorial choice, not a mirror of whatever glow ships. `dither`
+	// and `halftone` are deliberately absent — they are dense, high-contrast
+	// fields and this page puts a title, metadata and buttons over the glow. A
+	// pattern added to glow later should not silently start appearing here.
+	//
+	// Picked at component init rather than in onMount: the pattern only changes
+	// what the WebGL canvas draws, never the server-rendered markup, so server
+	// and client disagreeing on it cannot cause a hydration mismatch.
+	const GLOW_PATTERNS = [
+		"fold",
+		"aurora",
+		"curl",
+		"ink",
+		"oilfilm",
+		"marble",
+		"caustics",
+		"prism",
+		"soapfilm",
+		"mesh",
+	] as const;
+	const glowPattern =
+		GLOW_PATTERNS[Math.floor(Math.random() * GLOW_PATTERNS.length)];
+
+	// Lerp between "ray" mode (morph 0, the pattern's resting form) for dark
+	// accents and its morphed form for bright accents. smoothstep over the
 	// mid-brightness band so the transition is gradual, not a hard switch. During
-	// loading, use flowing "ray" mode for a clean ambient look.
-	const glowRibbon = $derived.by(() => {
+	// loading, use the resting form for a clean ambient look.
+	//
+	// This drives `morph` rather than `ribbon`: ribbon only exists on the `fold`
+	// pattern, while morph is the same axis generalised across all of them, so
+	// the brightness response works whichever pattern was drawn.
+	const glowMorph = $derived.by(() => {
 		if (!item) return 0;
 		const t = Math.max(0, Math.min(1, (accentLuma - 0.35) / 0.4));
 		return t * t * (3 - 2 * t);
@@ -830,11 +860,12 @@
 	class:right={glowSide === "right"}
 >
 	<Glow
+		pattern={glowPattern}
 		colors={glowColors}
 		bgColor={glowBg}
 		rotation={52}
 		zoom={7}
-		ribbon={glowRibbon}
+		morph={glowMorph}
 		ribbonWidth={1.3}
 		transition={5000}
 		speed={glowVisible ? 1 : 0}
