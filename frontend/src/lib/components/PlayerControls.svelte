@@ -2,7 +2,7 @@
 	import type { Snippet } from "svelte";
 	import type { Chapter, Stream } from "$lib/schema";
 	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
-	import { DOWNLOAD_STATUS_LABEL } from "$lib/utils";
+	import StreamMenu from "./StreamMenu.svelte";
 
 	interface AudioTrack {
 		id: number;
@@ -191,30 +191,6 @@
 		onSeek(t);
 	}
 
-	const activeResolution = $derived(
-		streams.find((s) => s.info_hash === activeStreamHash)?.resolution ?? null,
-	);
-
-	const resolutions = $derived.by(() => {
-		const seen = new Set<string>();
-		const result: string[] = [];
-		for (const s of streams) {
-			const res = s.resolution;
-			if (res && !seen.has(res)) {
-				seen.add(res);
-				result.push(res);
-			}
-		}
-		const order: Record<string, number> = {
-			"4K": 4,
-			"2160p": 4,
-			"1080p": 3,
-			"720p": 2,
-			"480p": 1,
-		};
-		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
-	});
-
 	const TRANSCODE_OPTIONS = $derived([
 		{ value: "none", label: "None", icon: "Ban" as const },
 		{
@@ -245,58 +221,20 @@
 		onTranscodingChange?.(enabled, onlyAudio);
 	}
 
-	const streamMenuItems = $derived<PopoverMenuEntry[]>([
-		...(resolutions.length > 1
+	const transcodingItems = $derived<PopoverMenuEntry[]>(
+		onTranscodingChange
 			? [
-					{ kind: "header" as const, label: "Quality" },
-					...resolutions.map((res) => ({
-						kind: "item" as const,
-						label: res,
-						selected: res === activeResolution,
-						onclick: () => {
-							const best = streams.find((s) => s.resolution === res);
-							if (best) onStreamSelect?.(best);
-						},
-					})),
-				]
-			: []),
-		{ kind: "header" as const, label: "Sources" },
-		...(activeResolution
-			? streams.filter((s) => s.resolution === activeResolution)
-			: streams
-		)
-			.slice(0, 8)
-			.map((stream) => ({
-				kind: "item" as const,
-				label: `${stream.source}`,
-				description: [
-					stream.codec,
-					stream.audio,
-					stream.source_type,
-					stream.download
-						? (DOWNLOAD_STATUS_LABEL[stream.download.status] ??
-							stream.download.status)
-						: null,
-				]
-					.filter(Boolean)
-					.join(" · "),
-				shortcut: stream.size_display ?? undefined,
-				selected: stream.info_hash === activeStreamHash,
-				onclick: () => onStreamSelect?.(stream),
-			})),
-		...(onTranscodingChange
-			? [
-					{ kind: "header" as const, label: "Transcoding" },
+					{ kind: "header", label: "Transcoding" },
 					{
-						kind: "radio" as const,
+						kind: "radio",
 						options: TRANSCODE_OPTIONS,
 						value: transcodingMode,
 						iconOnly: true,
 						onChange: setTranscodingMode,
 					},
 				]
-			: []),
-	]);
+			: [],
+	);
 
 	const audioSubtitleMenuItems = $derived<PopoverMenuEntry[]>([
 		...(audioTracks.length > 1
@@ -592,11 +530,17 @@
 			{/if}
 
 			{#if streams.length > 0 && onStreamSelect}
-				<PopoverMenu items={streamMenuItems} align="right">
+				<StreamMenu
+					{streams}
+					{activeStreamHash}
+					limit={8}
+					onselect={(stream) => onStreamSelect?.(stream)}
+					extra={transcodingItems}
+				>
 					{#snippet trigger()}
 						<Button variant="ghost" icon="Settings2" />
 					{/snippet}
-				</PopoverMenu>
+				</StreamMenu>
 			{/if}
 
 			{#if audioTracks.length > 1 || subtitleTracks.length > 0}

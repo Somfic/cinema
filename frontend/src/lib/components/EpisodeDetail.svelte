@@ -1,18 +1,19 @@
 <script lang="ts">
 	import type { Season, Episode, WatchHistoryItem } from "$lib/schema";
 	import { imageUrl } from "$lib/utils";
-	import { Text, Button } from "glow";
+	import { Text } from "glow";
 	import PlayCard from "./PlayCard.svelte";
+	import DownloadMenu from "./DownloadMenu.svelte";
 
 	let {
 		season,
 		episode,
 		showTitle,
+		tmdbId,
 		resumeEntry,
 		loadingStreams = false,
 		onselectepisode,
 		onplay,
-		ondownload,
 	}: {
 		season: Season;
 		episode: Episode;
@@ -22,7 +23,6 @@
 		loadingStreams?: boolean;
 		onselectepisode: (season: number, episode: number) => void;
 		onplay?: () => void;
-		ondownload?: (season: number, episode: number) => void;
 	} = $props();
 
 	const canResume = $derived(
@@ -74,13 +74,12 @@
 							event.preventDefault();
 						}}
 					>
-						<Button
-							variant="ghost"
-							icon="Download"
-							onclick={() => {
-								ondownload?.(season.season_number, ep.episode_number);
-							}}
-						></Button>
+						<DownloadMenu
+							{tmdbId}
+							mediaType="tv"
+							season={season.season_number}
+							episode={ep.episode_number}
+						/>
 					</span>
 				</div>
 			</button>

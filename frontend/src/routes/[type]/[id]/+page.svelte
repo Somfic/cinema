@@ -23,15 +23,9 @@
 	import MediaInfo from "$lib/components/MediaInfo.svelte";
 	import SeasonBrowser from "$lib/components/SeasonBrowser.svelte";
 	import EpisodeDetail from "$lib/components/EpisodeDetail.svelte";
-	import DownloadModal from "$lib/components/DownloadModal.svelte";
 
 	// This client is a remote-driven TV display.
 	const isTv = $derived(remote.mode === "tv");
-
-	// ── Download modal ──
-	let downloadModalState = $state<
-		true | { season: number; episode: number } | null
-	>(null);
 
 	// ── Core state ──
 	let item = $state<MediaItem | null>(null);
@@ -632,9 +626,6 @@
 				onresume={resume}
 				onselectseason={selectSeason}
 				onselectepisode={selectEpisode}
-				ondownload={() => {
-					downloadModalState = true;
-				}}
 			/>
 		</div>
 
@@ -665,12 +656,6 @@
 						{loadingStreams}
 						onselectepisode={selectEpisode}
 						onplay={playEpisode}
-						ondownload={(season, episode) => {
-							downloadModalState = {
-								season,
-								episode,
-							};
-						}}
 					/>
 				{/if}
 			</div>
@@ -737,27 +722,6 @@
 			/>
 		{/if}
 	</div>
-{/if}
-
-{#if item}
-	<DownloadModal
-		bind:open={
-			() => downloadModalState !== null,
-			(open) => {
-				if (!open) {
-					downloadModalState = null;
-				}
-			}
-		}
-		tmdbId={item.tmdb_id}
-		mediaType={item.media_type}
-		season={typeof downloadModalState === "object"
-			? downloadModalState?.season
-			: null}
-		episode={typeof downloadModalState === "object"
-			? downloadModalState?.episode
-			: null}
-	/>
 {/if}
 
 <style>

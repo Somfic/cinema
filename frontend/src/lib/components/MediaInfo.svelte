@@ -15,6 +15,7 @@
 	} from "glow";
 	import type { IconName, DataItem } from "glow";
 	import PlayCard from "./PlayCard.svelte";
+	import DownloadMenu from "./DownloadMenu.svelte";
 
 	// Map TMDB genre names to glow (lucide) icons
 	const GENRE_ICONS: Record<string, IconName> = {
@@ -58,7 +59,6 @@
 		onselectepisode,
 		resumeEntry,
 		onresume,
-		ondownload,
 		playing = false,
 		tvMode = false,
 	}: {
@@ -69,7 +69,6 @@
 		onselectepisode?: (season: number, episode: number) => void;
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
-		ondownload?: () => void;
 		playing?: boolean;
 		tvMode?: boolean;
 	} = $props();
@@ -334,13 +333,8 @@
 				/>
 			{/if}
 		{/if}
-		{#if !tvMode && ondownload && item.media_type === "movie"}
-			<Button
-				variant="ghost"
-				icon="Download"
-				tooltip="Download"
-				onclick={ondownload}
-			/>
+		{#if !tvMode && item.media_type === "movie"}
+			<DownloadMenu tmdbId={item.tmdb_id} mediaType={item.media_type} />
 		{/if}
 	</div>
 
