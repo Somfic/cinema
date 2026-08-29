@@ -35,3 +35,4 @@ vite.config.ts.timestamp-*
 # Nix/direnv
 .direnv
 result
+.envrc.local
