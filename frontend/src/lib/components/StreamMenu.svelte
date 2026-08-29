@@ -49,14 +49,6 @@
 		align?: "left" | "right" | "stretch";
 	} = $props();
 
-	const RESOLUTION_ORDER: Record<string, number> = {
-		"4K": 4,
-		"2160p": 4,
-		"1080p": 3,
-		"720p": 2,
-		"480p": 1,
-	};
-
 	let open = $state(false);
 	let pickedResolution = $state<string | null>(null);
 
@@ -65,7 +57,6 @@
 		if (!open) pickedResolution = null;
 	});
 
-	/** Streams bucketed by resolution, best first. */
 	const groups = $derived.by(() => {
 		const buckets = new Map<string, Stream[]>();
 		for (const stream of streams) {
@@ -75,12 +66,11 @@
 			else buckets.set(res, [stream]);
 		}
 		return [...buckets]
-			.map(([resolution, streams]) => ({ resolution, streams }))
-			.sort(
-				(a, b) =>
-					(RESOLUTION_ORDER[b.resolution] ?? 0) -
-					(RESOLUTION_ORDER[a.resolution] ?? 0),
-			);
+			.map(([resolution, streams]) => ({
+				resolution,
+				streams: [...streams].sort((a, b) => b.score - a.score),
+			}))
+			.sort((a, b) => b.streams[0].score - a.streams[0].score);
 	});
 
 	// Defaults to whatever is playing, else the best quality on offer.
