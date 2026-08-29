@@ -2,7 +2,7 @@
 	import type { AudioTrack, Download, Pretranscoding } from "$lib/schema";
 	import { api } from "$lib/api";
 	import { PRETRANSCODING_STATUS_LABEL, pretranscodePercent } from "$lib/utils";
-	import { Button, RadioInput, Text, toast, tooltip } from "glow";
+	import { Button, Input, RadioInput, Text, toast } from "glow";
 
 	let {
 		download,
@@ -195,16 +195,20 @@
 				{#if loadingTracks}
 					<Text size="xs" variant="muted">Loading…</Text>
 				{:else if audioTracks && audioTracks.length > 0}
-					<select
-						bind:value={audioIndex}
-						use:tooltip={{ content: "Audio track", delay: 500 }}
-					>
-						{#each audioTracks as track (track.stream_index)}
-							<option value={track.stream_index}>
-								{track.name}{track.language ? ` (${track.language})` : ""}
-							</option>
-						{/each}
-					</select>
+					<Input
+						type="select"
+						icon="AudioLines"
+						placeholder="Audio track"
+						searchable={audioTracks.length > 8}
+						value={audioIndex !== null ? String(audioIndex) : undefined}
+						options={audioTracks.map((track) => ({
+							value: String(track.stream_index),
+							label: `${track.name}${track.language ? ` (${track.language})` : ""}`,
+						}))}
+						onChange={(value) => {
+							audioIndex = value === "" ? null : Number(value);
+						}}
+					/>
 				{:else if audioTracks !== null}
 					<Text size="xs" variant="muted">No audio tracks detected</Text>
 				{:else}
@@ -323,18 +327,9 @@
 		gap: 0.75rem;
 	}
 
-	.track-select select {
+	.track-select {
 		flex: 1;
+		min-width: 0;
 		max-width: 12rem;
-		background: rgba(255, 255, 255, 0.05);
-		color: inherit;
-		border: $border;
-		border-radius: 4px;
-		padding: 0.15rem 0.35rem;
-		font-size: 0.8rem;
-
-		option {
-			background-color: $bg-surface-element;
-		}
 	}
 </style>
