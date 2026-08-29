@@ -28,6 +28,8 @@
               extensions = [ "rust-src" "rust-analyzer" ];
             })
             cargo-watch
+            sqlx-cli # `just db` applies migrations before the query! macros run
+            just
 
             # Frontend
             bun
@@ -35,8 +37,6 @@
             yt-dlp
             deno # JS runtime yt-dlp needs to solve YouTube's nsig/JS challenges
 
-            # SQLite (for sqlx)
-            sqlite
             pkg-config
             openssl
           ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
