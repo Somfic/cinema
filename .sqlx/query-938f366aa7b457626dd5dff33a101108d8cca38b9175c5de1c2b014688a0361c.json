@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE collection_meta SET hidden = $1 WHERE slug = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "938f366aa7b457626dd5dff33a101108d8cca38b9175c5de1c2b014688a0361c"
+}

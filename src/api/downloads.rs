@@ -1,32 +1,13 @@
-use crate::app::AppContext;
-pub use crate::app::Error;
-pub use crate::downloads::Download;
+use crate::app::{AppContext, CinemaError};
+use crate::downloads::DownloadProgress;
+use crate::downloads::types::Download;
 use crate::streams as streams_mod;
-use crate::tmdb::TmdbClient;
-
-/// Streaming progress for an active download. Emitted periodically by the
-/// download worker; subscribers should treat updates as best-effort.
-#[draad::ty]
-pub struct DownloadProgress {
-    pub id: i64,
-    pub downloaded_bytes: i64,
-    pub total_bytes: Option<i64>,
-    pub status: String,
-}
+use crate::tmdb::{MediaType, TmdbClient};
 
 #[draad::ty]
 pub struct EnqueueDownload {
-    pub media_type: String,
-    pub tmdb_id: i64,
-    pub title: String,
-    pub poster_path: Option<String>,
-    #[serde(default)]
-    pub season: i64,
-    #[serde(default)]
-    pub episode: i64,
-    pub resolution: String,
-    pub info_hash: Option<String>,
-    pub file_idx: Option<i64>,
+    pub info_hash: String,
+    pub file_idx: i32,
 }
 
 #[draad::ty]
@@ -37,20 +18,36 @@ pub struct ResolutionEstimate {
     pub streams_count: i64,
 }
 
+#[draad::ty]
+pub struct DownloadStatusUpdate {
+    pub download_id: i32,
+    pub new_status: crate::downloads::types::DownloadStatus,
+}
+
 #[draad::api(namespace = "downloads")]
 pub trait DownloadsApi {
     /// Lists every download ever queued, newest first
     #[get]
-    async fn list(&self) -> Result<Vec<Download>, Error>;
+    async fn list(&self) -> Result<Vec<Download>, CinemaError>;
 
-    /// Cancels an in-progress download and removes its row + files from disk
+    /// Queue a new download. If `info_hash`/`file_idx` are omitted, picks the
+    /// best stream matching the requested resolution. Returns the download id
+    async fn enqueue(&self, request: EnqueueDownload) -> Result<i32, CinemaError>;
+
+    /// Temporarily pause. Files stay on disk; resume picks up where it left off.
     #[delete]
-    async fn delete(&self, id: i64) -> Result<(), Error>;
+    async fn pause(&self, id: i32) -> Result<(), CinemaError>;
 
-    /// Queues a download. If `info_hash`/`file_idx` are omitted, picks the
-    /// best stream matching the requested resolution
+    /// Resume a paused or cancelled download. Also re-runs a failed download
+    async fn resume(&self, id: i32) -> Result<(), CinemaError>;
+
+    /// Stop the download but keep the files. Distinct from `pause` in intent
+    /// (user no longer wants this download).
+    async fn cancel(&self, id: i32) -> Result<(), CinemaError>;
+
+    /// Stop and wipe. Removes the row and deletes files from disk
     #[post]
-    async fn enqueue(&self, request: EnqueueDownload) -> Result<(), Error>;
+    async fn remove(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Bandwidth/size estimates per available resolution
     #[get]
@@ -58,125 +55,74 @@ pub trait DownloadsApi {
         &self,
         media_type: String,
         tmdb_id: i64,
-    ) -> Result<Vec<ResolutionEstimate>, Error>;
+    ) -> Result<Vec<ResolutionEstimate>, CinemaError>;
 }
 
 #[draad::api]
 impl DownloadsApi for AppContext {
-    async fn list(&self) -> Result<Vec<Download>, Error> {
-        let items =
-            sqlx::query_as::<_, Download>("SELECT * FROM downloads ORDER BY created_at DESC")
-                .fetch_all(&self.db)
-                .await
-                .map_err(|e| Error::Generic(e.to_string()))?;
-        Ok(items)
+    async fn list(&self) -> Result<Vec<Download>, CinemaError> {
+        crate::downloads::types::Download::find_all(&self.db).await
     }
 
-    async fn delete(&self, id: i64) -> Result<(), Error> {
-        let dl: Option<Download> = sqlx::query_as("SELECT * FROM downloads WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.db)
-            .await
-            .map_err(|e| Error::Generic(e.to_string()))?;
+    async fn enqueue(&self, body: EnqueueDownload) -> Result<i32, CinemaError> {
+        let (id, _) = self
+            .downloads
+            .ensure_download(
+                &body.info_hash,
+                body.file_idx,
+                crate::downloads::DownloadPriority::Background,
+            )
+            .await?;
 
-        if let Some(dl) = dl {
-            if dl.status == "downloading" {
-                sqlx::query("UPDATE downloads SET status = 'cancelled' WHERE id = ?")
-                    .bind(id)
-                    .execute(&self.db)
-                    .await
-                    .map_err(|e| Error::Generic(e.to_string()))?;
-            }
-            crate::torrent::TorrentEngine::get()
-                .stop_and_delete(&dl.info_hash)
-                .await;
-            sqlx::query("DELETE FROM downloads WHERE id = ?")
-                .bind(id)
-                .execute(&self.db)
-                .await
-                .map_err(|e| Error::Generic(e.to_string()))?;
-        }
+        Ok(id)
+    }
+
+    async fn pause(&self, id: i32) -> Result<(), CinemaError> {
+        self.downloads.pause(id).await
+    }
+
+    async fn resume(&self, id: i32) -> Result<(), CinemaError> {
+        // Reset terminal/idle state so start treats it as a fresh launch.
+        let mut tx = self.db.begin().await.map_err(CinemaError::DatabaseError)?;
+        crate::downloads::types::Download::reset_for_restart(&mut tx, id).await?;
+        tx.commit().await.map_err(CinemaError::DatabaseError)?;
+        self.downloads
+            .start(id, crate::downloads::DownloadPriority::Background)
+            .await?;
         Ok(())
     }
 
-    async fn enqueue(&self, body: EnqueueDownload) -> Result<(), Error> {
-        let (info_hash, file_idx) =
-            if let (Some(hash), Some(idx)) = (&body.info_hash, body.file_idx) {
-                (hash.clone(), idx)
-            } else {
-                let tmdb = TmdbClient::new(&self.config, self.http.clone());
-                let mt = crate::api::media::parse_media_type(&body.media_type)?;
-                let item = tmdb.details(mt, body.tmdb_id).await?;
-                let imdb_id = item
-                    .imdb_id
-                    .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-                let path = if body.media_type == "tv" {
-                    format!("series/{imdb_id}:{}:{}", body.season, body.episode)
-                } else {
-                    format!("movie/{imdb_id}")
-                };
-                let all_streams =
-                    streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await;
-                let stream = all_streams
-                    .iter()
-                    .find(|s| s.resolution.as_deref() == Some(&body.resolution))
-                    .or_else(|| all_streams.first())
-                    .ok_or_else(|| Error::Generic("No streams found".into()))?;
-                (stream.info_hash.clone(), stream.file_idx)
-            };
+    async fn cancel(&self, id: i32) -> Result<(), CinemaError> {
+        self.downloads.cancel(id).await
+    }
 
-        let file_path = if body.media_type == "tv" {
-            format!("tv/{}/s{}e{}.mp4", body.tmdb_id, body.season, body.episode)
-        } else {
-            format!("movies/{}.mp4", body.tmdb_id)
-        };
-
-        sqlx::query(
-            "INSERT INTO downloads (media_type, tmdb_id, title, poster_path, season, episode, resolution, info_hash, file_idx, file_path)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(media_type, tmdb_id, season, episode) DO UPDATE SET
-               info_hash = excluded.info_hash, file_idx = excluded.file_idx, resolution = excluded.resolution,
-               file_path = excluded.file_path, status = 'queued', error = NULL,
-               downloaded_bytes = 0, total_bytes = NULL, completed_at = NULL"
-        )
-        .bind(&body.media_type)
-        .bind(body.tmdb_id)
-        .bind(&body.title)
-        .bind(&body.poster_path)
-        .bind(body.season)
-        .bind(body.episode)
-        .bind(&body.resolution)
-        .bind(&info_hash)
-        .bind(file_idx)
-        .bind(&file_path)
-        .execute(&self.db)
-        .await
-        .map_err(|e| Error::Generic(e.to_string()))?;
-
-        self.events
-            .publish("download:enqueue", &serde_json::json!({}));
-        Ok(())
+    async fn remove(&self, id: i32) -> Result<(), CinemaError> {
+        self.transcodings.remove_all_for_download(id).await?;
+        self.downloads.remove(id).await
     }
 
     async fn estimate(
         &self,
         media_type: String,
         tmdb_id: i64,
-    ) -> Result<Vec<ResolutionEstimate>, Error> {
+    ) -> Result<Vec<ResolutionEstimate>, CinemaError> {
         let tmdb = TmdbClient::new(&self.config, self.http.clone());
-        let mt = crate::api::media::parse_media_type(&media_type)?;
-        let item = tmdb.details(mt, tmdb_id).await?;
+        let mt = MediaType::try_from(media_type)?;
+        let item = tmdb.details(mt, tmdb_id, &self.db).await?;
         let imdb_id = item
             .imdb_id
-            .ok_or_else(|| Error::Generic("No IMDB ID found".into()))?;
-        let path = if media_type == "tv" {
-            format!("series/{imdb_id}:1:1")
-        } else {
-            format!("movie/{imdb_id}")
+            .ok_or_else(|| CinemaError::Generic("No IMDB ID found".into()))?;
+        let media_type = match mt {
+            MediaType::Movie => streams_mod::AggregationMediaType::Media { tmdb_id, imdb_id },
+            MediaType::Tv => streams_mod::AggregationMediaType::Tv {
+                tmdb_id,
+                imdb_id,
+                season: 1,
+                episode: 1,
+            },
         };
 
-        let all_streams =
-            streams_mod::aggregate(&self.http, &self.config.stream_sources, &path).await;
+        let all_streams = media_type.aggregate(self).await;
 
         let mut seen =
             std::collections::HashMap::<String, (Option<u64>, Option<String>, i64)>::new();
@@ -222,4 +168,8 @@ impl DownloadsApi for AppContext {
 pub trait DownloadsEvents {
     /// Per-download bandwidth/status tick. Topic: `downloads_progress`.
     fn progress(payload: DownloadProgress);
+
+    fn status_update(payload: DownloadStatusUpdate);
+
+    fn removed(id: i32);
 }

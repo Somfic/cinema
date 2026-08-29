@@ -1,0 +1,96 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                slug,\n                title,\n                kind as \"kind: CollectionKind\",\n                created_at,\n                system,\n                hidden\n            FROM collection_meta\n            ORDER BY position ASC, created_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "kind: CollectionKind",
+        "type_info": {
+          "Custom": {
+            "name": "collection_kind",
+            "kind": {
+              "Enum": [
+                "manual",
+                "ordered"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "system"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "hidden",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "hidden"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "941cc5eb5519ce2bc61548d6b887d6682cef207e1d337ed5c46480796d2d11ea"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET total_bytes = $1, name = $2 WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ac0d0f3b8b585c39a3a40fcbb7956b7b118b5425cc211670b3b5e55caa47f4a5"
+}

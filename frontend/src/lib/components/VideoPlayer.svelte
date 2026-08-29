@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from "svelte";
 	import { fade } from "svelte/transition";
-	import type { Chapter } from "$lib/schema";
+	import type { Chapter, Stream } from "$lib/schema";
 	import Hls from "hls.js";
 	import { Button, Icon } from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
@@ -27,9 +27,6 @@
 		url: string;
 		score: number;
 	}
-
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	type StreamOption = any;
 
 	let {
 		src,
@@ -61,6 +58,8 @@
 		streamStats = null,
 		pieceMap = [],
 		transcoding = $bindable({ enabled: true, onlyAudio: false }),
+		hasAudioPretranscoding = false,
+		hasFullPretranscoding = false,
 		onTranscodingChange,
 		currentTime = $bindable(0),
 		duration = $bindable(0),
@@ -78,7 +77,7 @@
 		topline?: string;
 		titleImage?: string;
 		subtitleTracks?: SubtitleTrack[];
-		streams?: StreamOption[];
+		streams?: Stream[];
 		activeStreamHash?: string;
 		audioTracks?: AudioTrack[];
 		activeAudioTrack?: number;
@@ -86,7 +85,7 @@
 		onClose?: () => void;
 		onSubtitleSelect?: (track: SubtitleTrack) => void;
 		onSubtitleOff?: () => void;
-		onStreamSelect?: (stream: StreamOption) => void;
+		onStreamSelect?: (stream: Stream) => void;
 		onAudioSelect?: (track: AudioTrack) => void;
 		/** Seek target fell outside the transcoded window — restart the HLS
 		 *  transcode at this time instead of a native seek. */
@@ -115,6 +114,8 @@
 			enabled: boolean;
 			onlyAudio: boolean;
 		};
+		hasAudioPretranscoding?: boolean;
+		hasFullPretranscoding?: boolean;
 		onTranscodingChange?: (enabled: boolean, onlyAudio: boolean) => void;
 		paused?: boolean;
 		volume?: number;
@@ -183,6 +184,29 @@
 		const to = Math.min(subtitles.length, center + 2);
 		return subtitles.slice(from, to);
 	});
+
+	const progressPercent = $derived(
+		duration > 0 ? (currentTime / duration) * 100 : 0,
+	);
+	const bufferedPercent = $derived(
+		duration > 0 ? (buffered / duration) * 100 : 0,
+	);
+	const torrentPercent = $derived(
+		streamStats && streamStats.total_bytes > 0
+			? Math.round((streamStats.progress_bytes / streamStats.total_bytes) * 100)
+			: 0,
+	);
+	let statsOpen = $state(false);
+
+	function formatTime(seconds: number): string {
+		if (!isFinite(seconds) || seconds < 0) return "0:00";
+		const h = Math.floor(seconds / 3600);
+		const m = Math.floor((seconds % 3600) / 60);
+		const s = Math.floor(seconds % 60);
+		if (h > 0)
+			return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+		return `${m}:${s.toString().padStart(2, "0")}`;
+	}
 
 	export function togglePlay() {
 		if (!videoEl) return;
@@ -632,6 +656,8 @@
 				subtitlesActive={subtitles.length > 0}
 				{activeTrackUrl}
 				{transcoding}
+				{hasAudioPretranscoding}
+				{hasFullPretranscoding}
 				{streamStats}
 				{pieceMap}
 				{loadingSubtitles}
@@ -918,5 +944,4 @@
 		opacity: 1;
 		pointer-events: auto;
 	}
-
 </style>

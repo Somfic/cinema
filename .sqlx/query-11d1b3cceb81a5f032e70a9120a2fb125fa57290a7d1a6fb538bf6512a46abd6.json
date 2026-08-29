@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET status = 'queued' WHERE status = 'downloading'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "11d1b3cceb81a5f032e70a9120a2fb125fa57290a7d1a6fb538bf6512a46abd6"
+}

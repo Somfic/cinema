@@ -18,7 +18,7 @@ struct RawStream {
     #[serde(rename = "infoHash")]
     info_hash: Option<String>,
     #[serde(rename = "fileIdx")]
-    file_idx: Option<i64>,
+    file_idx: Option<i32>,
     #[serde(rename = "behaviorHints")]
     behavior_hints: Option<BehaviorHints>,
 }
@@ -35,7 +35,7 @@ struct BehaviorHints {
 #[draad::ty]
 pub struct Stream {
     pub info_hash: String,
-    pub file_idx: i64,
+    pub file_idx: i32,
     pub name: String,
     pub title: String,
     pub source: String,
@@ -49,49 +49,149 @@ pub struct Stream {
     pub size_bytes: Option<u64>,
     pub size_display: Option<String>,
     pub score: f64,
+    pub download: Option<crate::downloads::types::SimpleDownload>,
 }
 
-// --- Aggregation ---
+pub enum AggregationMediaType {
+    Media {
+        tmdb_id: i64,
+        imdb_id: String,
+    },
+    Tv {
+        tmdb_id: i64,
+        imdb_id: String,
+        season: u32,
+        episode: u32,
+    },
+}
 
-pub async fn aggregate(client: &reqwest::Client, sources: &[String], path: &str) -> Vec<Stream> {
-    let futures: Vec<_> = sources
-        .iter()
-        .map(|source| fetch_source(client, source, path))
-        .collect();
-
-    let results = join_all(futures).await;
-
-    let mut by_hash: HashMap<String, Stream> = HashMap::new();
-
-    for (source_name, streams) in results.into_iter().flatten() {
-        for stream in streams {
-            by_hash
-                .entry(stream.info_hash.clone())
-                .and_modify(|existing| {
-                    // Keep the one with more seeders; merge source names
-                    if !existing.source.contains(&source_name) {
-                        existing.source = format!("{}, {}", existing.source, source_name);
-                    }
-                    if stream.seeders > existing.seeders {
-                        existing.seeders = stream.seeders;
-                        existing.score = compute_score(&*existing);
-                    }
-                })
-                .or_insert(stream);
+impl From<&AggregationMediaType> for crate::tmdb::MediaType {
+    fn from(value: &AggregationMediaType) -> Self {
+        match value {
+            AggregationMediaType::Media { .. } => crate::tmdb::MediaType::Movie,
+            AggregationMediaType::Tv { .. } => crate::tmdb::MediaType::Tv,
         }
     }
+}
 
-    let mut streams: Vec<Stream> = by_hash.into_values().collect();
-    streams.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    streams
+impl AggregationMediaType {
+    pub async fn aggregate(self, ctx: &crate::app::AppContext) -> Vec<Stream> {
+        let path = match &self {
+            AggregationMediaType::Media {
+                tmdb_id: _,
+                imdb_id,
+            } => format!("movie/{imdb_id}"),
+            AggregationMediaType::Tv {
+                tmdb_id: _,
+                imdb_id,
+                season,
+                episode,
+            } => format!("series/{imdb_id}:{season}:{episode}"),
+        };
+
+        let futures: Vec<_> = ctx
+            .config
+            .stream_sources
+            .iter()
+            .map(|source| fetch_source(&ctx.http, &ctx.db, source, &path))
+            .collect();
+
+        let results = join_all(futures).await;
+
+        let mut by_hash: HashMap<String, Stream> = HashMap::new();
+
+        for (source_name, streams) in results.into_iter().flatten() {
+            for stream in streams {
+                by_hash
+                    .entry(stream.info_hash.clone())
+                    .and_modify(|existing| {
+                        // Keep the one with more seeders; merge source names
+                        if !existing.source.contains(&source_name) {
+                            existing.source = format!("{}, {}", existing.source, source_name);
+                        }
+                        if stream.seeders > existing.seeders {
+                            existing.seeders = stream.seeders;
+                            existing.score = compute_score(&*existing);
+                        }
+                    })
+                    .or_insert(stream);
+            }
+        }
+
+        let mut streams: Vec<Stream> = by_hash.into_values().collect();
+        streams.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut tx = match ctx
+            .db
+            .begin()
+            .await
+            .map_err(crate::app::CinemaError::DatabaseError)
+        {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    "Could not acquire the transaction for inserting media items"
+                );
+                return streams;
+            }
+        };
+
+        let tmdb_id = match &self {
+            AggregationMediaType::Media { tmdb_id, .. } => *tmdb_id,
+            AggregationMediaType::Tv { tmdb_id, .. } => *tmdb_id,
+        };
+        let media_type = crate::tmdb::MediaType::from(&self);
+        let meta_rows: Vec<_> = streams
+            .iter()
+            .map(|stream| {
+                let (season, episode) = match &self {
+                    AggregationMediaType::Media { .. } => (None, None),
+                    AggregationMediaType::Tv {
+                        tmdb_id: _,
+                        imdb_id: _,
+                        season,
+                        episode,
+                    } => (Some(*season as i32), Some(*episode as i32)),
+                };
+
+                crate::downloads::types::DownloadMetaRow {
+                    info_hash: &stream.info_hash,
+                    file_idx: stream.file_idx,
+                    season,
+                    episode,
+                    resolution: stream.resolution.as_ref(),
+                }
+            })
+            .collect();
+
+        let meta_ctx = crate::downloads::types::DownloadMetaContext {
+            tmdb_id,
+            media_type,
+            rows: meta_rows,
+        };
+
+        if let Err(err) =
+            crate::downloads::types::DownloadMeta::upsert(&mut tx, meta_ctx, ctx).await
+        {
+            tracing::warn!(?err, "Could not insert download metadata")
+        }
+
+        if let Err(err) = tx.commit().await {
+            tracing::warn!(?err, "Could not commit the insertion of download metadata")
+        }
+
+        streams
+    }
 }
 
 async fn fetch_source(
     client: &reqwest::Client,
+    db: &crate::app::Pool,
     source: &str,
     path: &str,
 ) -> Option<(String, Vec<Stream>)> {
@@ -119,7 +219,7 @@ async fn fetch_source(
         }
     };
 
-    let streams: Vec<Stream> = body
+    let mut streams: Vec<Stream> = body
         .streams
         .into_iter()
         .filter_map(|raw| {
@@ -162,11 +262,32 @@ async fn fetch_source(
                 size_bytes,
                 size_display,
                 score: 0.0,
+                download: None,
             };
             stream.score = compute_score(&stream);
             Some(stream)
         })
         .collect();
+
+    let downloads = crate::downloads::types::SimpleDownload::find_by_info_hash_and_file_idx(
+        db,
+        streams
+            .iter()
+            .map(|stream| (stream.info_hash.as_str(), stream.file_idx))
+            .collect(),
+    )
+    .await;
+
+    match downloads {
+        Ok(mut downloads) => {
+            for stream in &mut streams {
+                stream.download = downloads.remove(&(stream.info_hash.clone(), stream.file_idx));
+            }
+        }
+        Err(err) => {
+            tracing::warn!(?err, "Could not populate downloads for streams")
+        }
+    };
 
     Some((source_name, streams))
 }
@@ -204,19 +325,19 @@ fn parse_size(title: &str) -> (Option<u64>, Option<String>) {
         if let Some(pos) = line.find('💾') {
             let after = &line[pos + '💾'.len_utf8()..].trim_start();
             let parts: Vec<&str> = after.splitn(3, ' ').collect();
-            if parts.len() >= 2 {
-                if let Ok(num) = parts[0].parse::<f64>() {
-                    let unit = parts[1].to_uppercase();
-                    let display = format!("{} {}", parts[0], parts[1]);
-                    let bytes = match unit.as_str() {
-                        "TB" => Some((num * 1_099_511_627_776.0) as u64),
-                        "GB" => Some((num * 1_073_741_824.0) as u64),
-                        "MB" => Some((num * 1_048_576.0) as u64),
-                        "KB" => Some((num * 1_024.0) as u64),
-                        _ => None,
-                    };
-                    return (bytes, Some(display));
-                }
+            if parts.len() >= 2
+                && let Ok(num) = parts[0].parse::<f64>()
+            {
+                let unit = parts[1].to_uppercase();
+                let display = format!("{} {}", parts[0], parts[1]);
+                let bytes = match unit.as_str() {
+                    "TB" => Some((num * 1_099_511_627_776.0) as u64),
+                    "GB" => Some((num * 1_073_741_824.0) as u64),
+                    "MB" => Some((num * 1_048_576.0) as u64),
+                    "KB" => Some((num * 1_024.0) as u64),
+                    _ => None,
+                };
+                return (bytes, Some(display));
             }
         }
     }

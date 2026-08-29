@@ -4,6 +4,12 @@ cinema.toml
 /.claude
 node_modules
 
+# Data Grip (not IntelliJ)
+.idea
+
+# Schema codegen output
+/frontend/src/lib/schema/index.ts
+
 # Output
 .output
 .vercel

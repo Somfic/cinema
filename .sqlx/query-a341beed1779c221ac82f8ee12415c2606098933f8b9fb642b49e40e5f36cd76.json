@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO pretranscodings (download_id, only_audio, audio_index)\n                VALUES ($1, $2, $3)\n                    ON CONFLICT (download_id, only_audio, audio_index) DO UPDATE SET\n                        status = DEFAULT,\n                        error = DEFAULT,\n                        transcoded_ms = DEFAULT,\n                        total_ms = DEFAULT,\n                        completed_at = DEFAULT,\n                        created_at = DEFAULT\n                RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "pretranscodings",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a341beed1779c221ac82f8ee12415c2606098933f8b9fb642b49e40e5f36cd76"
+}

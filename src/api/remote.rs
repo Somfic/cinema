@@ -31,7 +31,7 @@ pub trait RemoteEvents {
 }
 
 use crate::app::AppContext;
-pub use crate::app::Error;
+pub use crate::app::CinemaError;
 use draad::runtime::Conn;
 
 #[draad::api(namespace = "remote")]
@@ -40,17 +40,17 @@ pub trait RemoteApi {
     /// (`remote_self`). Demonstrates injecting the live connection into an HTTP
     /// handler — the `conn` arg is server-filled, so the generated TS is just
     /// `whoami(): Promise<ClientPresence>`. 409s if the caller has no live socket.
-    async fn whoami(&self, conn: &Conn) -> Result<ClientPresence, Error>;
+    async fn whoami(&self, conn: &Conn) -> Result<ClientPresence, CinemaError>;
 }
 
 #[draad::api]
 impl RemoteApi for AppContext {
-    async fn whoami(&self, conn: &Conn) -> Result<ClientPresence, Error> {
+    async fn whoami(&self, conn: &Conn) -> Result<ClientPresence, CinemaError> {
         let me = self
             .clients
             .get(conn.client_id())
             .await
-            .ok_or_else(|| Error::NotFound("client not in roster".into()))?;
+            .ok_or_else(|| CinemaError::NotFound("client not in roster".into()))?;
         conn.send("remote_self", &me);
         Ok(me)
     }

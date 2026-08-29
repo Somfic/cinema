@@ -4,6 +4,7 @@ use nu_ansi_term::{Color, Style};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -55,7 +56,9 @@ where
         event: &Event<'_>,
     ) -> fmt::Result {
         let ansi = writer.has_ansi_escapes();
-        let level = *event.metadata().level();
+        let meta = event.metadata();
+        let level = *meta.level();
+        let dimmed = Style::new().dimmed();
 
         let level_color = match level {
             Level::ERROR => Color::Red,
@@ -65,6 +68,16 @@ where
             Level::TRACE => Color::Purple,
         };
 
+        // timestamp (dimmed)
+        if ansi {
+            write!(writer, "{}", dimmed.prefix())?;
+            SystemTime.format_time(&mut writer)?;
+            write!(writer, "{} ", dimmed.suffix())?;
+        } else {
+            SystemTime.format_time(&mut writer)?;
+            write!(writer, " ")?;
+        }
+
         if ansi {
             write!(
                 writer,
@@ -73,6 +86,21 @@ where
             )?;
         } else {
             write!(writer, "{:>5} ", level)?;
+        }
+
+        // target (module path) + source location, dimmed
+        if ansi {
+            write!(writer, "{}", dimmed.paint(meta.target()))?;
+            if let (Some(file), Some(line)) = (meta.file(), meta.line()) {
+                write!(writer, "{}", dimmed.paint(format!(" {}:{}", file, line)))?;
+            }
+            write!(writer, ": ")?;
+        } else {
+            write!(writer, "{}", meta.target())?;
+            if let (Some(file), Some(line)) = (meta.file(), meta.line()) {
+                write!(writer, " {}:{}", file, line)?;
+            }
+            write!(writer, ": ")?;
         }
 
         let mut visitor = MessageExtractor::new();

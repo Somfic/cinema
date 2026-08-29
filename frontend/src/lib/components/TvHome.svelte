@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button, Icon, Glow } from "glow";
 	import { remote } from "$lib/remote.svelte";
+	import { settings } from "$lib/settings.svelte";
 
 	// Same text-safe pool as the title page, chosen fresh each time the TV home
 	// mounts. `dither` and `halftone` are excluded: buttons sit on top of this.
@@ -20,51 +21,54 @@
 		GLOW_PATTERNS[Math.floor(Math.random() * GLOW_PATTERNS.length)];
 </script>
 
-<div class="tv-home">
-	<Glow
-		pattern={glowPattern}
-		colors={["#700000", "#008cff", "#75daff", "#ff0026", "#ff3626"]}
-		morph={1}
-		ribbonWidth={0.5}
-		rotation={52}
-		zoom={9}
-		transition={5000}
-	>
-		<div class="exit">
-			<Button
-				variant="ghost"
-				icon="Monitor"
-				onclick={() => remote.leaveTv()}
-			>
-				Exit TV mode
-			</Button>
-		</div>
+{#snippet body()}
+	<div class="exit">
+		<Button variant="ghost" icon="Monitor" onclick={() => remote.leaveTv()}>
+			Exit TV mode
+		</Button>
+	</div>
 
-		<div class="content">
-			<div class="card">
-				<div class="mark">
-					<Icon name="Clapperboard" size={64} />
-					<span class="brand">cinema</span>
-				</div>
+	<div class="content">
+		<div class="card">
+			<div class="mark">
+				<Icon name="Clapperboard" size={64} />
+				<span class="brand">cinema</span>
+			</div>
 
-				<div class="hint">
-					<Icon name="Smartphone" size={18} />
-					<span>
-						{#if remote.controller}
-							Browse on <strong>{remote.controller.label}</strong> to
-							start watching
-						{:else}
-							Browse on your phone to start watching
-						{/if}
-					</span>
-				</div>
+			<div class="hint">
+				<Icon name="Smartphone" size={18} />
+				<span>
+					{#if remote.controller}
+						Browse on <strong>{remote.controller.label}</strong> to start watching
+					{:else}
+						Browse on your phone to start watching
+					{/if}
+				</span>
 			</div>
 		</div>
-	</Glow>
+	</div>
+{/snippet}
+
+<div class="tv-home">
+	{#if settings.animations.glow}
+		<Glow
+			pattern={glowPattern}
+			colors={["#700000", "#008cff", "#75daff", "#ff0026", "#ff3626"]}
+			morph={1}
+			ribbonWidth={0.5}
+			rotation={52}
+			zoom={9}
+			transition={5000}
+		>
+			{@render body()}
+		</Glow>
+	{:else}
+		{@render body()}
+	{/if}
 </div>
 
 <style lang="scss">
-	@use "glow/src/lib/style/theme.scss" as *;
+	@use "glow/styles/theme" as *;
 
 	.tv-home {
 		position: fixed;

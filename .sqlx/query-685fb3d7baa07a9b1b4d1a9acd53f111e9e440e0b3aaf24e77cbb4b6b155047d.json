@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE pretranscodings SET status = 'cancelled' WHERE id = $1 AND status = 'transcoding'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "685fb3d7baa07a9b1b4d1a9acd53f111e9e440e0b3aaf24e77cbb4b6b155047d"
+}

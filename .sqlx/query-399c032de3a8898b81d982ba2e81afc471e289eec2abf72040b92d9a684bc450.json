@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO collection_meta (slug, title, kind)\n            VALUES ($1, $2, $3)\n            ON CONFLICT(slug) DO UPDATE SET\n                title = excluded.title,\n                kind = excluded.kind",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        {
+          "Custom": {
+            "name": "collection_kind",
+            "kind": {
+              "Enum": [
+                "manual",
+                "ordered"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "399c032de3a8898b81d982ba2e81afc471e289eec2abf72040b92d9a684bc450"
+}

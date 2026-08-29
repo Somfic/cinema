@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from "svelte";
-	import type { Chapter } from "$lib/schema";
+	import type { Chapter, Stream } from "$lib/schema";
 	import { Button, PopoverMenu, type PopoverMenuEntry } from "glow";
+	import { DOWNLOAD_STATUS_LABEL } from "$lib/utils";
 
 	interface AudioTrack {
 		id: number;
@@ -13,8 +14,6 @@
 		language: string;
 		url: string;
 	}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	type StreamOption = any;
 
 	let {
 		currentTime,
@@ -33,6 +32,8 @@
 		chapters = [],
 		activeTrackUrl,
 		transcoding = { enabled: false, onlyAudio: false },
+		hasAudioPretranscoding = false,
+		hasFullPretranscoding = false,
 		streamStats = null,
 		pieceMap = [],
 		loadingSubtitles = false,
@@ -62,7 +63,7 @@
 		loading?: boolean;
 		volume: number;
 		muted: boolean;
-		streams?: StreamOption[];
+		streams?: Stream[];
 		activeStreamHash?: string;
 		audioTracks?: AudioTrack[];
 		activeAudioTrack?: number;
@@ -71,6 +72,12 @@
 		chapters?: Chapter[];
 		activeTrackUrl?: string;
 		transcoding?: { enabled: boolean; onlyAudio: boolean };
+		/** Tint the "Audio" transcoding radio icon - signals a completed
+		 *  audio-only pretranscoding for the current stream is ready to serve. */
+		hasAudioPretranscoding?: boolean;
+		/** Tint the "Audio + video" transcoding radio icon - signals a
+		 *  completed full pretranscoding for the current stream is ready. */
+		hasFullPretranscoding?: boolean;
 		streamStats?: { total_bytes: number; finished: boolean } | null;
 		pieceMap?: number[];
 		loadingSubtitles?: boolean;
@@ -89,7 +96,7 @@
 		onSetVolume: (value: number) => void;
 		onToggleMute: () => void;
 		onToggleFullscreen?: () => void;
-		onStreamSelect?: (stream: StreamOption) => void;
+		onStreamSelect?: (stream: Stream) => void;
 		onAudioSelect?: (track: AudioTrack) => void;
 		onSubtitleSelect?: (track: SubtitleTrack) => void;
 		onSubtitleOff?: () => void;
@@ -154,15 +161,10 @@
 	function posFromEvent(clientX: number): number | null {
 		if (!trackEl || !duration) return null;
 		const rect = trackEl.getBoundingClientRect();
-		const pct = Math.max(
-			0,
-			Math.min(1, (clientX - rect.left) / rect.width),
-		);
+		const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
 		return pct * duration;
 	}
-	function onPointerDown(
-		e: PointerEvent & { currentTarget: HTMLDivElement },
-	) {
+	function onPointerDown(e: PointerEvent & { currentTarget: HTMLDivElement }) {
 		const t = posFromEvent(e.clientX);
 		if (t == null) return;
 		scrubbing = true;
@@ -190,8 +192,7 @@
 	}
 
 	const activeResolution = $derived(
-		streams.find((s: StreamOption) => s.info_hash === activeStreamHash)
-			?.resolution ?? null,
+		streams.find((s) => s.info_hash === activeStreamHash)?.resolution ?? null,
 	);
 
 	const resolutions = $derived.by(() => {
@@ -214,18 +215,26 @@
 		return result.sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
 	});
 
-	const TRANSCODE_OPTIONS = [
+	const TRANSCODE_OPTIONS = $derived([
 		{ value: "none", label: "None", icon: "Ban" as const },
-		{ value: "audio", label: "Audio", icon: "AudioLines" as const },
-		{ value: "both", label: "Audio + video", icon: "Film" as const },
-	];
+		{
+			value: "audio",
+			label: "Audio",
+			icon: hasAudioPretranscoding
+				? { name: "AudioLines" as const, color: "var(--glow-color-success)" }
+				: ("AudioLines" as const),
+		},
+		{
+			value: "both",
+			label: "Audio + video",
+			icon: hasFullPretranscoding
+				? { name: "Film" as const, color: "var(--glow-color-success)" }
+				: ("Film" as const),
+		},
+	]);
 
 	const transcodingMode = $derived(
-		!transcoding.enabled
-			? "none"
-			: transcoding.onlyAudio
-				? "audio"
-				: "both",
+		!transcoding.enabled ? "none" : transcoding.onlyAudio ? "audio" : "both",
 	);
 
 	function setTranscodingMode(mode: string) {
@@ -245,9 +254,7 @@
 						label: res,
 						selected: res === activeResolution,
 						onclick: () => {
-							const best = streams.find(
-								(s: StreamOption) => s.resolution === res,
-							);
+							const best = streams.find((s) => s.resolution === res);
 							if (best) onStreamSelect?.(best);
 						},
 					})),
@@ -255,16 +262,22 @@
 			: []),
 		{ kind: "header" as const, label: "Sources" },
 		...(activeResolution
-			? streams.filter(
-					(s: StreamOption) => s.resolution === activeResolution,
-				)
+			? streams.filter((s) => s.resolution === activeResolution)
 			: streams
 		)
 			.slice(0, 8)
-			.map((stream: StreamOption) => ({
+			.map((stream) => ({
 				kind: "item" as const,
 				label: `${stream.source}`,
-				description: [stream.codec, stream.audio, stream.source_type]
+				description: [
+					stream.codec,
+					stream.audio,
+					stream.source_type,
+					stream.download
+						? (DOWNLOAD_STATUS_LABEL[stream.download.status] ??
+							stream.download.status)
+						: null,
+				]
 					.filter(Boolean)
 					.join(" · "),
 				shortcut: stream.size_display ?? undefined,
@@ -316,9 +329,7 @@
 								t.id.startsWith("embedded:") === isEmbedded,
 						);
 						const suffix =
-							dupes.length > 1
-								? ` #${dupes.indexOf(track) + 1}`
-								: "";
+							dupes.length > 1 ? ` #${dupes.indexOf(track) + 1}` : "";
 						return {
 							kind: "item" as const,
 							label: `${track.language}${suffix}`,
@@ -501,43 +512,30 @@
 					<div
 						class="seg"
 						style="left: {(chapter.start / duration) *
-							100}%; width: {((chapter.end - chapter.start) /
-							duration) *
-							100}%"
+							100}%; width: {((chapter.end - chapter.start) / duration) * 100}%"
 					>
 						<div class="seg-bg">
 							<div
 								class="seg-buffered"
-								style="width: {segFraction(chapter, buffered) *
-									100}%"
+								style="width: {segFraction(chapter, buffered) * 100}%"
 							></div>
 							<div
 								class="seg-fill"
-								style="width: {segFraction(
-									chapter,
-									displayTime,
-								) * 100}%"
+								style="width: {segFraction(chapter, displayTime) * 100}%"
 							></div>
 						</div>
 					</div>
 				{/each}
 			{:else}
-				<div
-					class="progress-buffered"
-					style="width: {bufferedPercent}%"
-				></div>
-				<div
-					class="progress-fill"
-					style="width: {progressPercent}%"
-				></div>
+				<div class="progress-buffered" style="width: {bufferedPercent}%"></div>
+				<div class="progress-fill" style="width: {progressPercent}%"></div>
 			{/if}
 			<div class="progress-thumb" style="left: {progressPercent}%"></div>
 		</div>
 		{#if showChapters && hovering && hoverChapter}
 			<div class="chapter-tooltip" style="left: {hoverPercent}%">
 				<span class="chapter-tooltip-title">{hoverChapter.title}</span>
-				<span class="chapter-tooltip-time">{formatTime(hoverTime)}</span
-				>
+				<span class="chapter-tooltip-time">{formatTime(hoverTime)}</span>
 			</div>
 		{/if}
 	</div>
@@ -567,8 +565,7 @@
 					max="1"
 					step="0.01"
 					value={muted ? 0 : volume}
-					oninput={(e) =>
-						onSetVolume(parseFloat(e.currentTarget.value))}
+					oninput={(e) => onSetVolume(parseFloat(e.currentTarget.value))}
 					class="volume-slider"
 					class:open={volumeAlwaysOpen}
 				/>

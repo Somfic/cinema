@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    UPDATE collections\n                    SET position = $1\n                    WHERE collection_slug = $2\n                    AND media_id = (SELECT id FROM media_items WHERE media_type = $3 AND tmdb_id = $4)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        {
+          "Custom": {
+            "name": "media_type",
+            "kind": {
+              "Enum": [
+                "movie",
+                "tv"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "caa814256d8a672623dbca673397cfd150ab3df9c27d4a97043644bf0edcb50c"
+}

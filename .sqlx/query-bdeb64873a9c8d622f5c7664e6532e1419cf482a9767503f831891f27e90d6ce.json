@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO media_items (media_type, tmdb_id, title, poster_path)\n                VALUES ($1, $2, $3, $4)\n                    ON CONFLICT (media_type, tmdb_id) DO UPDATE SET\n                        title = EXCLUDED.title,\n                        poster_path = EXCLUDED.poster_path,\n                        updated_at = CURRENT_TIMESTAMP\n                RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "media_type",
+            "kind": {
+              "Enum": [
+                "movie",
+                "tv"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bdeb64873a9c8d622f5c7664e6532e1419cf482a9767503f831891f27e90d6ce"
+}

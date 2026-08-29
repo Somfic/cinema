@@ -3,6 +3,7 @@
 	import { goto } from "$app/navigation";
 	import { Button, Icon } from "glow";
 	import { remote } from "$lib/remote.svelte";
+	import { downloadManager } from "$lib/downloads.svelte";
 	import PlayerControls from "$lib/components/PlayerControls.svelte";
 	import StreamStatsPopover from "$lib/components/StreamStatsPopover.svelte";
 	import Spinner from "$lib/components/Spinner.svelte";
@@ -10,6 +11,31 @@
 	const tv = $derived(remote.tvState);
 	// Offset shown relative to the player's -0.25s baseline, matching the player.
 	const offsetDisplay = $derived((tv?.subtitleOffset ?? -0.25) + 0.25);
+
+	const hasAudioPretranscoding = $derived(
+		tv?.activeAudioTrack != null &&
+			tv.activeStreamHash &&
+			tv.activeFileIndex !== undefined
+			? downloadManager.hasCompletedPretranscoding(
+					tv.activeStreamHash,
+					tv.activeFileIndex,
+					true,
+					tv.activeAudioTrack,
+				)
+			: false,
+	);
+	const hasFullPretranscoding = $derived(
+		tv?.activeAudioTrack != null &&
+			tv.activeStreamHash &&
+			tv.activeFileIndex !== undefined
+			? downloadManager.hasCompletedPretranscoding(
+					tv.activeStreamHash,
+					tv.activeFileIndex,
+					false,
+					tv.activeAudioTrack,
+				)
+			: false,
+	);
 
 	// Minimise: keep the TV playing, go back to browsing on the phone.
 	function minimise() {
@@ -131,7 +157,8 @@
 		<Button
 			variant="ghost"
 			icon="Minus"
-			onclick={() => remote.send({ kind: "set_subtitle_offset", offset: -0.25 })}
+			onclick={() =>
+				remote.send({ kind: "set_subtitle_offset", offset: -0.25 })}
 		/>
 		<span class="offset-value">
 			{offsetDisplay > 0 ? "+" : ""}{offsetDisplay.toFixed(1)}s
@@ -144,7 +171,10 @@
 	</div>
 {/snippet}
 
-<div class="remote-page" style:--art={tv?.poster ? `url(${tv.poster})` : "none"}>
+<div
+	class="remote-page"
+	style:--art={tv?.poster ? `url(${tv.poster})` : "none"}
+>
 	<div class="art-bg"></div>
 	<div class="scrim"></div>
 
@@ -217,6 +247,8 @@
 			subtitlesActive={tv?.subtitlesActive ?? false}
 			activeTrackUrl={tv?.activeTrackUrl}
 			transcoding={tv?.transcoding ?? { enabled: false, onlyAudio: false }}
+			{hasAudioPretranscoding}
+			{hasFullPretranscoding}
 			streamStats={tv?.streamStats ?? null}
 			pieceMap={tv?.pieceMap ?? []}
 			volumeAlwaysOpen
@@ -226,8 +258,10 @@
 			onSetVolume={(v) => remote.send({ kind: "volume", volume: v })}
 			onToggleMute={() => remote.send({ kind: "mute" })}
 			onToggleFullscreen={() => remote.send({ kind: "fullscreen" })}
-			onStreamSelect={(s) => remote.send({ kind: "select_stream", hash: s.info_hash })}
-			onAudioSelect={(t) => remote.send({ kind: "select_audio", audioId: t.id })}
+			onStreamSelect={(s) =>
+				remote.send({ kind: "select_stream", hash: s.info_hash })}
+			onAudioSelect={(t) =>
+				remote.send({ kind: "select_audio", audioId: t.id })}
 			onSubtitleSelect={(t) =>
 				remote.send({ kind: "select_subtitle", subtitleUrl: t.url })}
 			onSubtitleOff={() => remote.send({ kind: "subtitle_off" })}
@@ -239,7 +273,7 @@
 </div>
 
 <style lang="scss">
-	@use "glow/src/lib/style/theme.scss" as *;
+	@use "glow/styles/theme" as *;
 
 	.remote-page {
 		position: fixed;

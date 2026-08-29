@@ -1,9 +1,5 @@
 <script lang="ts">
-	import {
-		type MediaItem,
-		type SearchResult,
-		type WatchHistoryItem,
-	} from "$lib/schema";
+	import { type MediaItem, type WatchHistoryItem } from "$lib/schema";
 	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
 	import {
@@ -19,7 +15,6 @@
 	} from "glow";
 	import type { IconName, DataItem } from "glow";
 	import PlayCard from "./PlayCard.svelte";
-	import DownloadButton from "./DownloadButton.svelte";
 
 	// Map TMDB genre names to glow (lucide) icons
 	const GENRE_ICONS: Record<string, IconName> = {
@@ -61,9 +56,9 @@
 		onwatch,
 		onselectseason,
 		onselectepisode,
-		similarItems = [],
 		resumeEntry,
 		onresume,
+		ondownload,
 		playing = false,
 		tvMode = false,
 	}: {
@@ -72,9 +67,9 @@
 		onwatch?: () => void;
 		onselectseason?: (seasonNumber: number) => void;
 		onselectepisode?: (season: number, episode: number) => void;
-		similarItems?: SearchResult[];
 		resumeEntry?: WatchHistoryItem | null;
 		onresume?: () => void;
+		ondownload?: () => void;
 		playing?: boolean;
 		tvMode?: boolean;
 	} = $props();
@@ -128,29 +123,24 @@
 
 	let onWatchlist = $state(false);
 	let isFavorite = $state(false);
-	let isWatched = $state(false);
 	let watchlistLoading = $state(false);
 	let favoriteLoading = $state(false);
-	let watchedLoading = $state(false);
 
 	$effect(() => {
 		api.collections
-			.contains("watchlist", item.media_type, item.id)
+			.contains("watchlist", item.media_type, item.tmdb_id)
 			.then((res) => {
 				onWatchlist = res.in_collection;
 			})
 			.catch(() => {});
 		api.collections
-			.contains("favorites", item.media_type, item.id)
+			.contains("favorites", item.media_type, item.tmdb_id)
 			.then((res) => {
 				isFavorite = res.in_collection;
 			})
 			.catch(() => {});
 		api.collections
-			.contains("watched", item.media_type, item.id)
-			.then((res) => {
-				isWatched = res.in_collection;
-			})
+			.contains("watched", item.media_type, item.tmdb_id)
 			.catch(() => {});
 	});
 
@@ -163,13 +153,13 @@
 		setLoading(true);
 		try {
 			if (current) {
-				await api.collections.remove(name, item.media_type, item.id);
+				await api.collections.remove(name, item.media_type, item.tmdb_id);
 				setState(false);
 			} else {
 				await api.collections.add({
 					collection: name,
 					media_type: item.media_type,
-					tmdb_id: item.id,
+					tmdb_id: item.tmdb_id,
 					title: item.title,
 					poster_path: item.poster_path ?? null,
 				});
@@ -209,9 +199,7 @@
 		tvResume
 			? item.seasons
 					?.find((s) => s.season_number === resumeEntry!.season)
-					?.episodes?.find(
-						(e) => e.episode_number === resumeEntry!.episode,
-					)
+					?.episodes?.find((e) => e.episode_number === resumeEntry!.episode)
 			: null,
 	);
 	const firstSeason = $derived(item.seasons?.[0]);
@@ -290,9 +278,7 @@
 			{/if}
 			{#if item.seasons}
 				<Text as="span" variant="secondary" size="sm">
-					{item.seasons.length} season{item.seasons.length > 1
-						? "s"
-						: ""}
+					{item.seasons.length} season{item.seasons.length > 1 ? "s" : ""}
 				</Text>
 			{/if}
 			{#if item.rating}
@@ -310,9 +296,7 @@
 			<Button
 				variant="ghost"
 				icon={isFavorite ? { name: "Heart", fill: true } : "Heart"}
-				tooltip={isFavorite
-					? "Remove from favorites"
-					: "Add to favorites"}
+				tooltip={isFavorite ? "Remove from favorites" : "Add to favorites"}
 				loading={favoriteLoading}
 				onclick={() =>
 					toggleCollection(
@@ -324,12 +308,8 @@
 			/>
 			<Button
 				variant="ghost"
-				icon={onWatchlist
-					? { name: "Bookmark", fill: true }
-					: "Bookmark"}
-				tooltip={onWatchlist
-					? "Remove from watchlist"
-					: "Add to watchlist"}
+				icon={onWatchlist ? { name: "Bookmark", fill: true } : "Bookmark"}
+				tooltip={onWatchlist ? "Remove from watchlist" : "Add to watchlist"}
 				loading={watchlistLoading}
 				onclick={() =>
 					toggleCollection(
@@ -350,17 +330,18 @@
 					variant="ghost"
 					icon="LayoutGrid"
 					tooltip="Browse episodes"
-					onclick={() =>
-						onselectseason(item.seasons![0].season_number)}
+					onclick={() => onselectseason(item.seasons![0].season_number)}
 				/>
 			{/if}
 		{/if}
-		<!-- <DownloadButton
-			mediaType={item.media_type}
-			tmdbId={item.id}
-			title={item.title}
-			posterPath={item.poster_path ?? null}
-		/> -->
+		{#if !tvMode && ondownload && item.media_type === "movie"}
+			<Button
+				variant="ghost"
+				icon="Download"
+				tooltip="Download"
+				onclick={ondownload}
+			/>
+		{/if}
 	</div>
 
 	{#if !tvMode && item.media_type === "movie" && (movieResume ? onresume : onwatch)}
@@ -374,9 +355,7 @@
 			action={movieResume
 				? (item.tagline ?? "Continue")
 				: (item.tagline ?? "Watch")}
-			remaining={movieResume
-				? `${movieRemainingMin} min left`
-				: undefined}
+			remaining={movieResume ? `${movieRemainingMin} min left` : undefined}
 			progress={movieResume ? movieProgress : 0}
 			loading={!movieResume && loadingStreams}
 			onclick={movieResume ? onresume! : onwatch!}
@@ -480,9 +459,7 @@
 				<div class="person-meta">
 					<Text size="sm">{person.name}</Text>
 					{#if person.character}
-						<Text size="xs" variant="secondary"
-							>{person.character}</Text
-						>
+						<Text size="xs" variant="secondary">{person.character}</Text>
 					{/if}
 				</div>
 			</div>
@@ -548,10 +525,7 @@
 					} satisfies DataItem),
 				item.directors?.length &&
 					({
-						label:
-							item.directors.length > 1
-								? "Directors"
-								: "Director",
+						label: item.directors.length > 1 ? "Directors" : "Director",
 						icon: "Clapperboard",
 						render: directorsVal,
 					} satisfies DataItem),

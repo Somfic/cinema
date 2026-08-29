@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT system FROM collection_meta WHERE slug = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "collection_meta",
+            "name": "system"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "754b5f4adeccd23e259e0df14ab2ca39d84f6c24538346f03d1dec9c37edc964"
+}

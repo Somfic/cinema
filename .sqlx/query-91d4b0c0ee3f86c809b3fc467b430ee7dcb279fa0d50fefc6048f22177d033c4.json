@@ -1,0 +1,174 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                mi.media_type as \"media_type: tmdb::MediaType\",\n                mi.tmdb_id,\n                mi.title,\n                mi.poster_path,\n                wh.season,\n                wh.episode,\n                d.info_hash as \"info_hash?\",\n                COALESCE(d.file_idx, 0) as \"file_idx!\",\n                wh.progress,\n                wh.duration,\n                wh.transcoding as \"transcoding: TranscodingOption\",\n                wh.last_watched\n            FROM watch_history wh\n            JOIN media_items mi ON mi.id = wh.media_id\n            LEFT JOIN downloads d ON d.id = wh.download_id\n            ORDER BY wh.last_watched DESC\n            LIMIT 20",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "media_type: tmdb::MediaType",
+        "type_info": {
+          "Custom": {
+            "name": "media_type",
+            "kind": {
+              "Enum": [
+                "movie",
+                "tv"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "media_type"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tmdb_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "tmdb_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "poster_path",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "media_items",
+            "name": "poster_path"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "season",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "watch_history",
+            "name": "season"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "episode",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "watch_history",
+            "name": "episode"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "info_hash?",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "info_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "file_idx!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "progress",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "watch_history",
+            "name": "progress"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "duration",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "watch_history",
+            "name": "duration"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "transcoding: TranscodingOption",
+        "type_info": {
+          "Custom": {
+            "name": "transcoding_option",
+            "kind": {
+              "Enum": [
+                "enabled",
+                "only-audio",
+                "disabled"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "watch_history",
+            "name": "transcoding"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "last_watched",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_history",
+            "name": "last_watched"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "91d4b0c0ee3f86c809b3fc467b430ee7dcb279fa0d50fefc6048f22177d033c4"
+}

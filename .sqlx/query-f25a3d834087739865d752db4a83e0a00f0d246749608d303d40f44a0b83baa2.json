@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            UPDATE pretranscodings\n                            SET status = 'completed',\n                                completed_at = CURRENT_TIMESTAMP,\n                                transcoded_ms = $2,\n                                total_ms = COALESCE(total_ms, $2),\n                                error = NULL\n                            WHERE id = $1 AND status = 'transcoding'\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f25a3d834087739865d752db4a83e0a00f0d246749608d303d40f44a0b83baa2"
+}

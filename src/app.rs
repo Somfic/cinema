@@ -11,10 +11,10 @@ use crate::config::Config;
 
 // ── Error ──
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, CinemaError>;
 
 #[derive(thiserror::Error, Debug)]
-pub enum Error {
+pub enum CinemaError {
     #[error("config error: {0}")]
     TomlError(#[from] toml::de::Error),
     #[error("database error: {0}")]
@@ -35,6 +35,8 @@ pub enum Error {
     #[error("{0}")]
     Generic(String),
     #[error("{0}")]
+    InvalidInput(String),
+    #[error("{0}")]
     NotFound(String),
     #[error("json error: {0}")]
     JsonError(#[from] serde_json::Error),
@@ -44,20 +46,25 @@ pub enum Error {
 // error type owns its HTTP mapping (0.1 routed it through a generated shim).
 // The body shape — `{ kind, message }` — matches the frontend's
 // `schema/error.ts::RpcErrorPayload`.
-impl axum::response::IntoResponse for Error {
+impl axum::response::IntoResponse for CinemaError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
         let (status, kind) = match &self {
-            Error::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
-            Error::HttpClientError(_) => (StatusCode::BAD_GATEWAY, "HttpClient"),
-            Error::TomlError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Toml"),
-            Error::DatabaseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database"),
-            Error::ConfigReadError { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "ConfigRead"),
-            Error::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Io"),
-            Error::MigrationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Migration"),
-            Error::AddressParseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "AddressParse"),
-            Error::Generic(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Generic"),
-            Error::JsonError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Json"),
+            CinemaError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
+            CinemaError::InvalidInput(_) => (StatusCode::BAD_REQUEST, "InvalidInput"),
+            CinemaError::HttpClientError(_) => (StatusCode::BAD_GATEWAY, "HttpClient"),
+            CinemaError::TomlError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Toml"),
+            CinemaError::DatabaseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database"),
+            CinemaError::ConfigReadError { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "ConfigRead")
+            }
+            CinemaError::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Io"),
+            CinemaError::MigrationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Migration"),
+            CinemaError::AddressParseError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "AddressParse")
+            }
+            CinemaError::Generic(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Generic"),
+            CinemaError::JsonError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Json"),
         };
         let body = axum::Json(serde_json::json!({
             "kind": kind,
@@ -69,11 +76,9 @@ impl axum::response::IntoResponse for Error {
 
 // ── Database ──
 
-pub type Pool = sqlx::AnyPool;
+pub type Pool = sqlx::PgPool;
 
-pub async fn create_pool(config: &Config) -> Result<Pool> {
-    sqlx::any::install_default_drivers();
-
+pub async fn create_pool(config: &Config) -> Result<sqlx::PgPool> {
     let url = if let Some(ref database_url) = config.database_url {
         database_url.clone()
     } else if let Ok(database_url) =
@@ -81,15 +86,14 @@ pub async fn create_pool(config: &Config) -> Result<Pool> {
     {
         database_url
     } else {
-        let dir = config.data_dir.join("db");
-        tokio::fs::create_dir_all(&dir).await?;
-        let db_path = dir.join("data.db");
-        format!("sqlite:{}?mode=rwc", db_path.display())
+        panic!(
+            "Database url not provided. Please set the `CINEMA_DATABASE_URL` environmental variable!"
+        );
     };
 
     tracing::info!("connecting to database at {url}");
 
-    let pool = sqlx::any::AnyPoolOptions::new()
+    let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect(&url)
         .await?;
@@ -101,7 +105,7 @@ pub async fn create_pool(config: &Config) -> Result<Pool> {
 
 // ── Storage ──
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Storage(Arc<PathBuf>);
 
 impl Storage {
@@ -110,6 +114,32 @@ impl Storage {
     }
     pub fn join(&self, p: impl AsRef<Path>) -> PathBuf {
         self.0.join(p)
+    }
+
+    /// Trailers, image thumbnails, and other transient caches
+    pub fn cache_dir(&self) -> PathBuf {
+        self.join("cache")
+    }
+
+    /// Parent directory of every per-info-hash torrent output folder.
+    /// Individual entries live at `torrents_dir(storage).join(info_hash)`
+    /// (see [`Download::output_path`](crate::downloads::types::Download::output_path)).
+    pub fn torrents_dir(&self) -> PathBuf {
+        self.join("torrents")
+    }
+
+    /// Parent directory of every pretranscoded MP4.
+    /// Individual entries live at `storage.pretranscoded_dir().join("{download_id}_{mode}_{audio_index}.mp4")`
+    /// (see [`PretranscodingOutputPath::new`]).
+    pub fn pretranscoded_dir(&self) -> PathBuf {
+        self.join("pretranscoded")
+    }
+
+    /// Parent directory for live HLS session subdirectories
+    /// (`hls/{session_id}/playlist.m3u8` + segments). Populated by the live
+    /// transcoding manager; cleaned up when a session ends.
+    pub fn hls_dir(&self) -> std::path::PathBuf {
+        self.join("hls")
     }
 }
 
@@ -155,7 +185,8 @@ pub struct AppContext {
     pub db: Pool,
     pub storage: Storage,
     pub config: Arc<Config>,
-    pub events: draad::runtime::EventBus,
+    pub event_bus: draad::runtime::EventBus,
+    pub events: crate::Events,
     /// draad's registry of live WS connections — server→client addressing and
     /// the basis for the `Caller` / `conn: &Conn` injection.
     pub conns: draad::runtime::Conns,
@@ -163,4 +194,6 @@ pub struct AppContext {
     /// `crate::ws`; broadcast on `remote_presence`.
     pub clients: ClientRoster,
     pub http: Client,
+    pub downloads: crate::downloads::Handle,
+    pub transcodings: crate::transcodings::Handle,
 }

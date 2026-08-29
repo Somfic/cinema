@@ -117,7 +117,7 @@ pub async fn fetch_tracks(
         .collect();
 
     // Sort by score descending — higher score subs tend to be better synced
-    tracks.sort_by(|a, b| b.score.cmp(&a.score));
+    tracks.sort_by_key(|b| std::cmp::Reverse(b.score));
     tracks
 }
 
@@ -181,11 +181,11 @@ fn clean_sdh(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for line in s.lines() {
         let mut cleaned = String::with_capacity(line.len());
-        let mut chars = line.chars().peekable();
+        let chars = line.chars().peekable();
         // Strip bracketed [...] and parenthesized (...) descriptions
         let mut depth_square = 0i32;
         let mut depth_paren = 0i32;
-        while let Some(c) = chars.next() {
+        for c in chars {
             match c {
                 '[' => depth_square += 1,
                 ']' => {

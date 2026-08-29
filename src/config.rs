@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::app::{Error, Result};
+use crate::app::{CinemaError, Result};
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -24,6 +24,8 @@ pub struct Config {
     pub subtitle_languages: Vec<String>,
     #[serde(default = "default_max_concurrent_downloads")]
     pub max_concurrent_downloads: usize,
+    #[serde(default = "default_max_concurrent_pretranscodings")]
+    pub max_concurrent_pretranscodings: usize,
     #[serde(default = "default_torrent_listen_port")]
     pub torrent_port: u16,
     #[serde(default = "default_dht_enabled")]
@@ -50,7 +52,7 @@ impl Config {
         match std::fs::read_to_string(path) {
             Ok(content) => Ok(toml::from_str(&content)?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml::from_str("")?),
-            Err(e) => Err(Error::ConfigReadError {
+            Err(e) => Err(CinemaError::ConfigReadError {
                 path: path.display().to_string(),
                 source: e,
             }),
@@ -71,6 +73,11 @@ impl Config {
             && let Ok(n) = v.parse()
         {
             self.max_concurrent_downloads = n;
+        }
+        if let Ok(v) = env::var("CINEMA_MAX_CONCURRENT_PRETRANSCODINGS")
+            && let Ok(n) = v.parse()
+        {
+            self.max_concurrent_pretranscodings = n;
         }
         if let Ok(v) = env::var("CINEMA_TORRENT_PORT")
             && let Ok(n) = v.parse()
@@ -125,6 +132,12 @@ fn default_data_dir() -> PathBuf {
 
 fn default_max_concurrent_downloads() -> usize {
     2
+}
+
+fn default_max_concurrent_pretranscodings() -> usize {
+    // ffmpeg + a single GPU is the bottleneck for full transcodes, and
+    // only-audio jobs are cheap enough not to need a bigger cap.
+    1
 }
 
 fn default_subtitle_languages() -> Vec<String> {
