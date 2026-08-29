@@ -3,7 +3,7 @@
 	import { fade } from "svelte/transition";
 	import type { Chapter, Stream } from "$lib/schema";
 	import Hls from "hls.js";
-	import { Button, Icon } from "glow";
+	import { Button, Icon, isOverlayOpen, onOverlayChange } from "glow";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
 	import PlayerControls from "./PlayerControls.svelte";
@@ -299,6 +299,22 @@
 		}
 	}
 
+	// A popover or menu opened from the controls portals to <body>, so pointer
+	// movement over it never reaches this container and the idle timer above
+	// would hide the controls, tearing down the menu the user is reading.
+	let overlayOpen = $state(false);
+	$effect(() => {
+		overlayOpen = isOverlayOpen();
+		return onOverlayChange((v) => (overlayOpen = v));
+	});
+
+	$effect(() => {
+		if (!overlayOpen) return;
+		controlsVisible = true;
+		cursorHidden = false;
+		clearTimeout(hideTimeout);
+		return () => showControls();
+	});
 	function handleKeydown(e: KeyboardEvent) {
 		if (!videoEl || tvMode) return;
 		switch (e.key) {
