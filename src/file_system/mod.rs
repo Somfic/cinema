@@ -61,8 +61,10 @@ fn fs_stats(path: &Path) -> Result<(SizeInBytes, SizeInBytes), CinemaError> {
 
         let frsize = stat.f_frsize;
 
-        let total = frsize.saturating_mul(stat.f_blocks);
-        let free = frsize.saturating_mul(stat.f_bavail);
+        // Darwin types `f_blocks`/`f_bavail` as u32 while Linux uses u64, so widen
+        // both explicitly; `u64::from` is the identity conversion on Linux.
+        let total = frsize.saturating_mul(u64::from(stat.f_blocks));
+        let free = frsize.saturating_mul(u64::from(stat.f_bavail));
         Ok((total, free))
     }
     #[cfg(not(unix))]
