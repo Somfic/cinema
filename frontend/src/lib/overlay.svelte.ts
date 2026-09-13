@@ -7,7 +7,7 @@
  * observer on <body> alone, without `subtree`, so nothing pays for it on every
  * DOM change during playback.
  */
-const OVERLAY_SELECTOR = [
+export const OVERLAY_SELECTOR = [
 	".popover-content",
 	".popover-sheet-root",
 	".context-menu",

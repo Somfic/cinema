@@ -4,7 +4,7 @@
 	import type { Chapter, Stream } from "$lib/schema";
 	import Hls from "hls.js";
 	import { Button, Icon } from "glow";
-	import { overlays, trackOverlays } from "$lib/overlay.svelte";
+	import { OVERLAY_SELECTOR, overlays, trackOverlays } from "$lib/overlay.svelte";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
 	import PlayerControls from "./PlayerControls.svelte";
@@ -282,9 +282,30 @@
 		if (document.fullscreenElement) {
 			document.exitFullscreen();
 		} else {
-			// Fullscreen the entire document so that portalled elements
-			// (popovers, menus) remain visible inside the fullscreen context.
-			document.documentElement.requestFullscreen();
+			// Fullscreen the player itself, not the document: the player is an
+			// overlay inside the page, so fullscreening <html> would keep the
+			// rail and the rest of the page chrome on screen around it.
+			// Portalled popovers are moved into the player below so they stay
+			// visible inside the fullscreen context.
+			containerEl?.requestFullscreen();
+		}
+	}
+
+	// The browser only paints the fullscreen element's subtree, and Glow's
+	// popovers/menus portal to <body> — outside it. While fullscreen, adopt
+	// them into the player (they are position:fixed, so they keep their
+	// viewport placement) and hand them back to <body> on exit.
+	function adoptOverlays() {
+		if (!containerEl || document.fullscreenElement !== containerEl) return;
+		for (const el of [...document.body.children]) {
+			if (el.matches(OVERLAY_SELECTOR)) containerEl.appendChild(el);
+		}
+	}
+
+	function releaseOverlays() {
+		if (!containerEl) return;
+		for (const el of [...containerEl.children]) {
+			if (el.matches(OVERLAY_SELECTOR)) document.body.appendChild(el);
 		}
 	}
 
@@ -437,6 +458,8 @@
 
 	function handleFullscreenChange() {
 		isFullscreen = !!document.fullscreenElement;
+		if (isFullscreen) adoptOverlays();
+		else releaseOverlays();
 	}
 
 	// The probed duration can arrive after metadata has loaded (HLS transcode);
@@ -469,8 +492,14 @@
 
 	$effect(() => {
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
-		return () =>
+		// Popovers open after the fullscreen switch portal straight to <body>;
+		// catch them as they land.
+		const observer = new MutationObserver(adoptOverlays);
+		observer.observe(document.body, { childList: true });
+		return () => {
+			observer.disconnect();
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
+		};
 	});
 
 	onDestroy(() => {
