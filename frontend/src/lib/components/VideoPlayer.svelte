@@ -3,7 +3,8 @@
 	import { fade } from "svelte/transition";
 	import type { Chapter, Stream } from "$lib/schema";
 	import Hls from "hls.js";
-	import { Button, Icon, isOverlayOpen, onOverlayChange } from "glow";
+	import { Button, Icon } from "glow";
+	import { overlays, trackOverlays } from "$lib/overlay.svelte";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
 	import PlayerControls from "./PlayerControls.svelte";
@@ -302,11 +303,8 @@
 	// A popover or menu opened from the controls portals to <body>, so pointer
 	// movement over it never reaches this container and the idle timer above
 	// would hide the controls, tearing down the menu the user is reading.
-	let overlayOpen = $state(false);
-	$effect(() => {
-		overlayOpen = isOverlayOpen();
-		return onOverlayChange((v) => (overlayOpen = v));
-	});
+	$effect(() => trackOverlays());
+	const overlayOpen = $derived(overlays.open);
 
 	$effect(() => {
 		if (!overlayOpen) return;

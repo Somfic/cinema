@@ -63,7 +63,7 @@
 		width: 100%;
 		height: 100%;
 		overflow-y: auto;
-		padding: 2rem;
+		padding: 1rem;
 		box-sizing: border-box;
 		/* No full-height frosted panel — the page blurs the backdrop image itself
 		   and shows the glow behind the season cards instead. */

@@ -298,10 +298,11 @@
 		}
 	});
 
-	// Reactively update pan position on all layers
+	// Reactively update pan position on all layers. `position` is an offset from
+	// centre, so 0% is centred and -13% pans left.
 	$effect(() => {
 		for (const el of [layerAEl, layerBEl, overrideAEl, overrideBEl]) {
-			if (el) el.style.transform = `translateX(${position})`;
+			if (el) el.style.backgroundPositionX = `calc(50% + ${position})`;
 		}
 	});
 
@@ -325,36 +326,37 @@
 
 	.layer {
 		position: absolute;
-		top: 0;
-		left: -15%;
-		width: 130%;
-		height: 100%;
-		/* `auto 100%` so the image always spans the full height and is never
-		   vertically zoomed/cropped — width follows aspect ratio (we don't care
-		   about horizontal coverage; the edge mask feathers any gap). */
-		background-size: auto 100%;
+		inset: 0;
+		/* `cover` rather than `auto 100%`: fitting to height alone left the image
+		   narrower than the container as soon as the panel was wider than the
+		   image's aspect ratio, which is exactly what a wide, short window does.
+		   The layer fills the container instead of overhanging it by 30%, so
+		   covering costs a small vertical crop rather than a large one. */
+		background-size: cover;
 		background-position: center center;
 		background-repeat: no-repeat;
-		/* Feather the left/right edges so the image fades softly into the dark
-		   background near the screen edges instead of ending hard. */
+		/* Feather the outer edges so the image resolves softly into the
+		   background instead of ending on a hard line. Kept narrow: this is an
+		   edge treatment, not a vignette, and a wide ramp reads as the backdrop
+		   failing to reach the sides. */
 		mask-image: linear-gradient(
 			to right,
-			transparent 3%,
-			#000 18%,
-			#000 82%,
-			transparent 97%
+			transparent 0%,
+			#000 4%,
+			#000 96%,
+			transparent 100%
 		);
 		-webkit-mask-image: linear-gradient(
 			to right,
-			transparent 3%,
-			#000 18%,
-			#000 82%,
-			transparent 97%
+			transparent 0%,
+			#000 4%,
+			#000 96%,
+			transparent 100%
 		);
 		opacity: 0;
 		transition:
 			opacity 1.5s ease,
-			transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+			background-position 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 	}
 
 	.override {
@@ -363,7 +365,7 @@
 
 	@media (max-width: 768px) {
 		.layer {
-			transform: none !important;
+			background-position: center center !important;
 		}
 	}
 </style>

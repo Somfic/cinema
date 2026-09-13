@@ -13,16 +13,11 @@
 	import TvHome from "$lib/components/TvHome.svelte";
 	import { remote } from "$lib/remote.svelte";
 	import { page } from "$app/state";
-	import { replaceState } from "$app/navigation";
-	import { setFocusSearch } from "$lib/topbar.svelte";
-	import { onDestroy, onMount } from "svelte";
+	import { goto, replaceState } from "$app/navigation";
+	import { onMount } from "svelte";
 	import { browser } from "$app/environment";
 	import { fade } from "svelte/transition";
 
-	let searchInput: HTMLInputElement | undefined;
-
-	setFocusSearch(() => searchInput?.focus());
-	onDestroy(() => setFocusSearch(null));
 
 	let query = $state(page.url.searchParams.get("q") ?? "");
 	let results = $state<SearchResult[]>([]);
@@ -238,7 +233,6 @@
 			value={query}
 			icon={"Search"}
 			{loading}
-			inputRef={(el) => (searchInput = el)}
 			onChange={(v) => {
 				query = v;
 				onInput();
@@ -264,8 +258,7 @@
 									mediaType={item.media_type}
 									tmdbId={item.tmdb_id}
 									progress={pct}
-									onclick={() =>
-										(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+									onclick={() => goto(`/${item.media_type}/${item.tmdb_id}`)}
 								>
 									{#snippet bottomLeft()}
 										<Text size="xs" variant="muted">
@@ -283,8 +276,7 @@
 									posterPath={item.poster_path}
 									mediaType={item.media_type}
 									tmdbId={item.tmdb_id}
-									onclick={() =>
-										(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+									onclick={() => goto(`/${item.media_type}/${item.tmdb_id}`)}
 								>
 									{#snippet bottomLeft()}
 										<Text size="xs" variant="muted">{item.title}</Text>
@@ -313,8 +305,7 @@
 							posterPath={item.poster_path}
 							mediaType={item.media_type}
 							tmdbId={item.tmdb_id}
-							onclick={() =>
-								(window.location.href = `/${item.media_type}/${item.tmdb_id}`)}
+							onclick={() => goto(`/${item.media_type}/${item.tmdb_id}`)}
 						>
 							{#snippet bottomLeft()}
 								<Text size="xs" variant="muted">{item.title}</Text>

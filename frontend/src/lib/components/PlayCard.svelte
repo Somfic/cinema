@@ -278,7 +278,9 @@
 		bottom: 0;
 		left: 0;
 		height: 3px;
-		background: var(--primary, #2563eb);
+		/* Tints with the colour pulled off the backdrop, so the bar belongs to
+		   the artwork it sits on rather than to the app chrome. */
+		background: var(--backdrop-accent, var(--primary, #2563eb));
 		z-index: 2;
 	}
 </style>

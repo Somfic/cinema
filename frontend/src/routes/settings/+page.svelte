@@ -530,6 +530,7 @@
 
 <style>
 	.page {
+		width: 100%;
 		max-width: 880px;
 		margin: 2rem auto;
 		padding: 0 1rem;

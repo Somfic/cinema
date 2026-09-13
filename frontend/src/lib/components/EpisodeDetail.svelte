@@ -184,10 +184,10 @@
 	}
 
 	.sidebar {
-		width: 35vw;
+		width: 35%;
 		height: 100%;
 		overflow-y: auto;
-		padding: 2rem;
+		padding: 1rem;
 		padding-top: 3.7rem;
 		display: flex;
 		flex-direction: column;

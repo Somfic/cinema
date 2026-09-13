@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from "$app/navigation";
 	import { type MediaItem, type WatchHistoryItem } from "$lib/schema";
 	import { api } from "$lib/api";
 	import { imageUrl } from "$lib/utils";
@@ -384,8 +385,7 @@
 							aspectRatio: "2/3",
 						}}
 						mediaLayout="overlay"
-						onclick={() =>
-							(window.location.href = `/${sim.media_type}/${sim.id}`)}
+						onclick={() => goto(`/${sim.media_type}/${sim.id}`)}
 					>
 						{#snippet bottomLeft()}
 							<Text size="xs" variant="on-image">{sim.title}</Text>
@@ -536,9 +536,9 @@
 
 <style>
 	.sidebar {
-		width: 40vw;
+		width: 40%;
 		min-height: 100%;
-		padding: 2rem;
+		padding: 1rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
@@ -623,11 +623,11 @@
 		position: absolute;
 		left: 0;
 		bottom: 0;
-		padding: 2rem;
+		padding: 1rem;
 		display: flex;
 		gap: 0.5rem;
 		flex-wrap: wrap;
-		max-width: 55vw;
+		max-width: 55%;
 		z-index: 2;
 	}
 
@@ -673,7 +673,9 @@
 		.genres-overlay {
 			top: 0;
 			bottom: auto;
-			padding: 0 1rem 1rem;
+			/* Starts below the rail toggle and back button, which share this
+			   corner on a phone. */
+			padding: 3rem 1rem 1rem;
 			flex-direction: column;
 			max-width: none;
 		}
