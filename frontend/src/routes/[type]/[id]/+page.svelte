@@ -14,7 +14,7 @@
 			item={title.item}
 			loadingStreams={title.loadingStreams}
 			resumeEntry={title.resumeEntry}
-			playing={false}
+			playing={title.playing}
 			tvMode={false}
 			onwatch={title.playMovie}
 			onresume={title.resume}

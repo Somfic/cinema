@@ -21,6 +21,8 @@ export type TitleContext = {
 	readonly episode: Episode | null;
 	readonly resumeEntry: WatchHistoryItem | null;
 	readonly loadingStreams: boolean;
+	/** True while the player overlay is up, so heroes can pause their trailers. */
+	readonly playing: boolean;
 	/** Play a movie from its first available stream. */
 	playMovie: () => void;
 	/** Play the episode the URL currently names, resuming if there is progress. */

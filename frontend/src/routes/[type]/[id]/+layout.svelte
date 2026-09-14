@@ -568,6 +568,9 @@
 		get loadingStreams() {
 			return loadingStreams;
 		},
+		get playing() {
+			return selectedStream !== null;
+		},
 		playMovie: loadAndPlayMovieStreams,
 		playEpisode,
 		resume,
