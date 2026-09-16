@@ -13,7 +13,7 @@ use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::watch;
 
-use crate::downloads::{FfmpegInputSpec, MediaSource};
+use crate::downloads::MediaSource;
 
 /// The last few ffmpeg stderr lines, shared between the monitor task and
 /// whoever is waiting for the session to come up.
@@ -97,18 +97,13 @@ pub(super) async fn spawn_live_ffmpeg(
         crate::app::CinemaError::Generic(format!("Failed to start ffmpeg HLS: {e}"))
     })?;
 
-    // For Engine sources we need to pump bytes into ffmpeg's stdin (so it
-    // blocks on missing pieces rather than hitting EOF). Disk sources use
-    // `-i <path>` and don't need a pump task.
-    let write_task = if let Some(source) = source
-        && matches!(source.ffmpeg_input_spec(), FfmpegInputSpec::Pipe)
-    {
-        let stdin = child.stdin.take().ok_or_else(|| {
-            crate::app::CinemaError::Generic("Failed to open ffmpeg stdin".into())
-        })?;
-        Some(source.spawn_stdin_pump(stdin).await?)
-    } else {
-        None
+    // Pump bytes into ffmpeg's stdin only when the command was actually built
+    // around `-i pipe:0`. The live path feeds Engine sources over the loopback
+    // stream route instead (see `ffmpeg::transcode`), so its child has no
+    // stdin and needs no pump; `child.stdin` is the honest signal either way.
+    let write_task = match (source, child.stdin.take()) {
+        (Some(source), Some(stdin)) => Some(source.spawn_stdin_pump(stdin).await?),
+        _ => None,
     };
 
     let (exit_tx, exit_rx) = watch::channel(None);
@@ -133,7 +128,7 @@ pub(super) async fn spawn_live_ffmpeg(
                         Ok(_) => {
                             let trimmed = line.trim();
                             if !trimmed.is_empty() {
-                                tracing::trace!(session = %sid, "ffmpeg: {trimmed}");
+                                tracing::debug!(session = %sid, "ffmpeg: {trimmed}");
                                 let mut tail = monitor_tail.lock().unwrap();
                                 if tail.len() >= STDERR_TAIL_LINES {
                                     tail.pop_front();

@@ -1,3 +1,20 @@
+/// Loopback URL for an Engine source's bytes, served by the range-capable
+/// stream route. Only meaningful for [`MediaSource::Engine`]; disk sources are
+/// handed their path directly.
+fn loopback_stream_url(config: &crate::Config, source: &crate::downloads::MediaSource) -> String {
+    match source {
+        crate::downloads::MediaSource::Engine {
+            info_hash,
+            file_idx,
+            ..
+        } => format!(
+            "http://127.0.0.1:{}/api/stream/{}/{}",
+            config.port, info_hash, file_idx
+        ),
+        crate::downloads::MediaSource::Disk { path } => path.display().to_string(),
+    }
+}
+
 pub(crate) async fn transcode(
     config: &crate::Config,
     source: &crate::downloads::MediaSource,
@@ -17,17 +34,27 @@ pub(crate) async fn transcode(
 
     let mut command = tokio::process::Command::new("ffmpeg");
     command.args(&pre_args);
-    // Disk sources read the file directly (cheap, no pump). Engine sources
-    // pipe through stdin so ffmpeg blocks on missing pieces rather than hitting
-    // premature EOF on a partial file.
+    // Hide the version banner: it's five lines of noise that crowd out the
+    // actual diagnostics in the stderr tail a failed startup reports.
+    command.arg("-hide_banner");
+
+    // Disk sources read the file directly (cheap). Engine sources read through
+    // the loopback stream route rather than a stdin pipe: it serves ranges
+    // through the same blocking, piece-aware reader, so ffmpeg still waits for
+    // missing pieces instead of hitting premature EOF, but it can also *seek*.
+    // That matters for MP4s whose `moov` atom sits at the end of the file —
+    // over a non-seekable pipe ffmpeg has to read the entire file before it can
+    // parse a single stream, which for a 4K release means it never produces a
+    // first segment before the startup timeout. (`audio_tracks` probes through
+    // this same route, for the same reason.)
     match source.ffmpeg_input_spec() {
         crate::downloads::FfmpegInputSpec::Path(p) => {
             command.arg("-i").arg(p);
             command.stdin(std::process::Stdio::null());
         }
         crate::downloads::FfmpegInputSpec::Pipe => {
-            command.args(["-i", "pipe:0"]);
-            command.stdin(std::process::Stdio::piped());
+            command.arg("-i").arg(loopback_stream_url(config, source));
+            command.stdin(std::process::Stdio::null());
         }
     }
     command
