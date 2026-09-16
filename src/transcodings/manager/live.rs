@@ -260,6 +260,7 @@ impl super::Handle {
                 }
             };
             let mut exit_error = session.exit_error.clone();
+            let stderr_tail = session.stderr_tail.clone();
 
             // Register the session in the map first so `wait_for_playlist_ready`
             // sees any startup-time ffmpeg errors and `hls_serve` can respond to
@@ -273,6 +274,7 @@ impl super::Handle {
             if let Err(err) = session::wait_for_playlist_ready(
                 &playlist_path,
                 &mut exit_error,
+                &stderr_tail,
                 self.0.config.ffmpeg_max_startup_duration,
                 self.0.config.ffmpeg_startup_poll_interval,
             )

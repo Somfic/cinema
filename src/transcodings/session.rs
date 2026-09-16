@@ -15,6 +15,24 @@ use tokio::sync::watch;
 
 use crate::downloads::{FfmpegInputSpec, MediaSource};
 
+/// The last few ffmpeg stderr lines, shared between the monitor task and
+/// whoever is waiting for the session to come up.
+pub(super) type StderrTail = Arc<std::sync::Mutex<VecDeque<String>>>;
+
+/// How many stderr lines to keep.
+const STDERR_TAIL_LINES: usize = 5;
+
+/// Formats the tail for an error message, or a placeholder when ffmpeg has
+/// said nothing at all.
+pub(super) fn format_tail(tail: &StderrTail) -> String {
+    let lines = tail.lock().unwrap();
+    if lines.is_empty() {
+        "(no ffmpeg output)".to_string()
+    } else {
+        lines.iter().cloned().collect::<Vec<_>>().join(" | ")
+    }
+}
+
 pub(super) struct LiveSession {
     pub(super) dir: PathBuf,
     pub(super) last_access: Instant,
@@ -27,6 +45,10 @@ pub(super) struct LiveSession {
     /// Receives the ffmpeg error message when the process exits with failure.
     /// `None` means still running, `Some(msg)` means exited with that error.
     pub(super) exit_error: watch::Receiver<Option<String>>,
+    /// Rolling tail of ffmpeg's stderr. A process that starts but never
+    /// produces a segment never populates `exit_error`, so this is the only
+    /// evidence a startup timeout has to report.
+    pub(super) stderr_tail: StderrTail,
     /// First handle is the monitor task that owns the ffmpeg `Child`.
     /// Aborting it drops the child, which kills the process via
     /// `kill_on_drop`.
@@ -90,6 +112,8 @@ pub(super) async fn spawn_live_ffmpeg(
     };
 
     let (exit_tx, exit_rx) = watch::channel(None);
+    let stderr_tail: StderrTail = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    let monitor_tail = stderr_tail.clone();
     let stderr = child.stderr.take();
     let sid = session_id.to_string();
     let span = tracing::Span::current();
@@ -99,8 +123,6 @@ pub(super) async fn spawn_live_ffmpeg(
     // that aborting this task drops the child and sends SIGKILL.
     let monitor_task = tokio::spawn(tracing::Instrument::instrument(
         async move {
-            let mut last_lines: VecDeque<String> = VecDeque::new();
-
             if let Some(stderr) = stderr {
                 let mut reader = BufReader::new(stderr);
                 let mut line = String::new();
@@ -112,10 +134,11 @@ pub(super) async fn spawn_live_ffmpeg(
                             let trimmed = line.trim();
                             if !trimmed.is_empty() {
                                 tracing::trace!(session = %sid, "ffmpeg: {trimmed}");
-                                if last_lines.len() >= 5 {
-                                    last_lines.pop_front();
+                                let mut tail = monitor_tail.lock().unwrap();
+                                if tail.len() >= STDERR_TAIL_LINES {
+                                    tail.pop_front();
                                 }
-                                last_lines.push_back(trimmed.to_string());
+                                tail.push_back(trimmed.to_string());
                             }
                         }
                         Err(e) => {
@@ -139,12 +162,10 @@ pub(super) async fn spawn_live_ffmpeg(
             if status.success() {
                 tracing::info!(session = %sid, input = %input_display, "ffmpeg finished successfully");
             } else {
-                let tail = if last_lines.is_empty() {
-                    "(no stderr output)".to_string()
-                } else {
-                    Vec::from(last_lines).join("\n")
-                };
-                let msg = format!("ffmpeg exited with {status}: {tail}");
+                let msg = format!(
+                    "ffmpeg exited with {status}: {}",
+                    format_tail(&monitor_tail)
+                );
                 tracing::warn!(session = %sid, input = %input_display, "ffmpeg failed: {msg}");
                 let _ = exit_tx.send(Some(msg));
             }
@@ -162,6 +183,7 @@ pub(super) async fn spawn_live_ffmpeg(
         last_access: Instant::now(),
         pool_id,
         exit_error: exit_rx,
+        stderr_tail,
         abort_handles,
     })
 }
@@ -173,6 +195,7 @@ pub(super) async fn spawn_live_ffmpeg(
 pub(super) async fn wait_for_playlist_ready(
     playlist_path: &Path,
     exit_error: &mut watch::Receiver<Option<String>>,
+    stderr_tail: &StderrTail,
     max_startup: std::time::Duration,
     poll_interval: std::time::Duration,
 ) -> crate::app::Result<()> {
@@ -199,9 +222,20 @@ pub(super) async fn wait_for_playlist_ready(
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(crate::app::CinemaError::Generic(String::from(
-            "ffmpeg startup timeout",
-        ))),
+        Err(_) => {
+            // ffmpeg is alive but hasn't written a segment. Its own last words
+            // are the only clue as to why - an unsupported codec for the
+            // container, a stalled input, a filter that won't initialise.
+            let tail = format_tail(stderr_tail);
+            tracing::warn!(
+                playlist = %playlist_path.display(),
+                "ffmpeg startup timeout after {max_startup:?}; last output: {tail}"
+            );
+            Err(crate::app::CinemaError::Generic(format!(
+                "ffmpeg startup timeout after {}s. Last ffmpeg output: {tail}",
+                max_startup.as_secs(),
+            )))
+        }
     }
 }
 
