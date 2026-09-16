@@ -910,7 +910,10 @@
 		gap: 0.75rem;
 		color: rgba(255, 255, 255, 0.85);
 		pointer-events: none;
-		z-index: 2;
+		/* Above the title treatment and the spinner (3), below the controls
+		   (5) and top bar (6): while casting, what the receiver is doing is
+		   the thing worth reading. */
+		z-index: 4;
 	}
 
 	.cast-device {

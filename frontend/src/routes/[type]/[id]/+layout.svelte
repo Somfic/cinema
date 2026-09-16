@@ -604,7 +604,12 @@
 <div class="title" style:--backdrop-accent={`rgb(${accentColor})`}>
 	{#if error}
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<div role="button" tabindex="0" onclick={() => (error = "")}>
+		<div
+			class="error-banner"
+			role="button"
+			tabindex="0"
+			onclick={() => (error = "")}
+		>
 			<Banner variant="error" label={error} />
 		</div>
 	{/if}
@@ -998,6 +1003,14 @@
 	}
 
 	/* ── Player ── */
+	/* The player overlay covers the whole page at z-index 10, so a playback
+	   error raised *while playing* — a failed transcode, a stream that won't
+	   start — would otherwise be painted underneath it and never seen. */
+	.error-banner {
+		position: relative;
+		z-index: 20;
+	}
+
 	.player-overlay {
 		position: absolute;
 		inset: 0;

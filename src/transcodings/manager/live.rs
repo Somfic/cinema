@@ -2,6 +2,12 @@ use std::{path::PathBuf, sync::atomic::Ordering, time::Instant};
 
 use crate::{transcodings::session, utils::supervisor_pool::Acquire};
 
+/// How many times to re-check for a freed capacity slot before reporting that
+/// the pool is full, and how long to wait between checks. Sized to cover an
+/// ffmpeg teardown (a kill + reap), not to paper over a genuinely busy pool.
+const RELEASE_RETRIES: usize = 20;
+const RELEASE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl super::Handle {
     /// Start (or reuse) a live HLS playback session for the given file. If a
     /// completed pretranscoded MP4 matches the request, that cached file is
@@ -169,6 +175,17 @@ impl super::Handle {
         .await
     }
 
+    async fn acquire_live_slot(&self, pool_id: i32) -> crate::app::Result<Acquire> {
+        self.0
+            .supervisor_pool
+            .acquire_evicting(
+                pool_id,
+                super::TranscodingPriority::Live as u8,
+                move |victim| async move { self.evict_pretranscoding_for_stream(victim).await },
+            )
+            .await
+    }
+
     async fn spawn_and_register_live(
         &self,
         command: tokio::process::Command,
@@ -184,15 +201,24 @@ impl super::Handle {
         // background pretranscoding if the pool is full. Live cannot evict
         // Live (both priority 255) - a second concurrent stream when all
         // slots are Live returns NoCapacity, surfaced to the caller.
-        let acquire = self
-            .0
-            .supervisor_pool
-            .acquire_evicting(
-                pool_id,
-                super::TranscodingPriority::Live as u8,
-                move |victim| async move { self.evict_pretranscoding_for_stream(victim).await },
-            )
-            .await?;
+        //
+        // Stopping a session only *signals* its supervisor: `stop_live`
+        // returns before the permit drops, which it does once ffmpeg is
+        // actually reaped. A client that closes one session and immediately
+        // opens another - switching transcoding mode, changing audio track,
+        // seeking outside the window - would race that teardown and get a
+        // spurious NoCapacity, so give an outgoing session a moment to
+        // release before giving up.
+        let mut acquire = self.acquire_live_slot(pool_id).await?;
+        if matches!(acquire, Acquire::NoCapacity) {
+            for _ in 0..RELEASE_RETRIES {
+                tokio::time::sleep(RELEASE_RETRY_INTERVAL).await;
+                acquire = self.acquire_live_slot(pool_id).await?;
+                if !matches!(acquire, Acquire::NoCapacity) {
+                    break;
+                }
+            }
+        }
 
         let slot = match acquire {
             Acquire::Acquired(slot) => slot,
