@@ -51,16 +51,27 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 		}));
 	});
 
-	// Casting needs a full re-encode, not just "transcoding on": the OnlyAudio
-	// mode stream-copies video, which hands the receiver whatever the torrent
-	// holds (HEVC, 10-bit, MPEG-2 …) and it silently refuses to play it. So
-	// force video through the encoder whenever a cast session is live.
+	// A receiver can't play the raw container, so casting always runs off an
+	// HLS session — but it doesn't need the video re-encoded. Audio-only
+	// transcode copies the video stream through and just normalises audio to
+	// stereo AAC, which is nearly free and keeps the source quality intact.
+	//
+	// Applied once when a session connects; a later choice in the player's
+	// transcoding menu is the user's, so it isn't overridden. If a particular
+	// file won't play on the receiver (a codec it can't decode), switching to
+	// "Audio + video" there re-encodes it.
+	let appliedCastTranscoding = false;
 	$effect(() => {
-		if (!cast.connected || !session.streamUrl) return;
-		if (session.transcoding.enabled && !session.transcoding.onlyAudio) return;
+		if (!cast.connected) {
+			appliedCastTranscoding = false;
+			return;
+		}
+		if (appliedCastTranscoding || !session.streamUrl) return;
+		appliedCastTranscoding = true;
+		if (session.transcoding.enabled && session.transcoding.onlyAudio) return;
 		session.transcoding.enabled = true;
-		session.transcoding.onlyAudio = false;
-		session.toggleTranscoding(true, false, ctx.currentTime());
+		session.transcoding.onlyAudio = true;
+		session.toggleTranscoding(true, true, ctx.currentTime());
 	});
 
 	// Push media to the receiver whenever the thing being played changes — a
