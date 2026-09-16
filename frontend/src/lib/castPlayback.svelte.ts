@@ -74,12 +74,30 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 		session.toggleTranscoding(true, true, ctx.currentTime());
 	});
 
+	let loadedUrl: string | null = null;
+	let loadedTrackCount = 0;
+
+	// Put the artwork on the TV the moment a session connects. A live transcode
+	// can take tens of seconds to produce its first segment, and until the
+	// receiver has been told to load something it shows nothing but its own
+	// ambient backdrop. Replaced by the real stream below.
+	let postedPoster = false;
+	$effect(() => {
+		if (!cast.connected) {
+			postedPoster = false;
+			return;
+		}
+		if (postedPoster || loadedUrl) return;
+		const image = ctx.image();
+		if (!image) return;
+		postedPoster = true;
+		cast.loadPoster(castAbsoluteUrl(image), ctx.title()).catch(() => { });
+	});
+
 	// Push media to the receiver whenever the thing being played changes — a
 	// new playlist (source switch, audio switch, seek-restart) or a fresh cast
 	// session. The last-loaded url keeps an unrelated state change from
 	// reloading the receiver mid-playback.
-	let loadedUrl: string | null = null;
-	let loadedTrackCount = 0;
 	$effect(() => {
 		if (!cast.connected) {
 			loadedUrl = null;

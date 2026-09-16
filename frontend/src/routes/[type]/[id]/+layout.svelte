@@ -75,11 +75,14 @@
 		currentTime: () => playerTime,
 		title: () => playerTitle ?? undefined,
 		subtitle: () => playerTopline ?? undefined,
+		// w1280 rather than the original: the receiver fetches this itself and
+		// only ever paints it on a TV, so a multi-megabyte 4K jpeg just delays
+		// the poster appearing.
 		image: () =>
 			activeEpisode?.stills?.[0]
-				? imageUrl(activeEpisode.stills[0], "original")
+				? imageUrl(activeEpisode.stills[0], "w1280")
 				: item?.backdrops?.[0]
-					? imageUrl(item.backdrops[0], "original")
+					? imageUrl(item.backdrops[0], "w1280")
 					: undefined,
 	});
 
