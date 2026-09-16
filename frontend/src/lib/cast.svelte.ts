@@ -29,7 +29,6 @@ export interface CastLoadRequest {
 	contentType: string;
 	title?: string;
 	subtitle?: string;
-	image?: string;
 	currentTime?: number;
 	tracks?: CastTextTrack[];
 	activeTrackId?: number | null;
@@ -242,12 +241,14 @@ class CastController {
 		);
 		info.streamType = chrome.cast.media.StreamType.BUFFERED;
 
+		// Deliberately no `images` here. The default receiver paints metadata
+		// artwork as the background *behind* the video, so it shows through the
+		// letterbox bars of anything that isn't exactly the panel's aspect ratio.
+		// Artwork belongs to `loadPoster`, which covers the gap before playback
+		// starts; once the stream is up the bars should just be black.
 		const metadata = new chrome.cast.media.GenericMediaMetadata();
 		if (request.title) metadata.title = request.title;
 		if (request.subtitle) metadata.subtitle = request.subtitle;
-		if (request.image) {
-			metadata.images = [new chrome.cast.Image(request.image)];
-		}
 		info.metadata = metadata;
 
 		const tracks = request.tracks ?? [];

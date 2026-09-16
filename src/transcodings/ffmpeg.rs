@@ -40,6 +40,19 @@ pub(crate) async fn transcode(
             command.stdin(std::process::Stdio::null());
         }
     }
+    // `first_pts=0` tells the resampler the first sample belongs at PTS 0, and
+    // it pads with silence to get there. That's right for a transcode starting
+    // at the beginning, but wrong under `-copyts` (any `start_time > 0`, i.e. a
+    // resume or a seek-restart): there the video keeps its absolute timestamps,
+    // so claiming audio starts at 0 prepends `start_time` worth of silence -
+    // half an hour of it, for a resume half an hour in. The receiver plays the
+    // video against that silence and the stream sounds mute.
+    let audio_filter = if start_time > 0.0 {
+        "aresample=async=1"
+    } else {
+        "aresample=async=1:first_pts=0"
+    };
+
     command
         .args(["-map", "0:v:0", "-map", &format!("0:a:{}", audio_index)])
         .args(&video.filter)
@@ -52,7 +65,7 @@ pub(crate) async fn transcode(
             "-ac",
             "2",
             "-af",
-            "aresample=async=1:first_pts=0",
+            audio_filter,
             "-f",
             "hls",
             // Short segments so the first one needs far less input data — critical

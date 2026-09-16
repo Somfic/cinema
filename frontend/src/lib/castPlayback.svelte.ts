@@ -17,7 +17,8 @@ export interface CastPlaybackContext {
 	currentTime: () => number;
 	title: () => string | undefined;
 	subtitle: () => string | undefined;
-	/** Poster/backdrop path — absolutised before it's handed over. */
+	/** Poster/backdrop path, shown on the TV while the stream spins up.
+	 *  Absolutised before it's handed over. */
 	image: () => string | undefined;
 }
 
@@ -112,7 +113,6 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 		if (url === loadedUrl && tracks.length === loadedTrackCount) return;
 
 		const startAt = ctx.currentTime();
-		const image = ctx.image();
 		const activeIndex = session.subtitleTracks.findIndex(
 			(t) => t.url === session.activeTrackUrl,
 		);
@@ -124,7 +124,6 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 				contentType: "application/x-mpegurl",
 				title: ctx.title(),
 				subtitle: ctx.subtitle(),
-				image: image ? castAbsoluteUrl(image) : undefined,
 				currentTime: startAt,
 				tracks,
 				activeTrackId: activeIndex >= 0 ? tracks[activeIndex]?.id : null,
