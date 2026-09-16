@@ -15,6 +15,7 @@
 	import { remote } from "$lib/remote.svelte";
 	import { settings } from "$lib/settings.svelte";
 	import { PlaybackSession } from "$lib/playback.svelte";
+	import { castPlayback } from "$lib/castPlayback.svelte";
 	import { setTitleContext } from "./context";
 
 	import { Banner, Button, Spinner, Glow } from "glow";
@@ -63,6 +64,23 @@
 		episode: () => selectedEpisode,
 		currentStream: () => selectedStream,
 		onError: (msg) => (error = msg),
+	});
+
+	// Chromecast: the receiver pulls the stream itself, so this hands it an
+	// HLS session it can play plus sideloaded captions. The standalone play
+	// route wires up the same bridge.
+	castPlayback({
+		session,
+		stream: () => selectedStream,
+		currentTime: () => playerTime,
+		title: () => playerTitle ?? undefined,
+		subtitle: () => playerTopline ?? undefined,
+		image: () =>
+			activeEpisode?.stills?.[0]
+				? imageUrl(activeEpisode.stills[0], "original")
+				: item?.backdrops?.[0]
+					? imageUrl(item.backdrops[0], "original")
+					: undefined,
 	});
 
 	// ── Derived ──

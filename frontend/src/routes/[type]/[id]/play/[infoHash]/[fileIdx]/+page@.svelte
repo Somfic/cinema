@@ -13,7 +13,7 @@
 	import VideoPlayer from "$lib/components/VideoPlayer.svelte";
 	import { remote, type PlayerControls } from "$lib/remote.svelte";
 	import { PlaybackSession } from "$lib/playback.svelte";
-	import { cast, castAbsoluteUrl, type CastTextTrack } from "$lib/cast.svelte";
+	import { castPlayback } from "$lib/castPlayback.svelte";
 
 	let item = $state<MediaItem | null>(null);
 	let error = $state<string | null>(null);
@@ -179,97 +179,16 @@
 		return () => clearInterval(interval);
 	});
 
-	// ── Chromecast ──
-	//
-	// A Chromecast can't decode most torrent containers, so casting always runs
-	// off the HLS transcode. The receiver fetches the playlist, segments, and
-	// caption files itself, which is why they're served with CORS headers and
-	// why every URL handed over has to be absolute.
-
-	// Caption tracks the receiver can sideload: the same list the inline player
-	// shows, re-pointed at the server's WebVTT renderings.
-	const castTextTracks = $derived.by<CastTextTrack[]>(() =>
-		session.subtitleTracks.map((track, i) => ({
-			// Cast track ids are numeric; index is stable for a given track list.
-			id: i + 1,
-			url: castAbsoluteUrl(
-				track.id.startsWith("embedded:")
-					? api.urls.embeddedSubtitles(
-							infoHash as string,
-							fileIdx,
-							Number(track.id.slice("embedded:".length)),
-						)
-					: api.urls.externalSubtitles(track.url),
-			),
-			label: track.language,
-			language: track.language,
-		})),
-	);
-
-	// Casting needs a full re-encode, not just "transcoding on": the OnlyAudio
-	// mode stream-copies video, which hands the receiver whatever the torrent
-	// holds (HEVC, 10-bit, MPEG-2 …) and it silently refuses to play it. So
-	// force video through the encoder whenever a cast session is live.
-	$effect(() => {
-		if (!cast.connected || !session.streamUrl) return;
-		if (session.transcoding.enabled && !session.transcoding.onlyAudio) return;
-		session.transcoding.enabled = true;
-		session.transcoding.onlyAudio = false;
-		session.toggleTranscoding(true, false, playerTime);
-	});
-
-	// Push media to the receiver whenever the thing being played changes — a
-	// new playlist (source switch, audio switch, seek-restart) or a fresh cast
-	// session. `castedUrl` keeps an unrelated state change from reloading the
-	// receiver mid-playback.
-	let castedUrl = $state<string | null>(null);
-	let castedTrackCount = $state(0);
-	$effect(() => {
-		if (!cast.connected) {
-			castedUrl = null;
-			return;
-		}
-		const url = session.streamUrl;
-		if (!url || !session.hlsSessionId) return;
-		const tracks = castTextTracks;
-		// Subtitles resolve a moment after playback starts, so a cast that
-		// began with none reloads once to pick them up — captions can't be
-		// added to media the receiver has already loaded.
-		if (url === castedUrl && tracks.length === castedTrackCount) return;
-
-		const startAt = playerTime;
-		const activeIndex = session.subtitleTracks.findIndex(
-			(t) => t.url === session.activeTrackUrl,
-		);
-		castedUrl = url;
-		castedTrackCount = tracks.length;
-		cast
-			.load({
-				url: castAbsoluteUrl(url),
-				contentType: "application/x-mpegurl",
-				title: playerTitle ?? undefined,
-				subtitle: playerTopline ?? undefined,
-				image: playerBackdrop ? castAbsoluteUrl(playerBackdrop) : undefined,
-				currentTime: startAt,
-				tracks,
-				activeTrackId: activeIndex >= 0 ? tracks[activeIndex]?.id : null,
-			})
-			.catch(() => {
-				// `cast.error` carries the reason; allow a retry on the next change.
-				castedUrl = null;
-				castedTrackCount = 0;
-			});
-	});
-
-	// Mirror subtitle selection onto the receiver once media is loaded.
-	$effect(() => {
-		if (!cast.connected || !cast.mediaLoaded) return;
-		const activeIndex = session.subtitleTracks.findIndex(
-			(t) => t.url === session.activeTrackUrl,
-		);
-		const id = activeIndex >= 0 ? castTextTracks[activeIndex]?.id : null;
-		if (id != null && !cast.hasTextTrack(id)) return;
-		cast.setTextTrack(session.activeCues.length > 0 ? (id ?? null) : null);
+	// Chromecast: the receiver pulls the stream itself, so this hands it an
+	// HLS session it can play plus sideloaded captions. Shared with the
+	// details page's in-page player.
+	castPlayback({
+		session,
+		stream: () => ({ info_hash: infoHash as string, file_idx: fileIdx }),
+		currentTime: () => playerTime,
+		title: () => playerTitle ?? undefined,
+		subtitle: () => playerTopline ?? undefined,
+		image: () => playerBackdrop,
 	});
 
 	// Switch source/quality by re-navigating the play route to the new stream.
