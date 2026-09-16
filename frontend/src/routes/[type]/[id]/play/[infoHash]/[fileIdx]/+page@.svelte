@@ -69,18 +69,6 @@
 	// of whether the browser can play the file inline.
 	const externalUrl = $derived(api.urls.stream(infoHash as string, fileIdx));
 
-	// Same image as `playerBackdrop`, at a size worth sending to a TV.
-	const castImage = $derived.by(() => {
-		if (mediaType === "tv" && season !== null && episode !== null) {
-			const still = item?.seasons
-				?.find((s) => s.season_number === season)
-				?.episodes?.find((e) => e.episode_number === episode)?.stills?.[0];
-			if (still) return imageUrl(still, "w1280");
-		}
-		const backdrop = item?.backdrops?.[0];
-		return backdrop ? imageUrl(backdrop, "w1280") : undefined;
-	});
-
 	const episodeName = $derived(() => {
 		if (!item || mediaType !== "tv" || season === null || episode === null)
 			return null;
@@ -200,9 +188,8 @@
 		currentTime: () => playerTime,
 		title: () => playerTitle ?? undefined,
 		subtitle: () => playerTopline ?? undefined,
-		// w1280 rather than the original: the receiver fetches this itself and
-		// only ever paints it on a TV.
-		image: () => castImage,
+		// `playerBackdrop` is already full-resolution, which is what a TV wants.
+		image: () => playerBackdrop,
 	});
 
 	// Switch source/quality by re-navigating the play route to the new stream.

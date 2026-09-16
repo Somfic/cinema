@@ -75,14 +75,13 @@
 		currentTime: () => playerTime,
 		title: () => playerTitle ?? undefined,
 		subtitle: () => playerTopline ?? undefined,
-		// w1280 rather than the original: the receiver fetches this itself and
-		// only ever paints it on a TV, so a multi-megabyte 4K jpeg just delays
-		// the poster appearing.
+		// Full resolution: this is painted across a TV, and TMDB's next size
+		// down (w1280) is visibly soft on a 4K panel.
 		image: () =>
 			activeEpisode?.stills?.[0]
-				? imageUrl(activeEpisode.stills[0], "w1280")
+				? imageUrl(activeEpisode.stills[0], "original")
 				: item?.backdrops?.[0]
-					? imageUrl(item.backdrops[0], "w1280")
+					? imageUrl(item.backdrops[0], "original")
 					: undefined,
 	});
 
