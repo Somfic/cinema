@@ -3,8 +3,9 @@
 	import { fade } from "svelte/transition";
 	import type { Chapter, Stream } from "$lib/schema";
 	import Hls from "hls.js";
-	import { Button, Icon } from "glow";
+	import { Button, Icon, toast } from "glow";
 	import { OVERLAY_SELECTOR, overlays, trackOverlays } from "$lib/overlay.svelte";
+	import { cast, castReachableOrigin } from "$lib/cast.svelte";
 	import GradientOverlay from "./GradientOverlay.svelte";
 	import Spinner from "./Spinner.svelte";
 	import PlayerControls from "./PlayerControls.svelte";
@@ -132,6 +133,39 @@
 	let videoEl = $state<HTMLVideoElement | undefined>(undefined);
 	let hls: Hls | null = null;
 
+	// Casting: playback lives on a Chromecast, so the local <video> is torn
+	// down and every control routes to the receiver instead. The UI stays the
+	// same — it just mirrors the receiver's state.
+	const casting = $derived(cast.connected);
+	// Where local playback should pick up when the cast session ends.
+	let localResumeAt = 0;
+
+	// Loads the Cast SDK once per page. No-ops outside Chromium, where the
+	// cast button then never appears.
+	$effect(() => {
+		cast.init();
+	});
+
+	// Only offer casting for real playback, and only once the SDK has seen a
+	// receiver on the network.
+	const castAvailable = $derived(
+		!!src && cast.supported && (cast.deviceAvailable || cast.connected),
+	);
+
+	function toggleCast() {
+		if (cast.connected) {
+			cast.endSession();
+			return;
+		}
+		if (!castReachableOrigin()) {
+			toast.warning(
+				"Open Cinema on its network address — a Chromecast can't reach localhost.",
+			);
+			return;
+		}
+		cast.requestSession();
+	}
+
 	const defaultOffset = -0.25;
 
 	let muted = $state(false);
@@ -210,6 +244,10 @@
 	}
 
 	export function togglePlay() {
+		if (casting) {
+			cast.togglePlay();
+			return;
+		}
 		if (!videoEl) return;
 		if (videoEl.paused) {
 			videoEl.play().catch(() => {});
@@ -222,10 +260,18 @@
 	// can drive playback through the remote store. Thin wrappers over the same
 	// internals the on-screen controls use.
 	export function play() {
+		if (casting) {
+			cast.play();
+			return;
+		}
 		videoEl?.play().catch(() => {});
 	}
 
 	export function pause() {
+		if (casting) {
+			cast.pause();
+			return;
+		}
 		videoEl?.pause();
 	}
 
@@ -235,6 +281,10 @@
 	}
 
 	export function setVolumeValue(value: number) {
+		if (casting) {
+			cast.setVolume(value);
+			return;
+		}
 		volume = Math.max(0, Math.min(1, value));
 		if (videoEl) {
 			videoEl.volume = volume;
@@ -253,6 +303,17 @@
 	}
 
 	export function seekTo(time: number) {
+		if (casting) {
+			// The receiver can only seek inside what the transcode has
+			// produced so far; past that, restart the transcode at the target
+			// (same rule as the local player's `withinSeekable` check).
+			if (onSeekRestart && isHls && cast.duration > 0 && time > cast.duration) {
+				onSeekRestart(time);
+				return;
+			}
+			cast.seekTo(time);
+			return;
+		}
 		if (!videoEl) return;
 		// During transcoding, a seek past the transcoded segments has no media to
 		// play — restart the transcode at the target instead of a native seek.
@@ -264,6 +325,10 @@
 	}
 
 	export function toggleMute() {
+		if (casting) {
+			cast.toggleMute();
+			return;
+		}
 		if (muted) {
 			volume = volumeBeforeMute || 0.5;
 			muted = false;
@@ -388,6 +453,17 @@
 
 	function initVideo() {
 		if (!videoEl || !src) return;
+		// A cast session owns playback; don't also buffer it locally.
+		if (casting) {
+			if (hls) {
+				hls.destroy();
+				hls = null;
+			}
+			videoEl.pause();
+			videoEl.removeAttribute("src");
+			videoEl.load();
+			return;
+		}
 		loading = true;
 		streamError = null;
 
@@ -462,6 +538,23 @@
 		else releaseOverlays();
 	}
 
+	// Mirror the receiver's playback state onto the same fields the local
+	// player writes, so the controls, scrubber, and any paired remote read one
+	// consistent source regardless of where the video is actually playing.
+	$effect(() => {
+		if (!casting) return;
+		currentTime = cast.currentTime;
+		duration = knownDuration > 0 ? knownDuration : cast.duration;
+		// Everything the receiver has is playable, so the loaded window
+		// doubles as the buffered bar.
+		buffered = cast.duration;
+		paused = cast.paused;
+		volume = cast.volume;
+		muted = cast.muted;
+		loading = !cast.mediaLoaded || cast.buffering;
+		localResumeAt = cast.currentTime;
+	});
+
 	// The probed duration can arrive after metadata has loaded (HLS transcode);
 	// keep the scrubber total in sync once it does.
 	$effect(() => {
@@ -469,6 +562,9 @@
 	});
 
 	$effect(() => {
+		// `casting` is read so a session starting or ending re-runs this:
+		// starting tears the local player down, ending rebuilds it.
+		casting;
 		if (videoEl && src) {
 			initVideo();
 		} else if (videoEl && !src) {
@@ -540,6 +636,18 @@
 	</div>
 {/snippet}
 
+{#snippet castButton()}
+	{#if castAvailable}
+		<Button
+			variant="ghost"
+			icon={cast.connected
+				? { name: "Cast" as const, color: "var(--accent)" }
+				: "Cast"}
+			onclick={toggleCast}
+		/>
+	{/if}
+{/snippet}
+
 <svelte:window onkeydown={handleKeydown} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -585,7 +693,11 @@
 				// knownDuration is set only for HLS transcode sessions, where
 				// videoEl.duration covers just the segments produced so far.
 				duration = knownDuration > 0 ? knownDuration : videoEl.duration;
-				if (startTime > 0) {
+				// Handing back from a Chromecast resumes where it left off.
+				if (localResumeAt > 0) {
+					videoEl.currentTime = localResumeAt;
+					localResumeAt = 0;
+				} else if (startTime > 0) {
 					videoEl.currentTime = startTime;
 				}
 			}
@@ -646,7 +758,19 @@
 		<Icon name="Pause" size={48} />
 	</div>
 
-	<div class="subtitles-container">
+	{#if casting}
+		<div class="cast-overlay" transition:fade={{ duration: 150 }}>
+			<Icon name="Cast" size={40} />
+			<span class="cast-device">
+				Playing on {cast.deviceName ?? "Chromecast"}
+			</span>
+			{#if cast.error}
+				<span class="cast-error">{cast.error}</span>
+			{/if}
+		</div>
+	{/if}
+
+	<div class="subtitles-container" class:hidden={casting}>
 		{#each nearbyCues as cue (cue.start)}
 			<div
 				class="subtitle-line"
@@ -720,6 +844,7 @@
 				{onSubtitleOff}
 				{onTranscodingChange}
 				subtitleOffsetControl={subtitleOffsetControls}
+				rightExtra={castButton}
 			/>
 		</div>
 
@@ -772,6 +897,34 @@
 		object-fit: contain;
 		display: block;
 		cursor: pointer;
+	}
+
+	/* ── Cast overlay ── */
+	.cast-overlay {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.75rem;
+		color: rgba(255, 255, 255, 0.85);
+		pointer-events: none;
+		z-index: 2;
+	}
+
+	.cast-device {
+		font-size: 1rem;
+		letter-spacing: 0.01em;
+	}
+
+	.cast-error {
+		font-size: 0.85rem;
+		color: #fca5a5;
+	}
+
+	.subtitles-container.hidden {
+		display: none;
 	}
 
 	/* ── Title overlay (single element, always mounted) ── */

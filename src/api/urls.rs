@@ -25,4 +25,17 @@ pub trait Urls {
     /// Trailer video bytes for a YouTube key.
     #[get("/api/trailer/{key}")]
     fn trailer(key: String);
+
+    /// An external subtitle track rendered as WebVTT. `{url}` is the upstream
+    /// SRT url, percent-encoded into a single path segment. Cast receivers
+    /// sideload captions by URL rather than taking in-page cues, so the same
+    /// tracks the inline player draws itself are also served as a file here.
+    #[get("/api/subtitles/external/{url}")]
+    fn external_subtitles(url: String);
+
+    /// An embedded subtitle track of a torrent file, rendered as WebVTT.
+    /// `{stream_index}` is the ffmpeg stream index (the number encoded in the
+    /// frontend's `embedded:<n>` track ids).
+    #[get("/api/subtitles/embedded/{info_hash}/{file_idx}/{stream_index}")]
+    fn embedded_subtitles(info_hash: String, file_idx: i64, stream_index: i64);
 }

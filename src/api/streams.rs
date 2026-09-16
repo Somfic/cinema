@@ -360,7 +360,7 @@ impl AppContext {
     /// Loopback URL for this file's range-served bytes, so ffprobe/ffmpeg read
     /// through the blocking torrent reader (the [`crate::urls::STREAM`] route)
     /// rather than the sparse on-disk file.
-    fn stream_url(&self, info_hash: &str, file_idx: i64) -> String {
+    pub(crate) fn stream_url(&self, info_hash: &str, file_idx: i64) -> String {
         format!(
             "http://127.0.0.1:{}/api/stream/{}/{}",
             self.config.port, info_hash, file_idx

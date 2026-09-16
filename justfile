@@ -29,15 +29,17 @@ db:
 # `just schema` once to create it); skips the database and the Rust build.
 # Run only the vite dev server, against an already-running backend.
 frontend:
-    cd frontend && bun run dev -- --strictPort
+    cd frontend && bun run dev -- --strictPort --host
 
 # concurrently is resolved from frontend's node_modules, so run it from there
 # and bounce back to the root for cargo. `-k` tears down both if either exits.
+# `--host` exposes vite on the LAN: a Chromecast fetches the stream from the
+# dev server itself, so a localhost-only origin hands it a URL it can't reach.
 # Run the backend and the vite dev server side by side.
 dev: schema
     cd frontend && bunx concurrently -k -n backend,frontend -c blue,green \
         "cd .. && cargo run" \
-        "bun run dev -- --strictPort"
+        "bun run dev -- --strictPort --host"
 
 build: schema
     cargo build --release

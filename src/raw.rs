@@ -4,10 +4,11 @@
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::http::header;
+use axum::http::{Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::app::{AppContext, CinemaError};
 
@@ -21,6 +22,78 @@ pub fn router() -> Router<AppContext> {
         .route(crate::urls::IMAGE, get(image_proxy))
         .route(crate::urls::FILE, get(serve_file))
         .route(crate::urls::TRAILER, get(serve_trailer))
+        .route(crate::urls::EXTERNAL_SUBTITLES, get(external_subtitles))
+        .route(crate::urls::EMBEDDED_SUBTITLES, get(embedded_subtitles))
+        // A Chromecast fetches media itself, from its own origin-less context:
+        // its media player requires CORS headers on HLS playlists/segments and
+        // on sideloaded caption files, or the load fails outright. These routes
+        // serve public bytes on a trusted LAN, so allow any origin.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::HEAD, Method::OPTIONS])
+                .allow_headers(Any)
+                .expose_headers(Any),
+        )
+}
+
+/// Renders cues as a WebVTT file. Cue text is already tag-stripped by the SRT
+/// parser, so only the VTT-significant characters need escaping.
+fn vtt_response(cues: &[crate::subtitles::SubtitleCue]) -> axum::response::Response {
+    fn timestamp(seconds: f64) -> String {
+        let seconds = seconds.max(0.0);
+        let total_ms = (seconds * 1000.0).round() as u64;
+        let ms = total_ms % 1000;
+        let total_s = total_ms / 1000;
+        format!(
+            "{:02}:{:02}:{:02}.{:03}",
+            total_s / 3600,
+            (total_s % 3600) / 60,
+            total_s % 60,
+            ms
+        )
+    }
+
+    let mut body = String::from("WEBVTT\n\n");
+    for cue in cues {
+        body.push_str(&timestamp(cue.start));
+        body.push_str(" --> ");
+        body.push_str(&timestamp(cue.end));
+        body.push('\n');
+        body.push_str(&cue.text.replace('&', "&amp;").replace('<', "&lt;"));
+        body.push_str("\n\n");
+    }
+
+    (
+        [
+            (header::CONTENT_TYPE, "text/vtt; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// WebVTT for an upstream SRT url (OpenSubtitles etc.), fetched and parsed
+/// server-side so a cast receiver can sideload it.
+async fn external_subtitles(
+    State(ctx): State<AppContext>,
+    Path(url): Path<String>,
+) -> Result<axum::response::Response, RawError> {
+    let cues = crate::subtitles::fetch_cues(&ctx.http, &url).await;
+    Ok(vtt_response(&cues))
+}
+
+/// WebVTT for a subtitle track embedded in a torrent file. Extraction reads
+/// through the loopback stream route, so a still-downloading file works.
+async fn embedded_subtitles(
+    State(ctx): State<AppContext>,
+    Path((info_hash, file_idx, stream_index)): Path<(String, i64, i64)>,
+) -> Result<axum::response::Response, RawError> {
+    let url = ctx.stream_url(&info_hash, file_idx);
+    let cues =
+        crate::downloads::TorrentEngine::extract_subtitle_cues(&url, stream_index as usize).await;
+    Ok(vtt_response(&cues))
 }
 
 #[derive(serde::Deserialize)]
