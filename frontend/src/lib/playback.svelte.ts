@@ -79,7 +79,7 @@ export class PlaybackSession {
 		stream: { info_hash: string; file_idx: number },
 		options?: { startAt?: number; transcoding?: TranscodingOption },
 	): Promise<void> {
-		this.stopHlsSession();
+		await this.stopHlsSession();
 		this.#resetState();
 		await this.#stopStream();
 
@@ -363,7 +363,7 @@ export class PlaybackSession {
 		onlyAudio: boolean,
 		startAt = 0,
 	): Promise<void> {
-		this.stopHlsSession();
+		await this.stopHlsSession();
 		this.streamUrl = null;
 		if (this.#currentlyPlaying && (this.#currentlyPlaying.info_hash !== hash || this.#currentlyPlaying.file_idx !== idx)) {
 			await this.#stopStream();
@@ -396,11 +396,15 @@ export class PlaybackSession {
 		}
 	}
 
-	stopHlsSession(): void {
-		if (this.hlsSessionId) {
-			api.hls.stop(this.hlsSessionId).catch(() => { });
-			this.hlsSessionId = null;
-		}
+	// Resolves once the server has actually torn the session down. Live
+	// transcode slots are exclusive — capacity defaults to 1 and a Live job
+	// can't evict another Live job — so anything starting a new session has to
+	// await this first, or the next `remux` is rejected with "No capacity".
+	async stopHlsSession(): Promise<void> {
+		const sessionId = this.hlsSessionId;
+		if (!sessionId) return;
+		this.hlsSessionId = null;
+		await api.hls.stop(sessionId).catch(() => { });
 	}
 
 	// Progress
