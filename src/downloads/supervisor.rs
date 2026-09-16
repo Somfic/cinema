@@ -132,19 +132,31 @@ impl Supervisor {
                 break;
             }
 
+            // `stats.finished` is librqbit's *selected-set* completion flag, so
+            // it is trivially true while the torrent has nothing selected —
+            // which is the case for the moment between adding a torrent and
+            // the file selection landing. Marking the row completed there
+            // persists an `output_path` to a file that is still a hole on
+            // disk, and every later read takes the "it's on disk" fast path
+            // and gets zeroes (ffmpeg: "Invalid data found when processing
+            // input"). Require actual bytes before believing it.
+            let complete = stats.finished
+                && stats.total_bytes > 0
+                && stats.progress_bytes >= stats.total_bytes;
+
             self.events.downloads.emit_progress(&DownloadProgress {
                 download_id: self.download_id,
                 downloaded_bytes: stats.progress_bytes,
                 total_bytes: stats.total_bytes,
                 download_speed_mbps: stats.live.map(|live| live.download_speed.mbps),
-                status: if stats.finished {
+                status: if complete {
                     super::types::DownloadStatus::Completed
                 } else {
                     super::types::DownloadStatus::Downloading
                 },
             });
 
-            if stats.finished {
+            if complete {
                 // Resolve the on-disk path while the torrent is still loaded,
                 // and persist it storage-relative so consumers can bypass the
                 // engine for completed downloads.

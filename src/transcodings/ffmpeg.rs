@@ -1,20 +1,3 @@
-/// Loopback URL for an Engine source's bytes, served by the range-capable
-/// stream route. Only meaningful for [`MediaSource::Engine`]; disk sources are
-/// handed their path directly.
-fn loopback_stream_url(config: &crate::Config, source: &crate::downloads::MediaSource) -> String {
-    match source {
-        crate::downloads::MediaSource::Engine {
-            info_hash,
-            file_idx,
-            ..
-        } => format!(
-            "http://127.0.0.1:{}/api/stream/{}/{}",
-            config.port, info_hash, file_idx
-        ),
-        crate::downloads::MediaSource::Disk { path } => path.display().to_string(),
-    }
-}
-
 pub(crate) async fn transcode(
     config: &crate::Config,
     source: &crate::downloads::MediaSource,
@@ -53,7 +36,7 @@ pub(crate) async fn transcode(
             command.stdin(std::process::Stdio::null());
         }
         crate::downloads::FfmpegInputSpec::Pipe => {
-            command.arg("-i").arg(loopback_stream_url(config, source));
+            command.arg("-i").arg(source.coherent_input(config));
             command.stdin(std::process::Stdio::null());
         }
     }
