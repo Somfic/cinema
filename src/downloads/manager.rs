@@ -122,6 +122,37 @@ impl Handle {
         Ok((id, self.start(id, priority).await?))
     }
 
+    /// Point the swarm at the part of the file playback is about to start
+    /// from, given as a position in seconds.
+    ///
+    /// Best-effort: a seek is worth making faster but never worth failing
+    /// over, so an unknown duration or a download with no active stream just
+    /// leaves prioritisation where it was.
+    pub async fn prioritize_position(&self, info_hash: &str, file_idx: i32, position: f64) {
+        if position <= 0.0 {
+            return;
+        }
+        let engine = super::TorrentEngine::get();
+        let key = super::engine::EngineKey::from((info_hash.to_string(), file_idx as usize));
+
+        // Probe the sparse file rather than the loopback stream route: this is
+        // on the path to starting playback, and a local header read costs
+        // nothing next to an HTTP round-trip that blocks on pieces. Containers
+        // that keep their duration at the end of the file simply don't answer,
+        // and then there's nothing to convert a timestamp with.
+        let Ok(path) = engine.file_path(info_hash, file_idx as usize) else {
+            return;
+        };
+        let Some(duration) = super::TorrentEngine::probe_duration(&path).await else {
+            return;
+        };
+        if duration <= 0.0 {
+            return;
+        }
+
+        engine.seek_stream_handle(&key, position / duration).await;
+    }
+
     /// Start (or resume) a download. Blocks until the supervisor has been
     /// spawned and the engine has the torrent loaded and the requested file
     /// selected, or returns a non-`Started` outcome that explains why no

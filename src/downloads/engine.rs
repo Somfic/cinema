@@ -392,6 +392,52 @@ impl TorrentEngine {
         Ok(())
     }
 
+    /// Move the file's persistent prioritisation stream to the byte offset
+    /// `fraction` of the way through it.
+    ///
+    /// librqbit queues a 32MB window of pieces ahead of *each* registered
+    /// stream and round-robins between them, so a stream's position is the
+    /// only thing that tells the swarm which part of the file to fetch. The
+    /// handle registered by [`select_file`] never moves on its own: it stays
+    /// at byte 0 for the file's whole lifetime, which is fine while playback
+    /// runs forward from the start and useless the moment a viewer jumps
+    /// ahead - half the piece requests keep going to the part of the file
+    /// they just left. Repositioning it points the download at where they
+    /// actually are.
+    ///
+    /// Returns false when the file has no registered stream (a completed
+    /// download reading from disk, which needs no prioritisation).
+    pub(super) async fn seek_stream_handle(&self, key: &EngineKey, fraction: f64) -> bool {
+        use tokio::io::AsyncSeekExt;
+
+        let mut handles = self.stream_handles.lock().await;
+        let Some(reader) = handles.get_mut(key) else {
+            return false;
+        };
+        if reader.len == 0 {
+            return false;
+        }
+        // The last byte is never a useful start point, and a fraction can
+        // arrive slightly out of range from a rounded duration.
+        let offset = ((reader.len as f64) * fraction.clamp(0.0, 1.0)) as u64;
+        let offset = offset.min(reader.len - 1);
+        match reader.seek(std::io::SeekFrom::Start(offset)).await {
+            Ok(_) => {
+                tracing::debug!(
+                    info_hash = %key.info_hash,
+                    file_idx = key.file_idx,
+                    offset,
+                    "Repositioned prioritisation stream",
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!(?e, "Failed to reposition prioritisation stream");
+                false
+            }
+        }
+    }
+
     /// Stop a file from the selected torrent and release its prioritization
     /// stream. The torrent itself is left in the session unless it is the last file,
     /// in which case it is removed. Files are kept on disk.

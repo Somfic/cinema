@@ -86,6 +86,18 @@ impl super::Handle {
         )
         .await?;
 
+        // ffmpeg reads this file at download speed, so a seek is only as fast
+        // as the swarm delivering the pieces under it. ffmpeg will pull piece
+        // priority to `start_time` itself once it opens its input - but not
+        // until it has been spawned and has read far enough to issue the
+        // range request, and meanwhile the download is still working through
+        // the part of the file we just left. Aim the swarm first, so those
+        // pieces are already in flight while ffmpeg starts up.
+        self.0
+            .downloads_manager
+            .prioritize_position(info_hash, file_idx, start_time)
+            .await;
+
         self.start_live_transcode(source, audio_index, only_audio, start_time)
             .await
     }
