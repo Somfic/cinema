@@ -57,6 +57,7 @@
 		onReveal,
 		knownDuration = 0,
 		startTime = 0,
+		timeOffset = 0,
 		streamStats = null,
 		pieceMap = [],
 		transcoding = $bindable({ enabled: true, onlyAudio: false }),
@@ -102,6 +103,11 @@
 		onReveal?: () => void;
 		knownDuration?: number;
 		startTime?: number;
+		/** Absolute time the current HLS session's timeline begins at. The
+		 *  session itself always runs from zero, so this is what turns its
+		 *  media time into a position in the file - and back again for a seek.
+		 *  Zero for direct (non-transcoded) playback, which is already whole. */
+		timeOffset?: number;
 		currentTime?: number;
 		duration?: number;
 		streamStats?: {
@@ -195,6 +201,11 @@
 	let hideTimeout: ReturnType<typeof setTimeout>;
 	let volumeBeforeMute = 1;
 	let clickTimeout: ReturnType<typeof setTimeout>;
+	// Target of a seek that restarted the transcode. The restarted session is
+	// a fresh `src`, so it loads like a first load - but `startTime` belongs to
+	// the stream's original start (a resume point), and applying it here would
+	// pull playback straight back to where it was before the seek.
+	let seekRestartTarget: number | null = null;
 
 	const isHls = $derived(src?.includes(".m3u8") || src?.includes("playlist"));
 
@@ -295,9 +306,10 @@
 
 	function withinSeekable(time: number): boolean {
 		if (!videoEl) return false;
+		const t = time - timeOffset;
 		const r = videoEl.seekable;
 		for (let i = 0; i < r.length; i++) {
-			if (time >= r.start(i) - 1 && time <= r.end(i) + 0.5) return true;
+			if (t >= r.start(i) - 1 && t <= r.end(i) + 0.5) return true;
 		}
 		return false;
 	}
@@ -305,23 +317,32 @@
 	export function seekTo(time: number) {
 		if (casting) {
 			// The receiver can only seek inside what the transcode has
-			// produced so far; past that, restart the transcode at the target
-			// (same rule as the local player's `withinSeekable` check).
-			if (onSeekRestart && isHls && cast.duration > 0 && time > cast.duration) {
+			// produced so far, and that window also has a floor: a session
+			// started mid-file holds nothing before its start. Outside either
+			// end, restart the transcode at the target (same rule as the local
+			// player's `withinSeekable` check).
+			const produced = timeOffset + cast.duration;
+			if (
+				onSeekRestart &&
+				isHls &&
+				(time < timeOffset - 1 || (cast.duration > 0 && time > produced))
+			) {
+				seekRestartTarget = time;
 				onSeekRestart(time);
 				return;
 			}
-			cast.seekTo(time);
+			cast.seekTo(time - timeOffset);
 			return;
 		}
 		if (!videoEl) return;
 		// During transcoding, a seek past the transcoded segments has no media to
 		// play — restart the transcode at the target instead of a native seek.
 		if (isHls && onSeekRestart && !withinSeekable(time)) {
+			seekRestartTarget = time;
 			onSeekRestart(time);
 			return;
 		}
-		videoEl.currentTime = time;
+		videoEl.currentTime = time - timeOffset;
 	}
 
 	export function toggleMute() {
@@ -526,9 +547,13 @@
 
 	function handleTimeUpdate() {
 		if (!videoEl) return;
-		currentTime = videoEl.currentTime;
+		// Everything this component exposes - the scrubber, subtitle timing,
+		// saved progress - is a position in the file, so lift the session's
+		// media time by its offset.
+		currentTime = timeOffset + videoEl.currentTime;
 		if (videoEl.buffered.length > 0) {
-			buffered = videoEl.buffered.end(videoEl.buffered.length - 1);
+			buffered =
+				timeOffset + videoEl.buffered.end(videoEl.buffered.length - 1);
 		}
 	}
 
@@ -543,16 +568,19 @@
 	// consistent source regardless of where the video is actually playing.
 	$effect(() => {
 		if (!casting) return;
-		currentTime = cast.currentTime;
-		duration = knownDuration > 0 ? knownDuration : cast.duration;
+		// The receiver plays the same zero-based session the local player
+		// would, so its media time needs the same lift into file positions.
+		currentTime = timeOffset + cast.currentTime;
+		duration =
+			knownDuration > 0 ? knownDuration : timeOffset + cast.duration;
 		// Everything the receiver has is playable, so the loaded window
 		// doubles as the buffered bar.
-		buffered = cast.duration;
+		buffered = timeOffset + cast.duration;
 		paused = cast.paused;
 		volume = cast.volume;
 		muted = cast.muted;
 		loading = !cast.mediaLoaded || cast.buffering;
-		localResumeAt = cast.currentTime;
+		localResumeAt = timeOffset + cast.currentTime;
 	});
 
 	// The probed duration can arrive after metadata has loaded (HLS transcode);
@@ -695,10 +723,16 @@
 				duration = knownDuration > 0 ? knownDuration : videoEl.duration;
 				// Handing back from a Chromecast resumes where it left off.
 				if (localResumeAt > 0) {
-					videoEl.currentTime = localResumeAt;
+					videoEl.currentTime = localResumeAt - timeOffset;
 					localResumeAt = 0;
+					seekRestartTarget = null;
+				} else if (seekRestartTarget !== null) {
+					// The restarted session already begins at (or just after)
+					// the target; this only trims the keyframe rounding.
+					videoEl.currentTime = seekRestartTarget - timeOffset;
+					seekRestartTarget = null;
 				} else if (startTime > 0) {
-					videoEl.currentTime = startTime;
+					videoEl.currentTime = startTime - timeOffset;
 				}
 			}
 		}}

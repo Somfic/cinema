@@ -10,9 +10,22 @@ pub(crate) async fn transcode(
     let video = super::pipeline::VideoPipeline::new(config, copy_video, true).await;
 
     // Decode-side args precede `-i`: the video hwaccel, then input seeking.
+    //
+    // `-copyts` keeps the source's absolute timestamps through decoding and
+    // filtering (see the audio note below), and `-output_ts_offset` then
+    // rebases the muxed output back to zero. Zero-based is the contract every
+    // HLS session honours: hls.js maps a playlist onto its own zero-based
+    // timeline no matter what the segment PTS say, so absolute timestamps
+    // can't survive to the player anyway. The absolute origin is the
+    // `start_time` the caller asked for, and the frontend adds it back.
     let mut pre_args = video.pre_input.clone();
+    let mut post_args: Vec<String> = Vec::new();
     if start_time > 0.0 {
         pre_args.extend_from_slice(&["-ss".into(), format!("{:.3}", start_time), "-copyts".into()]);
+        post_args.extend_from_slice(&[
+            "-output_ts_offset".into(),
+            format!("-{start_time:.3}"),
+        ]);
     }
 
     let mut command = tokio::process::Command::new("ffmpeg");
@@ -54,6 +67,7 @@ pub(crate) async fn transcode(
     };
 
     command
+        .args(&post_args)
         .args(["-map", "0:v:0", "-map", &format!("0:a:{}", audio_index)])
         .args(&video.filter)
         .args(&video.encode)
@@ -98,6 +112,8 @@ pub(crate) fn local_transcode(
 ) -> tokio::process::Command {
     // `-ss` before `-i` gives fast keyframe seek because the moov atom is at
     // the head of the file (pretranscodings write with `-movflags +faststart`).
+    //
+    // Zero-based output, same contract as the live transcode above.
     let mut pre_args: Vec<String> = Vec::new();
     let mut post_args: Vec<String> = Vec::new();
     if start_time > 0.0 {

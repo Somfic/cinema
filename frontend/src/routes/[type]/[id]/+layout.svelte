@@ -738,6 +738,7 @@
 					onAudioSelect={(track) => session.switchAudio(track.id, playerTime)}
 					chapters={session.fileChapters}
 					knownDuration={session.hlsSessionId ? session.mediaDuration : 0}
+					timeOffset={session.hlsSessionId ? session.hlsStartAt : 0}
 					onSeekRestart={session.hlsSessionId
 						? (t) => session.seekRestart(t)
 						: undefined}

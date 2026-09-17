@@ -44,6 +44,14 @@ export class PlaybackSession {
 	mediaDuration = $state(0);
 
 	hlsSessionId = $state<string | null>(null);
+	/** Absolute time the current HLS session's timeline begins at: everything
+	 *  before it was never transcoded, so nothing can seek there. */
+	hlsStartAt = $state(0);
+	/** Set only when the current session exists because of a seek, and holds
+	 *  the position playback is meant to resume at. Consumers that (re)start a
+	 *  player need it: the position they can observe is the pre-seek one the
+	 *  old session left behind, and starting there undoes the seek. */
+	hlsSeekTarget = $state<number | null>(null);
 	transcoding = $state({ enabled: false, onlyAudio: false });
 
 	streamStats = $state<StreamStats | null>(null);
@@ -84,6 +92,7 @@ export class PlaybackSession {
 		await this.#stopStream();
 
 		const { startAt = 0, transcoding } = options ?? {};
+		this.hlsSeekTarget = null;
 
 		if (transcoding === "Enabled" || transcoding === "OnlyAudio") {
 			const onlyAudio = transcoding === "OnlyAudio";
@@ -104,6 +113,7 @@ export class PlaybackSession {
 				return;
 			this.streamUrl = result.url;
 			this.playingLocal = result.local;
+			this.hlsStartAt = 0;
 			this.#currentlyPlaying = stream;
 		}
 
@@ -152,6 +162,8 @@ export class PlaybackSession {
 		this.mediaDuration = 0;
 		this.transcoding.enabled = false;
 		this.transcoding.onlyAudio = false;
+		this.hlsStartAt = 0;
+		this.hlsSeekTarget = null;
 		this.streamStats = null;
 		this.pieceMap = [];
 	}
@@ -309,6 +321,7 @@ export class PlaybackSession {
 		const stream = this.ctx.currentStream();
 		if (!stream) return;
 		this.activeAudioIdx = idx;
+		this.hlsSeekTarget = null;
 		await this.#startHlsRemux(
 			stream.info_hash,
 			stream.file_idx,
@@ -325,6 +338,7 @@ export class PlaybackSession {
 	async seekRestart(time: number): Promise<void> {
 		const stream = this.ctx.currentStream();
 		if (!stream) return;
+		this.hlsSeekTarget = time;
 		await this.#startHlsRemux(
 			stream.info_hash,
 			stream.file_idx,
@@ -341,6 +355,7 @@ export class PlaybackSession {
 	): Promise<void> {
 		const stream = this.ctx.currentStream();
 		if (!stream) return;
+		this.hlsSeekTarget = null;
 		if (enabled) {
 			await this.#startHlsRemux(
 				stream.info_hash,
@@ -353,6 +368,7 @@ export class PlaybackSession {
 			this.stopHlsSession();
 			const result = await api.streams.start(stream.info_hash, stream.file_idx);
 			this.streamUrl = result.url;
+			this.hlsStartAt = 0;
 		}
 	}
 
@@ -385,6 +401,7 @@ export class PlaybackSession {
 				return;
 			}
 			this.hlsSessionId = session.session_id;
+			this.hlsStartAt = startAt;
 			this.streamUrl = session.playlist_url;
 			this.#currentlyPlaying = {
 				info_hash: hash,

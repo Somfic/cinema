@@ -112,7 +112,22 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 		// added to media the receiver has already loaded.
 		if (url === loadedUrl && tracks.length === loadedTrackCount) return;
 
-		const startAt = ctx.currentTime();
+		// Where the receiver should pick up. A reload that keeps the same url
+		// (captions arriving) resumes at the live position; a new url is a new
+		// HLS session, and then the live position is the *old* session's — the
+		// place a seek just moved away from. Loading there is what made a seek
+		// snap back to where playback already was, so a seek-restart uses its
+		// target, and any other new session its timeline origin (clamped up to
+		// the live position, for a session that started before the receiver
+		// joined).
+		const resumeAt =
+			url === loadedUrl
+				? ctx.currentTime()
+				: (session.hlsSeekTarget ??
+					Math.max(ctx.currentTime(), session.hlsStartAt));
+		// The session's playlist runs from zero; `resumeAt` is a position in
+		// the file, so drop the session's origin back off it.
+		const startAt = Math.max(0, resumeAt - session.hlsStartAt);
 		const activeIndex = session.subtitleTracks.findIndex(
 			(t) => t.url === session.activeTrackUrl,
 		);
