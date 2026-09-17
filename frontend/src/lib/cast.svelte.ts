@@ -141,6 +141,10 @@ class CastController {
 		if (!this.connected) {
 			this.deviceName = null;
 			this.mediaLoaded = false;
+			// Nothing is loaded on a receiver we're no longer talking to; a
+			// stale url here would suppress the poster on the next session.
+			this.loadedUrl = null;
+			this.showingPoster = false;
 		} else {
 			const session =
 				s.cast.framework.CastContext.getInstance().getCurrentSession();
@@ -204,6 +208,8 @@ class CastController {
 		const { chrome } = s;
 		const session = s.cast.framework.CastContext.getInstance().getCurrentSession();
 		if (!session) return;
+		// The stream won the race — nothing to fill in.
+		if (this.loadedUrl) return;
 
 		const info = new chrome.cast.media.MediaInfo(url, "image/jpeg");
 		info.streamType = chrome.cast.media.StreamType.NONE;
@@ -216,11 +222,46 @@ class CastController {
 		this.showingPoster = true;
 		try {
 			await session.loadMedia(request);
+			// A real `load()` can land while this one is in flight; it clears the
+			// flag and stops the media it can see, which isn't this photo yet.
+			// Clear it ourselves so it doesn't linger behind the video.
+			if (!this.showingPoster) await this.#stopMedia();
 		} catch (e: unknown) {
 			// Cosmetic only — never let a failed poster block playback.
 			this.showingPoster = false;
 			console.warn("[cast] poster failed", e);
 		}
+	}
+
+	/**
+	 * Stops whatever the receiver has loaded and waits for it to go IDLE.
+	 *
+	 * Loading new media over a photo isn't enough to get rid of it: the default
+	 * receiver paints the photo as its full-screen background and only clears
+	 * that when it returns to idle, so the poster keeps showing through the
+	 * letterbox bars of the video loaded on top of it.
+	 */
+	async #stopMedia(): Promise<void> {
+		const s = sdk();
+		if (!s) return;
+		const media = s.cast.framework.CastContext.getInstance()
+			.getCurrentSession()
+			?.getMediaSession();
+		if (!media) return;
+		await new Promise<void>((resolve) => {
+			// Never block a load on this — the poster is cosmetic, and so is
+			// failing to clear it.
+			const done = setTimeout(resolve, 1500);
+			const finish = () => {
+				clearTimeout(done);
+				resolve();
+			};
+			media.stop(
+				new s.chrome.cast.media.StopRequest(),
+				finish,
+				finish,
+			);
+		});
 	}
 
 	/**
@@ -234,6 +275,12 @@ class CastController {
 		const session =
 			s.cast.framework.CastContext.getInstance().getCurrentSession();
 		if (!session) return;
+
+		// Clear the still poster first; see `#stopMedia`.
+		if (this.showingPoster) {
+			this.showingPoster = false;
+			await this.#stopMedia();
+		}
 
 		const info = new chrome.cast.media.MediaInfo(
 			request.url,
