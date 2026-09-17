@@ -15,6 +15,9 @@ import { browser } from "$app/environment";
 const SDK_SRC =
 	"https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
 
+/** Solid black image used as the receiver's background — see `load`. */
+const CAST_BACKGROUND = "/cast-background.png";
+
 /** A sideloaded caption track. `url` must be absolute and CORS-readable. */
 export interface CastTextTrack {
 	id: number;
@@ -288,14 +291,19 @@ class CastController {
 		);
 		info.streamType = chrome.cast.media.StreamType.BUFFERED;
 
-		// Deliberately no `images` here. The default receiver paints metadata
-		// artwork as the background *behind* the video, so it shows through the
-		// letterbox bars of anything that isn't exactly the panel's aspect ratio.
-		// Artwork belongs to `loadPoster`, which covers the gap before playback
-		// starts; once the stream is up the bars should just be black.
+		// The background *behind* the video is the metadata artwork, and it shows
+		// through the letterbox bars of anything that isn't exactly the panel's
+		// aspect ratio. Leaving `images` off doesn't give black bars — it gives
+		// no background at all, and the Chromecast's own Backdrop wallpaper
+		// shows through instead. So hand it a solid black image: that is what
+		// paints the bars black. Real artwork belongs to `loadPoster`, which
+		// covers the gap before playback starts.
 		const metadata = new chrome.cast.media.GenericMediaMetadata();
 		if (request.title) metadata.title = request.title;
 		if (request.subtitle) metadata.subtitle = request.subtitle;
+		metadata.images = [
+			new chrome.cast.Image(castAbsoluteUrl(CAST_BACKGROUND)),
+		];
 		info.metadata = metadata;
 
 		const tracks = request.tracks ?? [];
