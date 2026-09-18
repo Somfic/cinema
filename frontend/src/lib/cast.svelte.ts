@@ -73,9 +73,9 @@ class CastController {
 	loadedUrl = $state<string | null>(null);
 	/** Receiver-side state: "IDLE" | "PLAYING" | "PAUSED" | "BUFFERING". */
 	playerState = $state<string | null>(null);
-	/** True while the receiver is showing a still poster rather than the
-	 *  actual stream — see `loadPoster`. */
-	showingPoster = $state(false);
+	/** True while the receiver is showing the blank placeholder rather than
+	 *  the actual stream — see `loadPlaceholder`. */
+	showingPlaceholder = $state(false);
 
 	#initStarted = false;
 	#player: Any = null;
@@ -145,9 +145,9 @@ class CastController {
 			this.deviceName = null;
 			this.mediaLoaded = false;
 			// Nothing is loaded on a receiver we're no longer talking to; a
-			// stale url here would suppress the poster on the next session.
+			// stale url here would suppress the placeholder on the next session.
 			this.loadedUrl = null;
-			this.showingPoster = false;
+			this.showingPlaceholder = false;
 		} else {
 			const session =
 				s.cast.framework.CastContext.getInstance().getCurrentSession();
@@ -159,9 +159,10 @@ class CastController {
 	#sync(): void {
 		const p = this.#player;
 		if (!p) return;
-		// A loaded poster is media as far as the SDK is concerned, but not as
-		// far as playback is concerned — the player still counts as loading.
-		this.mediaLoaded = !!p.isMediaLoaded && !this.showingPoster;
+		// The loaded placeholder is media as far as the SDK is concerned, but
+		// not as far as playback is concerned — the player still counts as
+		// loading.
+		this.mediaLoaded = !!p.isMediaLoaded && !this.showingPlaceholder;
 		this.currentTime = p.currentTime ?? 0;
 		this.duration = p.duration ?? 0;
 		this.paused = !!p.isPaused;
@@ -200,12 +201,13 @@ class CastController {
 	// ── Media ──
 
 	/**
-	 * Shows a still image on the receiver. The default receiver only paints
-	 * what it has been asked to load, so between connecting and the stream
-	 * being ready there is nothing on the TV but its ambient backdrop. Loading
-	 * the artwork as a photo fills that gap, and the real `load()` replaces it.
+	 * Blanks the receiver's screen. The default receiver only paints what it
+	 * has been asked to load, so between connecting and the stream being ready
+	 * there is nothing on the TV but the Chromecast's own Backdrop wallpaper.
+	 * Loading the solid black image as a photo fills that gap with black, and
+	 * the real `load()` replaces it.
 	 */
-	async loadPoster(url: string, title?: string): Promise<void> {
+	async loadPlaceholder(): Promise<void> {
 		const s = sdk();
 		if (!s) return;
 		const { chrome } = s;
@@ -214,25 +216,26 @@ class CastController {
 		// The stream won the race — nothing to fill in.
 		if (this.loadedUrl) return;
 
-		const info = new chrome.cast.media.MediaInfo(url, "image/jpeg");
+		const info = new chrome.cast.media.MediaInfo(
+			castAbsoluteUrl(CAST_BACKGROUND),
+			"image/png",
+		);
 		info.streamType = chrome.cast.media.StreamType.NONE;
-		const metadata = new chrome.cast.media.PhotoMediaMetadata();
-		if (title) metadata.title = title;
-		info.metadata = metadata;
+		info.metadata = new chrome.cast.media.PhotoMediaMetadata();
 
 		const request = new chrome.cast.media.LoadRequest(info);
 		request.autoplay = true;
-		this.showingPoster = true;
+		this.showingPlaceholder = true;
 		try {
 			await session.loadMedia(request);
 			// A real `load()` can land while this one is in flight; it clears the
 			// flag and stops the media it can see, which isn't this photo yet.
 			// Clear it ourselves so it doesn't linger behind the video.
-			if (!this.showingPoster) await this.#stopMedia();
+			if (!this.showingPlaceholder) await this.#stopMedia();
 		} catch (e: unknown) {
-			// Cosmetic only — never let a failed poster block playback.
-			this.showingPoster = false;
-			console.warn("[cast] poster failed", e);
+			// Cosmetic only — never let a failed placeholder block playback.
+			this.showingPlaceholder = false;
+			console.warn("[cast] placeholder failed", e);
 		}
 	}
 
@@ -241,8 +244,8 @@ class CastController {
 	 *
 	 * Loading new media over a photo isn't enough to get rid of it: the default
 	 * receiver paints the photo as its full-screen background and only clears
-	 * that when it returns to idle, so the poster keeps showing through the
-	 * letterbox bars of the video loaded on top of it.
+	 * that when it returns to idle, so the placeholder keeps showing through
+	 * the letterbox bars of the video loaded on top of it.
 	 */
 	async #stopMedia(): Promise<void> {
 		const s = sdk();
@@ -252,8 +255,8 @@ class CastController {
 			?.getMediaSession();
 		if (!media) return;
 		await new Promise<void>((resolve) => {
-			// Never block a load on this — the poster is cosmetic, and so is
-			// failing to clear it.
+			// Never block a load on this — the placeholder is cosmetic, and so
+			// is failing to clear it.
 			const done = setTimeout(resolve, 1500);
 			const finish = () => {
 				clearTimeout(done);
@@ -279,9 +282,9 @@ class CastController {
 			s.cast.framework.CastContext.getInstance().getCurrentSession();
 		if (!session) return;
 
-		// Clear the still poster first; see `#stopMedia`.
-		if (this.showingPoster) {
-			this.showingPoster = false;
+		// Clear the placeholder first; see `#stopMedia`.
+		if (this.showingPlaceholder) {
+			this.showingPlaceholder = false;
 			await this.#stopMedia();
 		}
 
@@ -296,8 +299,7 @@ class CastController {
 		// aspect ratio. Leaving `images` off doesn't give black bars — it gives
 		// no background at all, and the Chromecast's own Backdrop wallpaper
 		// shows through instead. So hand it a solid black image: that is what
-		// paints the bars black. Real artwork belongs to `loadPoster`, which
-		// covers the gap before playback starts.
+		// paints the bars black.
 		const metadata = new chrome.cast.media.GenericMediaMetadata();
 		if (request.title) metadata.title = request.title;
 		if (request.subtitle) metadata.subtitle = request.subtitle;
@@ -336,7 +338,7 @@ class CastController {
 		}
 
 		this.error = null;
-		this.showingPoster = false;
+		this.showingPlaceholder = false;
 		this.loadedUrl = request.url;
 		console.info("[cast] loading", {
 			url: request.url,

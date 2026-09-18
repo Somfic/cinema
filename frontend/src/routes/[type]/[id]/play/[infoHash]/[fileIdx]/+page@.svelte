@@ -188,8 +188,6 @@
 		currentTime: () => playerTime,
 		title: () => playerTitle ?? undefined,
 		subtitle: () => playerTopline ?? undefined,
-		// `playerBackdrop` is already full-resolution, which is what a TV wants.
-		image: () => playerBackdrop,
 	});
 
 	// Switch source/quality by re-navigating the play route to the new stream.

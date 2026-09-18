@@ -75,14 +75,6 @@
 		currentTime: () => playerTime,
 		title: () => playerTitle ?? undefined,
 		subtitle: () => playerTopline ?? undefined,
-		// Full resolution: this is painted across a TV, and TMDB's next size
-		// down (w1280) is visibly soft on a 4K panel.
-		image: () =>
-			activeEpisode?.stills?.[0]
-				? imageUrl(activeEpisode.stills[0], "original")
-				: item?.backdrops?.[0]
-					? imageUrl(item.backdrops[0], "original")
-					: undefined,
 	});
 
 	// ── Derived ──
