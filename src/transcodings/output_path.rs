@@ -51,64 +51,40 @@ impl PretranscodingOutputPath {
         }
     }
 
-    /// Path for segment N. Pause/resume writes segments 0, 1, 2, … and the
-    /// final `.mp4` is produced by concat-copying them at completion.
-    pub fn segment(&self, n: u32) -> PathBuf {
-        self.output_path.with_extension(format!("mp4.part.{n}"))
+    /// The in-progress output, renamed to the final path on completion.
+    pub fn partial(&self) -> PathBuf {
+        self.output_path.with_extension("mp4.part")
     }
 
-    /// Existing segments on disk, sorted by index. Returns `(index, path)` pairs.
-    /// Non-numeric or malformed `.part.*` files are silently skipped.
-    pub async fn existing_segments(&self) -> Vec<(u32, PathBuf)> {
-        let Some(parent) = self.output_path.parent() else {
-            return Vec::new();
-        };
-        let Some(stem) = self.output_path.file_name().and_then(|s| s.to_str()) else {
-            return Vec::new();
-        };
-        let prefix = format!("{stem}.part.");
-
-        let mut entries = match tokio::fs::read_dir(parent).await {
-            Ok(rd) => rd,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut out = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
-            let Some(suffix) = name.strip_prefix(&prefix) else {
-                continue;
-            };
-            let Ok(idx) = suffix.parse::<u32>() else {
-                continue;
-            };
-            out.push((idx, entry.path()));
-        }
-        out.sort_by_key(|(n, _)| *n);
-        out
+    /// Path relative to storage, for the `/api/files` route.
+    pub fn storage_relative(&self) -> String {
+        let mode = if self.only_audio { "audio" } else { "full" };
+        format!(
+            "pretranscoded/{}_{mode}_{}.mp4",
+            self.download_id, self.audio_index
+        )
     }
 
-    /// Remove every `.mp4.part.*` segment for this row. Used on hard cancel /
-    /// remove / boot recovery of interrupted transcodings.
-    pub async fn remove_all_segments(&self) {
-        for (_, path) in self.existing_segments().await {
-            if let Err(err) = tokio::fs::remove_file(&path).await {
-                tracing::warn!(?err, ?path, "Could not remove pretranscoding segment");
+    /// Removes the output and any partial leftovers.
+    pub async fn remove(&self) {
+        for path in [
+            self.output_path.clone(),
+            self.partial(),
+            self.output_path.with_extension("mp4.moov"),
+        ] {
+            if let Err(err) = tokio::fs::remove_file(&path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(?err, ?path, "Could not remove pretranscoding output");
             }
         }
     }
 
-    /// Total on-disk size for this pretranscoding: the final `.mp4` (once
-    /// completed) plus every `.mp4.part.*` segment (during pause/resume).
-    /// Missing files contribute 0.
+    /// Total on-disk size: the finished MP4 or, while running, the partial
+    /// output. Missing files contribute 0.
     pub async fn disk_bytes(&self) -> u64 {
         let mut total: u64 = 0;
-        if let Ok(meta) = tokio::fs::metadata(&self.output_path).await {
-            total = total.saturating_add(meta.len());
-        }
-        for (_, path) in self.existing_segments().await {
+        for path in [self.output_path.clone(), self.partial()] {
             if let Ok(meta) = tokio::fs::metadata(&path).await {
                 total = total.saturating_add(meta.len());
             }

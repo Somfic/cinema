@@ -75,13 +75,11 @@ impl super::Handle {
         Ok(id)
     }
 
-    /// Pause a running (or queued) pretranscoding. ffmpeg is signalled with
-    /// SIGINT so it flushes a valid `moov`, the segment is kept, and the
-    /// row's `transcoded_ms` becomes the resume checkpoint. Resume via
-    /// [`resume`](Self::resume).
+    /// Pause a running (or queued) pretranscoding. A running job is
+    /// suspended in place and parked; [`resume`](Self::resume) continues it.
     pub async fn pause(&self, id: i32) -> crate::app::Result<()> {
         // Set the target status BEFORE firing the cancel token so the
-        // supervisor reads `paused` and does a soft stop (SIGINT, keep segment).
+        // supervisor reads `paused` and suspends rather than discards.
         let download_id = sqlx::query_scalar!(
             "UPDATE pretranscodings SET status = 'paused' WHERE id = $1 AND status IN ('queued', 'transcoding') RETURNING download_id",
             id,
@@ -101,8 +99,8 @@ impl super::Handle {
     }
 
     /// Resume a paused pretranscoding: flip back to `queued` and nudge the
-    /// pool. `refresh()` picks it up and the supervisor resumes with `-ss`
-    /// pointing at the persisted checkpoint.
+    /// pool. `refresh()` picks it up and resumes the parked job, or starts
+    /// over if it didn't survive a restart.
     pub async fn resume(&self, id: i32) -> crate::app::Result<()> {
         let download_id = sqlx::query_scalar!(
             "UPDATE pretranscodings SET status = 'queued', error = NULL WHERE id = $1 AND status = 'paused' RETURNING download_id",
@@ -119,8 +117,8 @@ impl super::Handle {
         Ok(())
     }
 
-    /// Cancel a running/queued/paused pretranscoding. Deletes all partial
-    /// segments; leaves the row in `cancelled` state so the user can see what
+    /// Cancel a running/queued/paused pretranscoding. Deletes the partial
+    /// output; leaves the row in `cancelled` state so the user can see what
     /// happened.
     pub async fn cancel(&self, id: i32) -> crate::app::Result<()> {
         let row = sqlx::query!(
@@ -131,7 +129,7 @@ impl super::Handle {
         .await?;
 
         // Set `cancelled` first so a running supervisor sees a non-soft target
-        // status when the cancel token fires and cleans up segments itself.
+        // status when the cancel token fires and discards its output itself.
         let res = sqlx::query!(
             "UPDATE pretranscodings SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('completed', 'failed')",
             id,
@@ -152,11 +150,11 @@ impl super::Handle {
                 row.audio_index,
             );
             if !was_running {
-                // No supervisor to run finalize; the manager cleans segments.
-                path.remove_all_segments().await;
+                // No supervisor to clean up after itself. Dropping a parked
+                // job removes its partial output.
+                self.0.parked.lock().unwrap().remove(&id);
+                path.remove().await;
             }
-            // If a supervisor was running, its HardCancelled finalize wipes
-            // segments; a duplicate delete here would race the writer.
         }
 
         if let Some(row) = row
@@ -199,17 +197,16 @@ impl super::Handle {
 
         tx.commit().await?;
 
+        self.0.parked.lock().unwrap().remove(&id);
         if let Some(row) = row {
-            let path = crate::transcodings::PretranscodingOutputPath::new(
+            crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
                 row.download_id,
                 row.only_audio,
                 row.audio_index,
-            );
-            if let Err(err) = tokio::fs::remove_file(&path).await {
-                tracing::warn!(?err, "Could not remove the pretranscoding file");
-            }
-            path.remove_all_segments().await;
+            )
+            .remove()
+            .await;
 
             self.0.events.transcodings.emit_removed(
                 &crate::api::transcodings::PretranscodingRemoved {
@@ -250,16 +247,15 @@ impl super::Handle {
         tx.commit().await?;
 
         for row in &rows {
-            let path = crate::transcodings::PretranscodingOutputPath::new(
+            self.0.parked.lock().unwrap().remove(&row.id);
+            crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
                 download_id,
                 row.only_audio,
                 row.audio_index,
-            );
-            if let Err(err) = tokio::fs::remove_file(&path).await {
-                tracing::warn!(?err, "Could not remove the pretranscoding file");
-            }
-            path.remove_all_segments().await;
+            )
+            .remove()
+            .await;
 
             self.0.events.transcodings.emit_removed(
                 &crate::api::transcodings::PretranscodingRemoved {
@@ -317,44 +313,53 @@ impl super::Handle {
         let cancel_clone = cancel.clone();
 
         let start = async {
-            let source = match crate::downloads::MediaSource::ensure_and_locate(
-                &self.0.downloads_manager,
+            let output = crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
-                &row.info_hash,
-                row.file_idx,
-                crate::downloads::DownloadPriority::Background,
-            )
-            .await
-            {
-                Ok(s) => s,
-                Err(err) => {
-                    self.fail(
-                        id,
-                        row.download_id,
-                        &format!("MediaSource not found: {err:?}"),
-                    )
-                    .await;
-                    return Err(err);
-                }
+                row.download_id,
+                row.only_audio,
+                row.audio_index,
+            );
+            let parked = self.0.parked.lock().unwrap().remove(&id);
+            let start = match parked {
+                Some(parked) => crate::transcodings::supervisor::Start::Parked(parked),
+                None => match crate::downloads::MediaSource::ensure_and_locate(
+                    &self.0.downloads_manager,
+                    &self.0.storage,
+                    &row.info_hash,
+                    row.file_idx,
+                    crate::downloads::DownloadPriority::Background,
+                )
+                .await
+                {
+                    Ok(source) => crate::transcodings::supervisor::Start::Fresh {
+                        source,
+                        only_audio: row.only_audio,
+                        audio_index: row.audio_index,
+                    },
+                    Err(err) => {
+                        self.fail(
+                            id,
+                            row.download_id,
+                            &format!("MediaSource not found: {err:?}"),
+                        )
+                        .await;
+                        return Err(err);
+                    }
+                },
             };
 
-            let supervisor = crate::transcodings::supervisor::Supervisor::new(
-                self.0.db.clone(),
-                self.0.events.clone(),
-                self.0.config.clone(),
-                id,
-                source,
-                crate::transcodings::PretranscodingOutputPath::new(
-                    &self.0.storage,
-                    row.download_id,
-                    row.only_audio,
-                    row.audio_index,
-                ),
+            let supervisor = crate::transcodings::supervisor::Supervisor {
+                pretranscoding_id: id,
+                output,
+                db: self.0.db.clone(),
+                events: self.0.events.clone(),
+                config: self.0.config.clone(),
+                parked: self.0.parked.clone(),
                 cancel,
-            );
+            };
 
             slot.spawn(async move {
-                supervisor.run().await;
+                supervisor.run(start).await;
             });
 
             Ok(())

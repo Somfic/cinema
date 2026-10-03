@@ -346,11 +346,6 @@
 			activeAudioTrack={session.activeAudioIdx}
 			onAudioSelect={(track) => session.switchAudio(track.id, playerTime)}
 			chapters={session.fileChapters}
-			knownDuration={session.hlsSessionId ? session.mediaDuration : 0}
-			timeOffset={session.hlsSessionId ? session.hlsStartAt : 0}
-			onSeekRestart={session.hlsSessionId
-				? (t) => session.seekRestart(t)
-				: undefined}
 			streamStats={session.streamStats}
 			pieceMap={session.pieceMap}
 			bind:transcoding={session.transcoding}
@@ -367,7 +362,7 @@
 			backdrop={playerBackdrop}
 			{externalUrl}
 			onReveal={() => api.streams.reveal(infoHash as string, fileIdx)}
-			{startTime}
+			startTime={session.resumeAt ?? startTime}
 			bind:this={playerRef}
 			bind:currentTime={playerTime}
 			bind:paused={playerPaused}

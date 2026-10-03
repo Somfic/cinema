@@ -6,9 +6,9 @@
 // Only Chromium-based browsers ship the Cast SDK; everywhere else `supported`
 // stays false and no cast affordance is shown.
 //
-// Playback contract: casting always runs off an HLS session (`/api/hls/...`),
-// because a Chromecast can't decode most torrent containers/codecs directly.
-// The play route enforces that before calling `load()`.
+// Playback contract: the receiver gets whatever the server planned for a
+// Chromecast's decoders: the file itself when it plays as is, otherwise an
+// HLS session with fMP4 segments covering the whole file.
 
 import { browser } from "$app/environment";
 
@@ -30,6 +30,8 @@ export interface CastLoadRequest {
 	/** Absolute media URL the receiver fetches itself. */
 	url: string;
 	contentType: string;
+	/** HLS with fMP4 segments; the receiver assumes MPEG-TS otherwise. */
+	hls?: boolean;
 	title?: string;
 	subtitle?: string;
 	currentTime?: number;
@@ -293,6 +295,10 @@ class CastController {
 			request.contentType,
 		);
 		info.streamType = chrome.cast.media.StreamType.BUFFERED;
+		if (request.hls) {
+			info.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.FMP4;
+			info.hlsVideoSegmentFormat = chrome.cast.media.HlsVideoSegmentFormat.FMP4;
+		}
 
 		// The background *behind* the video is the metadata artwork, and it shows
 		// through the letterbox bars of anything that isn't exactly the panel's

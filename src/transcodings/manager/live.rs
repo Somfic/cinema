@@ -1,56 +1,281 @@
-use std::{path::PathBuf, sync::atomic::Ordering, time::Instant};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
-use crate::{transcodings::session, utils::supervisor_pool::Acquire};
+use crate::api::watch::TranscodingOption;
+use crate::utils::supervisor_pool::Acquire;
 
 /// How many times to re-check for a freed capacity slot before reporting that
-/// the pool is full, and how long to wait between checks. Sized to cover an
-/// ffmpeg teardown (a kill + reap), not to paper over a genuinely busy pool.
+/// the pool is full, and how long to wait between checks. Sized to cover a
+/// session teardown, not to paper over a genuinely busy pool.
 const RELEASE_RETRIES: usize = 20;
-const RELEASE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const RELEASE_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+/// What the playing client can decode, in short codec names (`h264`,
+/// `hevc`, `aac`, `eac3`, ...) and container names (`mp4`, `webm`, ...).
+#[draad::ty]
+pub struct ClientCapabilities {
+    pub video_codecs: Vec<String>,
+    pub audio_codecs: Vec<String>,
+    pub containers: Vec<String>,
+    pub max_height: Option<u32>,
+}
+
+impl From<ClientCapabilities> for media::ClientCaps {
+    fn from(c: ClientCapabilities) -> Self {
+        Self {
+            video_codecs: c.video_codecs,
+            audio_codecs: c.audio_codecs,
+            containers: c.containers,
+            max_height: c.max_height,
+        }
+    }
+}
+
+#[draad::ty]
+#[derive(PartialEq)]
+pub enum PlaybackKind {
+    /// `url` is the file itself, range-served.
+    Direct,
+    /// `url` is an HLS master playlist.
+    Hls,
+}
+
+/// What happens to one stream on its way to the client.
+#[draad::ty]
+#[derive(PartialEq)]
+pub enum StreamAction {
+    /// Passed through untouched.
+    Copy,
+    /// Re-encoded to something the client decodes.
+    Transcode,
+    /// There is no such stream.
+    None,
+}
+
+#[draad::ty]
+pub struct Playback {
+    pub kind: PlaybackKind,
+    pub url: String,
+    /// Set for HLS; stop it when done.
+    pub session_id: Option<String>,
+    pub video: StreamAction,
+    pub audio: StreamAction,
+    /// Seconds, when known.
+    pub duration: Option<f64>,
+}
+
+pub(super) struct LiveSession {
+    pub(super) session: Arc<media::hls::Session>,
+    pub(super) last_access: Instant,
+    /// The [`SupervisorPool`] key reserving this session's capacity slot;
+    /// only sessions that re-encode video hold one. Negative, so it can't
+    /// collide with pretranscoding row ids.
+    ///
+    /// [`SupervisorPool`]: crate::utils::supervisor_pool::SupervisorPool
+    pub(super) pool_id: Option<i32>,
+}
+
+/// Random 16-char hex session id.
+fn new_session_id() -> String {
+    use rand::Rng;
+
+    let mut bytes = [0u8; 8];
+    rand::rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
 
 impl super::Handle {
-    /// Start (or reuse) a live HLS playback session for the given file. If a
-    /// completed pretranscoded MP4 matches the request, that cached file is
-    /// remuxed into HLS (fast, no re-encode); otherwise a full live
-    /// transcode is spawned reading from the torrent stream at
-    /// [`DownloadPriority::Stream`].
-    ///
-    /// [`DownloadPriority::Stream`]: crate::downloads::DownloadPriority::Stream
+    /// Works out the least work that gets this file playing on the client,
+    /// and starts it. A completed pretranscode is preferred over the
+    /// original. Then, depending on what the client decodes: the file plays
+    /// as is, or it's packaged as HLS with each stream copied when possible
+    /// and re-encoded only when not. `mode` can force re-encoding.
     pub async fn start_playback(
         &self,
         info_hash: &str,
         file_idx: i32,
         audio_index: i32,
-        only_audio: bool,
-        start_time: f64,
-    ) -> crate::app::Result<super::PlaybackSession> {
-        // Fast path: an existing pretranscoded MP4 covers this exact request.
-        if let Some(cached) = crate::transcodings::types::CompletedPretranscoding::find(
-            &self.0.db,
-            info_hash,
-            file_idx,
-            only_audio,
+        caps: ClientCapabilities,
+        mode: TranscodingOption,
+    ) -> crate::app::Result<Playback> {
+        let audio_index = audio_index.max(0) as usize;
+
+        // A finished pretranscode already holds just the chosen audio track,
+        // in formats every client plays.
+        let cached = self
+            .cached_pretranscode(info_hash, file_idx, audio_index as i32)
+            .await?;
+        let (input, key, direct_url, audio_index, source) = match cached {
+            Some(path) => (
+                media::Input::File(path.to_path_buf()),
+                path.display().to_string(),
+                format!("/api/files/{}", path.storage_relative()),
+                0,
+                None,
+            ),
+            None => {
+                let source = crate::downloads::MediaSource::ensure_and_locate(
+                    &self.0.downloads_manager,
+                    &self.0.storage,
+                    info_hash,
+                    file_idx,
+                    crate::downloads::DownloadPriority::Stream,
+                )
+                .await?;
+                (
+                    source.media_input().await?,
+                    format!("{info_hash}/{file_idx}"),
+                    format!("/api/stream/{info_hash}/{file_idx}"),
+                    audio_index,
+                    Some(source),
+                )
+            }
+        };
+
+        let info = self.media_info(&key, &input).await?;
+        let request = media::PlanRequest {
             audio_index,
-        )
-        .await?
+            force_video_transcode: matches!(mode, TranscodingOption::Enabled),
+            force_audio_transcode: matches!(
+                mode,
+                TranscodingOption::Enabled | TranscodingOption::OnlyAudio
+            ),
+        };
+        let duration = info.duration.map(|d| d.as_secs_f64());
+        let plan = media::plan(&info, &caps.into(), &request);
+        tracing::info!(info_hash, file_idx, audio_index, ?plan, "Playback plan");
+
+        let (video, audio) = match plan {
+            media::Plan::Direct => {
+                return Ok(Playback {
+                    kind: PlaybackKind::Direct,
+                    url: direct_url,
+                    session_id: None,
+                    video: StreamAction::Copy,
+                    audio: if info.audio.is_empty() {
+                        StreamAction::None
+                    } else {
+                        StreamAction::Copy
+                    },
+                    duration,
+                });
+            }
+            media::Plan::Hls { video, audio } => (video, audio),
+        };
+
+        // Point the swarm at wherever a run starts, so a seek's pieces are on
+        // their way while the pipeline spins up.
+        let on_seek: Option<Arc<dyn Fn(Duration) + Send + Sync>> = match (&source, duration) {
+            (Some(crate::downloads::MediaSource::Engine { .. }), Some(total)) => {
+                let downloads = self.0.downloads_manager.clone();
+                let info_hash = info_hash.to_string();
+                let runtime = tokio::runtime::Handle::current();
+                Some(Arc::new(move |at: Duration| {
+                    let downloads = downloads.clone();
+                    let info_hash = info_hash.clone();
+                    runtime.spawn(async move {
+                        downloads
+                            .prioritize_position(&info_hash, file_idx, at.as_secs_f64(), total)
+                            .await;
+                    });
+                }))
+            }
+            _ => None,
+        };
+
+        let session_id = new_session_id();
+        let session = media::hls::Session::new(media::hls::SessionOptions {
+            input,
+            info,
+            video,
+            audio,
+            audio_index,
+            encoder: self.0.config.encoder(),
+            dir: self.0.storage.hls_dir().join(&session_id),
+            on_seek,
+        })
+        .await?;
+
+        // Re-encoding video is the expensive part; only that competes for
+        // a capacity slot (evicting a background pretranscode if needed).
+        let pool_id = if video == media::VideoAction::Transcode {
+            let pool_id = self.0.live_pool_id.fetch_sub(1, Ordering::Relaxed);
+            self.reserve_live_slot(pool_id, session_id.clone()).await?;
+            Some(pool_id)
+        } else {
+            None
+        };
+
         {
-            let cache_path = crate::transcodings::PretranscodingOutputPath::new(
+            let mut sessions = self.0.sessions.lock().unwrap();
+            sessions.insert(
+                session_id.clone(),
+                LiveSession {
+                    session: Arc::new(session),
+                    last_access: Instant::now(),
+                    pool_id,
+                },
+            );
+            self.0.events.hls.emit_live_count(&sessions.len());
+        }
+
+        let action = |transcode: bool| {
+            if transcode {
+                StreamAction::Transcode
+            } else {
+                StreamAction::Copy
+            }
+        };
+        Ok(Playback {
+            kind: PlaybackKind::Hls,
+            url: format!("/api/hls/{session_id}/master.m3u8"),
+            session_id: Some(session_id),
+            video: action(video == media::VideoAction::Transcode),
+            audio: match audio {
+                media::AudioAction::None => StreamAction::None,
+                a => action(a == media::AudioAction::Transcode),
+            },
+            duration,
+        })
+    }
+
+    /// A completed pretranscode of this file and audio track whose output is
+    /// on disk. Rows whose file has gone missing are failed.
+    async fn cached_pretranscode(
+        &self,
+        info_hash: &str,
+        file_idx: i32,
+        audio_index: i32,
+    ) -> crate::app::Result<Option<crate::transcodings::PretranscodingOutputPath>> {
+        // A full transcode plays anywhere; an audio-only one keeps the
+        // original video.
+        for only_audio in [false, true] {
+            let Some(cached) = crate::transcodings::types::CompletedPretranscoding::find(
+                &self.0.db,
+                info_hash,
+                file_idx,
+                only_audio,
+                audio_index,
+            )
+            .await?
+            else {
+                continue;
+            };
+            let path = crate::transcodings::PretranscodingOutputPath::new(
                 &self.0.storage,
                 cached.download_id,
                 only_audio,
                 audio_index,
             );
-
-            if tokio::fs::metadata(cache_path.as_ref()).await.is_ok() {
-                return self.start_live_local_remux(cache_path, start_time).await;
+            if tokio::fs::metadata(path.as_ref()).await.is_ok() {
+                return Ok(Some(path));
             }
 
-            // Row says completed but the file's gone. Fail the row and fall
-            // through to a fresh live transcode so playback still works.
             tracing::warn!(
                 id = cached.id,
-                path = %cache_path.display(),
-                "Cached pretranscoded MP4 missing on disk; marking failed and falling through to live transcode",
+                path = %path.display(),
+                "Cached pretranscoded MP4 missing on disk; marking failed",
             );
             match sqlx::query!(
                 "UPDATE pretranscodings SET status = 'failed', error = 'output file missing' WHERE id = $1",
@@ -59,132 +284,58 @@ impl super::Handle {
             .execute(&self.0.db)
             .await
             {
-                Ok(_) => {
-                    self.emit_status_update(
-                        cached.id,
-                        cached.download_id,
-                        super::PretranscodingStatus::Failed,
-                    );
-                }
+                Ok(_) => self.emit_status_update(
+                    cached.id,
+                    cached.download_id,
+                    super::PretranscodingStatus::Failed,
+                ),
                 Err(err) => {
-                    tracing::warn!(
-                        id = cached.id,
-                        ?err,
-                        "Failed to mark pretranscoding as failed; DB out of sync",
-                    );
+                    tracing::warn!(id = cached.id, ?err, "Failed to mark pretranscoding as failed");
                 }
             }
         }
-
-        // Live transcode path. At Stream priority because it *is* a live stream.
-        let source = crate::downloads::MediaSource::ensure_and_locate(
-            &self.0.downloads_manager,
-            &self.0.storage,
-            info_hash,
-            file_idx,
-            crate::downloads::DownloadPriority::Stream,
-        )
-        .await?;
-
-        // ffmpeg reads this file at download speed, so a seek is only as fast
-        // as the swarm delivering the pieces under it. ffmpeg will pull piece
-        // priority to `start_time` itself once it opens its input - but not
-        // until it has been spawned and has read far enough to issue the
-        // range request, and meanwhile the download is still working through
-        // the part of the file we just left. Aim the swarm first, so those
-        // pieces are already in flight while ffmpeg starts up.
-        self.0
-            .downloads_manager
-            .prioritize_position(info_hash, file_idx, start_time)
-            .await;
-
-        self.start_live_transcode(source, audio_index, only_audio, start_time)
-            .await
+        Ok(None)
     }
 
-    async fn start_live_transcode(
-        &self,
-        source: crate::downloads::MediaSource,
-        audio_index: i32,
-        only_audio: bool,
-        start_time: f64,
-    ) -> crate::app::Result<super::PlaybackSession> {
-        let copy_video =
-            only_audio || crate::transcodings::probe::is_browser_safe(source.probe_path()).await;
-        let input_display = source.probe_path().display().to_string();
+    /// Holds a Live capacity slot for `session_id` until the session stops.
+    async fn reserve_live_slot(&self, pool_id: i32, session_id: String) -> crate::app::Result<()> {
+        // Live cannot evict Live (both priority 255); a second concurrent
+        // transcode when all slots are Live returns NoCapacity. Stopping a
+        // session only *signals* its keeper, so a client that stops one and
+        // immediately starts another (audio switch, mode change) gets a
+        // moment for the old slot to free up.
+        let mut acquire = self.acquire_live_slot(pool_id).await?;
+        for _ in 0..RELEASE_RETRIES {
+            if !matches!(acquire, Acquire::NoCapacity) {
+                break;
+            }
+            tokio::time::sleep(RELEASE_RETRY_INTERVAL).await;
+            acquire = self.acquire_live_slot(pool_id).await?;
+        }
+        let slot = match acquire {
+            Acquire::Acquired(slot) => slot,
+            Acquire::AlreadyRunning => {
+                return Err(crate::app::CinemaError::Generic(format!(
+                    "Live session pool id collision ({pool_id})"
+                )));
+            }
+            Acquire::NoCapacity => {
+                return Err(crate::app::CinemaError::Generic(
+                    "No capacity for another transcoded stream. Close another stream and retry"
+                        .into(),
+                ));
+            }
+        };
 
-        self.start_live(
-            input_display,
-            |playlist_path: PathBuf, segment_pattern: PathBuf| async move {
-                let command = crate::transcodings::ffmpeg::transcode(
-                    &self.0.config,
-                    &source,
-                    copy_video,
-                    start_time,
-                    audio_index as usize,
-                    &playlist_path,
-                    &segment_pattern,
-                )
-                .await;
-                (Some(source), command)
-            },
-        )
-        .await
-    }
-
-    async fn start_live_local_remux(
-        &self,
-        path: impl Into<PathBuf>,
-        start_time: f64,
-    ) -> crate::app::Result<super::PlaybackSession> {
-        let path: PathBuf = path.into();
-        let input_display = path.display().to_string();
-
-        self.start_live(
-            input_display,
-            |playlist_path: PathBuf, segment_pattern: PathBuf| async move {
-                let command = crate::transcodings::ffmpeg::local_transcode(
-                    start_time,
-                    &path,
-                    &playlist_path,
-                    &segment_pattern,
-                );
-                (None, command)
-            },
-        )
-        .await
-    }
-
-    async fn start_live<
-        F: AsyncFnOnce(
-            PathBuf,
-            PathBuf,
-        ) -> (
-            Option<crate::downloads::MediaSource>,
-            tokio::process::Command,
-        ),
-    >(
-        &self,
-        input_display: String,
-        create_ffmpeg_command: F,
-    ) -> crate::app::Result<super::PlaybackSession> {
-        let session_id = session::new_session_id();
-        let dir = self.0.storage.join(format!("hls/{session_id}"));
-        tokio::fs::create_dir_all(&dir).await?;
-        let playlist_path = dir.join("playlist.m3u8");
-        let segment_pattern = dir.join("seg%05d.ts");
-
-        let (source, command) = create_ffmpeg_command(playlist_path.clone(), segment_pattern).await;
-
-        self.spawn_and_register_live(
-            command,
-            source,
-            session_id,
-            dir,
-            playlist_path,
-            input_display,
-        )
-        .await
+        // The keeper holds the slot until stop_live / cleanup_idle_live /
+        // shutdown fires its token, then drops the session.
+        let cancel = slot.cancel_token();
+        let handle = self.clone();
+        slot.spawn(async move {
+            cancel.cancelled().await;
+            handle.remove_session(&session_id);
+        });
+        Ok(())
     }
 
     async fn acquire_live_slot(&self, pool_id: i32) -> crate::app::Result<Acquire> {
@@ -198,164 +349,14 @@ impl super::Handle {
             .await
     }
 
-    async fn spawn_and_register_live(
-        &self,
-        command: tokio::process::Command,
-        source: Option<crate::downloads::MediaSource>,
-        session_id: String,
-        dir: PathBuf,
-        playlist_path: PathBuf,
-        input_display: String,
-    ) -> crate::app::Result<super::PlaybackSession> {
-        let pool_id = self.0.live_pool_id.fetch_sub(1, Ordering::Relaxed);
-
-        // Acquire a capacity slot at Live priority, evicting the oldest
-        // background pretranscoding if the pool is full. Live cannot evict
-        // Live (both priority 255) - a second concurrent stream when all
-        // slots are Live returns NoCapacity, surfaced to the caller.
-        //
-        // Stopping a session only *signals* its supervisor: `stop_live`
-        // returns before the permit drops, which it does once ffmpeg is
-        // actually reaped. A client that closes one session and immediately
-        // opens another - switching transcoding mode, changing audio track,
-        // seeking outside the window - would race that teardown and get a
-        // spurious NoCapacity, so give an outgoing session a moment to
-        // release before giving up.
-        let mut acquire = self.acquire_live_slot(pool_id).await?;
-        if matches!(acquire, Acquire::NoCapacity) {
-            for _ in 0..RELEASE_RETRIES {
-                tokio::time::sleep(RELEASE_RETRY_INTERVAL).await;
-                acquire = self.acquire_live_slot(pool_id).await?;
-                if !matches!(acquire, Acquire::NoCapacity) {
-                    break;
-                }
-            }
-        }
-
-        let slot = match acquire {
-            Acquire::Acquired(slot) => slot,
-            Acquire::AlreadyRunning => {
-                // Should be impossible: live pool ids are unique + monotonic.
-                let _ = tokio::fs::remove_dir_all(&dir).await;
-                return Err(crate::app::CinemaError::Generic(format!(
-                    "Live session pool id collision ({pool_id})"
-                )));
-            }
-            Acquire::NoCapacity => {
-                let _ = tokio::fs::remove_dir_all(&dir).await;
-                return Err(crate::app::CinemaError::Generic(
-                    "No capacity for a new live stream. Close another stream and retry".into(),
-                ));
-            }
-        };
-
-        let cancel = slot.cancel_token();
-        let cancel_clone = cancel.clone();
-
-        let setup = async {
-            let session_id = session_id.clone();
-
-            let session = match session::spawn_live_ffmpeg(
-                command,
-                source.as_ref(),
-                &session_id,
-                dir.clone(),
-                pool_id,
-                input_display,
-            )
-            .await
-            {
-                Ok(s) => s,
-                Err(err) => {
-                    let _ = tokio::fs::remove_dir_all(&dir).await;
-                    return Err(err);
-                }
-            };
-            let mut exit_error = session.exit_error.clone();
-            let stderr_tail = session.stderr_tail.clone();
-
-            // Register the session in the map first so `wait_for_playlist_ready`
-            // sees any startup-time ffmpeg errors and `hls_serve` can respond to
-            // requests as soon as the first segment lands.
-            self.0
-                .sessions
-                .lock()
-                .await
-                .insert(session_id.clone(), session);
-
-            if let Err(err) = session::wait_for_playlist_ready(
-                &playlist_path,
-                &mut exit_error,
-                &stderr_tail,
-                self.0.config.ffmpeg_max_startup_duration,
-                self.0.config.ffmpeg_startup_poll_interval,
-            )
-            .await
-            {
-                // Startup failed. Drop the session (its Drop kills ffmpeg and
-                // removes the dir) and let the slot release when we drop it
-                // unspawned.
-                self.0.sessions.lock().await.remove(&session_id);
-                drop(slot);
-                return Err(err);
-            }
-
-            // Startup succeeded. Emit the new live-count and spawn the keeper
-            // future that holds the slot until stop_live / cleanup_idle_live /
-            // shutdown fires the cancel token; on cancel the LiveSession is
-            // dropped, which kills ffmpeg and removes its temp dir.
-            {
-                let map = self.0.sessions.lock().await;
-                self.0.events.hls.emit_live_count(&map.len());
-            }
-            let sessions = self.0.sessions.clone();
-            let events = self.0.events.clone();
-            let session_id_for_keeper = session_id.clone();
-            let playlist_url = format!("/api/hls/{session_id}/playlist.m3u8");
-            slot.spawn(async move {
-                cancel.cancelled().await;
-                let mut map = sessions.lock().await;
-                if map.remove(&session_id_for_keeper).is_some() {
-                    events.hls.emit_live_count(&map.len());
-                }
-            });
-
-            Ok(super::PlaybackSession {
-                session_id,
-                playlist_url,
-            })
-        };
-
-        tokio::select! {
-            biased;
-            _ = cancel_clone.cancelled() => {
-                {
-                    let mut map = self.0.sessions.lock().await;
-                    if map.remove(&session_id).is_some() {
-                        self.0.events.hls.emit_live_count(&map.len());
-                    }
-                }
-
-                Err(crate::app::CinemaError::Generic(String::from("Transcoding has been cancelled")))
-            }
-            res = setup => res
-        }
-    }
-
     /// On-evict callback for `acquire_evicting`. Re-queues the victim
     /// pretranscoding in the DB and fires the supervisor's cancel token so
     /// the slot is released. `status = 'queued'` is set BEFORE cancel so the
-    /// supervisor reads it as a soft stop: ffmpeg gets SIGINT, the current
-    /// segment is finalized with a valid `moov`, `transcoded_ms` is preserved,
-    /// and when capacity frees up the pretranscode resumes from checkpoint
-    /// (see [`Supervisor::finalize`]).
-    ///
-    /// [`Supervisor::finalize`]: crate::transcodings::supervisor::Supervisor
+    /// supervisor reads it as a soft stop: the job is suspended and parked,
+    /// and resumes when capacity frees up.
     async fn evict_pretranscoding_for_stream(&self, id: i32) -> crate::app::Result<()> {
         tracing::info!(id, "Evicting pretranscoding for live stream");
 
-        // Flip status back to `queued` before cancelling the supervisor.
-        // `transcoded_ms` is kept so the resume picks up where we left off.
         let download_id = sqlx::query_scalar!(
             "UPDATE pretranscodings SET status = 'queued', error = NULL WHERE id = $1 AND status = 'transcoding' RETURNING download_id",
             id,
@@ -367,80 +368,67 @@ impl super::Handle {
             self.emit_status_update(id, download_id, super::PretranscodingStatus::Queued);
         }
 
-        // Fire the supervisor's cancel token so its finalize runs and the
-        // permit is released; the pool's `acquire_evicting` then grabs the
-        // freed permit for the incoming live session.
         self.0.supervisor_pool.cancel(id);
 
         Ok(())
     }
 
+    /// Serves a playlist or segment of a live session, by its file name in
+    /// the playlist.
+    pub async fn serve_live(
+        &self,
+        session_id: &str,
+        file: &str,
+    ) -> crate::app::Result<(bytes::Bytes, &'static str)> {
+        let session = {
+            let mut sessions = self.0.sessions.lock().unwrap();
+            let live = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| crate::app::CinemaError::NotFound("HLS session not found".into()))?;
+            live.last_access = Instant::now();
+            live.session.clone()
+        };
+        Ok(session.serve(file).await?)
+    }
+
+    fn remove_session(&self, session_id: &str) -> Option<LiveSession> {
+        let mut sessions = self.0.sessions.lock().unwrap();
+        let removed = sessions.remove(session_id);
+        if removed.is_some() {
+            self.0.events.hls.emit_live_count(&sessions.len());
+        }
+        removed
+    }
+
     /// Stop a live session by id. Idempotent for unknown ids.
     pub async fn stop_live(&self, session_id: &str) {
-        let pool_id = {
-            let mut map = self.0.sessions.lock().await;
-            let pool_id = map.remove(session_id).map(|s| s.pool_id);
-            if pool_id.is_some() {
-                self.0.events.hls.emit_live_count(&map.len());
-            }
-            pool_id
-        };
-        if let Some(pool_id) = pool_id {
+        if let Some(pool_id) = self.remove_session(session_id).and_then(|s| s.pool_id) {
             self.0.supervisor_pool.cancel(pool_id);
         }
     }
 
-    /// Current number of live HLS sessions. Reads the in-memory session map.
+    /// Current number of live HLS sessions.
     pub async fn live_session_count(&self) -> usize {
-        self.0.sessions.lock().await.len()
+        self.0.sessions.lock().unwrap().len()
     }
 
-    /// Update a live session's last-access timestamp. Called on every
-    /// segment request so the idle reaper only culls sessions the client
-    /// has stopped consuming.
-    pub async fn touch_live(&self, session_id: &str) {
-        if let Some(session) = self.0.sessions.lock().await.get_mut(session_id) {
-            session.last_access = Instant::now();
-        }
-    }
-
-    /// Where the ffmpeg process is writing this session's HLS segments.
-    /// Consumed by `raw::hls_serve` to serve the playlist + segment files.
-    pub async fn live_session_dir(&self, session_id: &str) -> Option<PathBuf> {
-        self.0
-            .sessions
-            .lock()
-            .await
-            .get(session_id)
-            .map(|s| s.dir.clone())
-    }
-
-    /// If the ffmpeg process for this session exited with an error, return
-    /// its tail of stderr. Used by `raw::hls_serve` to surface a useful
-    /// message when a segment 404s because ffmpeg died.
-    pub async fn live_session_error(&self, session_id: &str) -> Option<String> {
-        let map = self.0.sessions.lock().await;
-        let session = map.get(session_id)?;
-        session.exit_error.borrow().clone()
-    }
-
-    /// Cull sessions that haven't been touched in `max_idle_secs`. Returns
-    /// how many were stopped.
-    pub async fn cleanup_idle_live(&self, max_idle: std::time::Duration) -> usize {
-        let stale: Vec<i32> = {
-            let mut map = self.0.sessions.lock().await;
+    /// Stops sessions that haven't been touched in `max_idle`. Returns how
+    /// many were stopped.
+    pub async fn cleanup_idle_live(&self, max_idle: Duration) -> usize {
+        let stale: Vec<LiveSession> = {
+            let mut sessions = self.0.sessions.lock().unwrap();
             let now = Instant::now();
-            let stale: Vec<i32> = map
-                .extract_if(|_, session| now.duration_since(session.last_access) > max_idle)
-                .map(|(_, session)| session.pool_id)
+            let stale: Vec<LiveSession> = sessions
+                .extract_if(|_, s| now.duration_since(s.last_access) > max_idle)
+                .map(|(_, s)| s)
                 .collect();
             if !stale.is_empty() {
-                self.0.events.hls.emit_live_count(&map.len());
+                self.0.events.hls.emit_live_count(&sessions.len());
             }
             stale
         };
         let count = stale.len();
-        for pool_id in stale {
+        for pool_id in stale.into_iter().filter_map(|s| s.pool_id) {
             self.0.supervisor_pool.cancel(pool_id);
         }
         count
@@ -450,14 +438,11 @@ impl super::Handle {
     /// action on the Downloads popover.
     pub async fn stop_all_live(&self) {
         let pool_ids: Vec<i32> = {
-            let mut map = self.0.sessions.lock().await;
-            let pool_ids: Vec<i32> = map.drain().map(|(_, session)| session.pool_id).collect();
-            if !pool_ids.is_empty() {
-                self.0.events.hls.emit_live_count(&map.len());
-            }
+            let mut sessions = self.0.sessions.lock().unwrap();
+            let pool_ids = sessions.drain().filter_map(|(_, s)| s.pool_id).collect();
+            self.0.events.hls.emit_live_count(&0);
             pool_ids
         };
-
         for pool_id in pool_ids {
             self.0.supervisor_pool.cancel(pool_id);
         }

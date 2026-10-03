@@ -15,7 +15,7 @@ pub mod types;
 
 pub use engine::{AudioTrack, Chapter, EmbeddedSubtitleTrack, TorrentEngine};
 pub use manager::*;
-pub use media_source::{FfmpegInputSpec, MediaSource};
+pub use media_source::MediaSource;
 pub use supervisor::DownloadProgress;
 
 /// Trait combining AsyncRead + AsyncSeek for torrent file streaming.
@@ -62,9 +62,6 @@ impl AsyncSeek for TorrentFileReader {
         self.inner.as_mut().poll_complete(cx)
     }
 }
-
-/// Text-based subtitle codecs that can be extracted as SRT
-const TEXT_SUB_CODECS: &[&str] = &["srt", "subrip", "ass", "ssa", "webvtt", "mov_text"];
 
 /// Well-known public trackers as fallback for magnet links.
 const PUBLIC_TRACKERS: &[&str] = &[

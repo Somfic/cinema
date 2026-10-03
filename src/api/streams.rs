@@ -5,18 +5,6 @@ use crate::tmdb::{MediaType, TmdbClient};
 use crate::{streams as streams_mod, subtitles as subtitles_mod};
 
 #[draad::ty]
-pub struct StartStream {
-    pub url: String,
-    pub local: bool,
-}
-
-#[draad::ty]
-pub struct RemuxSession {
-    pub session_id: String,
-    pub playlist_url: String,
-}
-
-#[draad::ty]
 pub struct StreamStats {
     pub progress_bytes: u64,
     pub total_bytes: u64,
@@ -65,13 +53,6 @@ pub trait StreamsApi {
     #[get]
     async fn tv(&self, id: i64, season: u32, episode: u32) -> Result<Vec<Stream>, CinemaError>;
 
-    /// Starts a torrent (idempotent) and returns the playback URL.
-    /// Always creates/updates a `downloads` row so the DB reflects the
-    /// active engine state. When `media` is provided, also populates
-    /// `download_meta` synchronously.
-    #[post]
-    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, CinemaError>;
-
     /// Stops a torrent stream. Is equivalent to pausing the download,
     /// but does not require the download id.
     #[post]
@@ -83,17 +64,22 @@ pub trait StreamsApi {
     #[post]
     async fn reveal(&self, info_hash: String, file_idx: i32) -> Result<(), CinemaError>;
 
-    /// Starts an HLS remux/transcode session for a file and returns its
-    /// playlist URL (feed to hls.js). Callers stop the previous session first.
+    /// Starts playback of a file for a client that decodes `client`, doing
+    /// as little work as possible: the original file when the client plays
+    /// it, otherwise an HLS session that copies every stream it can and
+    /// re-encodes the rest. `mode` forces re-encoding (`Enabled`: video and
+    /// audio, `OnlyAudio`: audio). The HLS playlist covers the whole file, so
+    /// seeking is the player's own business. Callers stop the previous
+    /// session first.
     #[post]
-    async fn remux(
+    async fn play(
         &self,
         info_hash: String,
         file_idx: i32,
         audio: i32,
-        t: f64,
-        only_audio: bool,
-    ) -> Result<RemuxSession, CinemaError>;
+        client: crate::transcodings::ClientCapabilities,
+        mode: crate::api::watch::TranscodingOption,
+    ) -> Result<crate::transcodings::Playback, CinemaError>;
 
     /// Current torrent download stats for a stream.
     #[get]
@@ -211,18 +197,6 @@ impl StreamsApi for AppContext {
         Ok(streams)
     }
 
-    async fn start(&self, info_hash: String, file_idx: i32) -> Result<StartStream, CinemaError> {
-        self.downloads
-            .ensure_download(
-                &info_hash,
-                file_idx,
-                crate::downloads::DownloadPriority::Stream,
-            )
-            .await?;
-        let url = format!("/api/stream/{info_hash}/{file_idx}");
-        Ok(StartStream { url, local: false })
-    }
-
     async fn stop(&self, info_hash: String, file_idx: i32) -> Result<(), CinemaError> {
         let id = crate::downloads::types::Download::find_id_by_info_hash_and_file_idx(
             &self.db, &info_hash, file_idx,
@@ -247,28 +221,20 @@ impl StreamsApi for AppContext {
             crate::downloads::DownloadPriority::Stream,
         )
         .await?;
-        reveal_in_file_manager(source.probe_path())
+        reveal_in_file_manager(source.path())
     }
 
-    async fn remux(
+    async fn play(
         &self,
         info_hash: String,
         file_idx: i32,
         audio: i32,
-        t: f64,
-        only_audio: bool,
-    ) -> Result<RemuxSession, CinemaError> {
-        // The manager owns the cache-hit-vs-live-transcode decision, torrent
-        // acquisition at Stream priority, and ffmpeg lifecycle. Consumers
-        // just get back a session id + playlist URL.
-        let session = self
-            .transcodings
-            .start_playback(&info_hash, file_idx, audio, only_audio, t)
-            .await?;
-        Ok(RemuxSession {
-            session_id: session.session_id,
-            playlist_url: session.playlist_url,
-        })
+        client: crate::transcodings::ClientCapabilities,
+        mode: crate::api::watch::TranscodingOption,
+    ) -> Result<crate::transcodings::Playback, CinemaError> {
+        self.transcodings
+            .start_playback(&info_hash, file_idx, audio, client, mode)
+            .await
     }
 
     async fn stats(&self, info_hash: String) -> Result<StreamStats, CinemaError> {
@@ -297,50 +263,73 @@ impl StreamsApi for AppContext {
         info_hash: String,
         file_idx: i64,
     ) -> Result<AudioTracks, CinemaError> {
-        // Ensure the download row exists and the engine has what it needs; we
-        // don't need the returned MediaSource here because ffprobe goes through
-        // the loopback HTTP route (which handles disk-vs-engine internally).
-        crate::downloads::MediaSource::ensure_and_locate(
-            &self.downloads,
-            &self.storage,
-            &info_hash,
-            file_idx as i32,
-            crate::downloads::DownloadPriority::Stream,
-        )
-        .await?;
-
-        // Probe through the local HTTP stream route, not the on-disk file: a
-        // still-downloading torrent is sparse on disk (missing pieces = holes),
-        // so a direct ffprobe fails until the file is complete. The HTTP route
-        // serves through the blocking, range-capable reader the transcode uses,
-        // so ffprobe gets coherent bytes (and can seek to a trailing moov atom).
-        let url = self.stream_url(&info_hash, file_idx);
-
-        let (tracks, subtitles, duration, chapters) = tokio::join!(
-            TorrentEngine::audio_tracks(&url),
-            TorrentEngine::subtitle_tracks(&url),
-            TorrentEngine::probe_duration(&url),
-            TorrentEngine::chapters(&url),
-        );
+        let info = self.media_info(&info_hash, file_idx).await?;
         let allowed: Vec<&str> = self
             .config
             .subtitle_languages
             .iter()
             .map(|l| subtitles_mod::to_iso639_2(l))
             .collect();
-        let subtitles = subtitles
-            .into_iter()
+        let tracks = info
+            .audio
+            .iter()
+            .map(|a| crate::downloads::AudioTrack {
+                index: a.index,
+                stream_index: a.stream_index,
+                name: a.title.clone().unwrap_or_else(|| {
+                    let channels = match a.channels {
+                        1 => "Mono",
+                        2 => "Stereo",
+                        6 => "5.1",
+                        8 => "7.1",
+                        _ => "",
+                    };
+                    format!("{} {channels}", a.codec.to_uppercase())
+                        .trim()
+                        .to_string()
+                }),
+                language: a.language.clone(),
+                codec: a.codec.clone(),
+            })
+            .collect();
+        let subtitles = info
+            .subtitles
+            .iter()
+            .filter(|s| s.text)
             .filter(|s| {
                 s.language
                     .as_deref()
                     .map(|l| allowed.contains(&l))
                     .unwrap_or(true)
             })
-            .collect::<Vec<_>>();
+            .map(|s| crate::downloads::EmbeddedSubtitleTrack {
+                index: s.index,
+                stream_index: s.stream_index,
+                language: s.language.clone(),
+                name: s.title.clone().unwrap_or_else(|| match &s.language {
+                    Some(l) => format!("{l} ({})", s.codec.to_uppercase()),
+                    None => s.codec.to_uppercase(),
+                }),
+                codec: s.codec.clone(),
+            })
+            .collect();
+        let chapters = info
+            .chapters
+            .iter()
+            .enumerate()
+            .map(|(i, c)| crate::downloads::Chapter {
+                start: c.start.as_secs_f64(),
+                end: c.end.as_secs_f64(),
+                title: c
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| format!("Chapter {}", i + 1)),
+            })
+            .collect();
         Ok(AudioTracks {
             tracks,
             subtitles,
-            duration,
+            duration: info.duration.map(|d| d.as_secs_f64()),
             chapters,
         })
     }
@@ -351,20 +340,65 @@ impl StreamsApi for AppContext {
         file_idx: i64,
         stream_index: i64,
     ) -> Result<Vec<crate::subtitles::SubtitleCue>, CinemaError> {
-        let url = self.stream_url(&info_hash, file_idx);
-        Ok(TorrentEngine::extract_subtitle_cues(&url, stream_index as usize).await)
+        self.embedded_subtitle_cues(&info_hash, file_idx, stream_index)
+            .await
     }
 }
 
 impl AppContext {
-    /// Loopback URL for this file's range-served bytes, so ffprobe/ffmpeg read
-    /// through the blocking torrent reader (the [`crate::urls::STREAM`] route)
-    /// rather than the sparse on-disk file.
-    pub(crate) fn stream_url(&self, info_hash: &str, file_idx: i64) -> String {
-        format!(
-            "http://127.0.0.1:{}/api/stream/{}/{}",
-            self.config.port, info_hash, file_idx
+    /// The streams, duration and chapters of a torrent file. A file still
+    /// downloading is read through the torrent stream, so the probe waits for
+    /// the pieces it needs (an MP4 index at the end, say) instead of reading
+    /// holes.
+    pub(crate) async fn media_info(
+        &self,
+        info_hash: &str,
+        file_idx: i64,
+    ) -> Result<std::sync::Arc<media::MediaInfo>, CinemaError> {
+        let source = crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
+            info_hash,
+            file_idx as i32,
+            crate::downloads::DownloadPriority::Stream,
         )
+        .await?;
+        let input = source.media_input().await?;
+        self.transcodings
+            .media_info(&format!("{info_hash}/{file_idx}"), &input)
+            .await
+    }
+
+    /// Cues of an embedded text subtitle track, by its index among the
+    /// file's subtitle tracks.
+    pub(crate) async fn embedded_subtitle_cues(
+        &self,
+        info_hash: &str,
+        file_idx: i64,
+        stream_index: i64,
+    ) -> Result<Vec<crate::subtitles::SubtitleCue>, CinemaError> {
+        let source = crate::downloads::MediaSource::ensure_and_locate(
+            &self.downloads,
+            &self.storage,
+            info_hash,
+            file_idx as i32,
+            crate::downloads::DownloadPriority::Stream,
+        )
+        .await?;
+        let cues = media::extract_subtitles(
+            &source.media_input().await?,
+            stream_index.max(0) as usize,
+            std::time::Duration::from_secs(15),
+        )
+        .await?;
+        Ok(cues
+            .into_iter()
+            .map(|c| crate::subtitles::SubtitleCue {
+                start: c.start,
+                end: c.end,
+                text: c.text,
+            })
+            .collect())
     }
 }
 

@@ -192,17 +192,19 @@
 	}
 
 	const TRANSCODE_OPTIONS = $derived([
-		{ value: "none", label: "None", icon: "Ban" as const },
+		// Auto re-encodes only what this device can't decode; the others
+		// force re-encoding when a stream misbehaves anyway.
+		{ value: "none", label: "Auto", icon: "Sparkles" as const },
 		{
 			value: "audio",
-			label: "Audio",
+			label: "Re-encode audio",
 			icon: hasAudioPretranscoding
 				? { name: "AudioLines" as const, color: "var(--glow-color-success)" }
 				: ("AudioLines" as const),
 		},
 		{
 			value: "both",
-			label: "Audio + video",
+			label: "Re-encode audio + video",
 			icon: hasFullPretranscoding
 				? { name: "Film" as const, color: "var(--glow-color-success)" }
 				: ("Film" as const),

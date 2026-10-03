@@ -729,11 +729,6 @@
 					activeAudioTrack={session.activeAudioIdx}
 					onAudioSelect={(track) => session.switchAudio(track.id, playerTime)}
 					chapters={session.fileChapters}
-					knownDuration={session.hlsSessionId ? session.mediaDuration : 0}
-					timeOffset={session.hlsSessionId ? session.hlsStartAt : 0}
-					onSeekRestart={session.hlsSessionId
-						? (t) => session.seekRestart(t)
-						: undefined}
 					subtitleTracks={session.subtitleTracks}
 					loadingSubtitles={session.loadingSubtitles}
 					activeTrackUrl={session.activeTrackUrl}
@@ -743,13 +738,13 @@
 						: item?.backdrops?.[0]
 							? imageUrl(item.backdrops[0], "original")
 							: undefined}
-					startTime={playerStartTime}
+					startTime={session.resumeAt ?? playerStartTime}
 					bind:transcoding={session.transcoding}
 					hasAudioPretranscoding={session.hasAudioPretranscoding}
 					hasFullPretranscoding={session.hasFullPretranscoding}
 					onTranscodingChange={(enabled, onlyAudio) =>
 						session.toggleTranscoding(enabled, onlyAudio, playerTime)}
-					streams={session.playingLocal ? [] : streams}
+					{streams}
 					activeStreamHash={selectedStream?.info_hash}
 					externalUrl={api.urls.stream(
 						selectedStream.info_hash,
@@ -761,7 +756,7 @@
 							selectedStream.info_hash,
 							selectedStream.file_idx,
 						)}
-					onStreamSelect={session.playingLocal ? undefined : switchStream}
+					onStreamSelect={switchStream}
 					bind:currentTime={playerTime}
 					bind:duration={playerDuration}
 					bind:paused={playerPaused}

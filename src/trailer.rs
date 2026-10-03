@@ -7,8 +7,10 @@ use tokio::sync::Mutex;
 
 use crate::app::{CinemaError, Result, Storage};
 
-const FORMAT: &str =
-    "bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/18";
+/// Video stream to fetch: H.264 in MP4 up to 1080p, else a progressive MP4
+/// (which carries its own audio).
+const VIDEO_FORMAT: &str = "bestvideo[ext=mp4][vcodec^=avc1][height<=1080]/best[ext=mp4]/18";
+const AUDIO_FORMAT: &str = "bestaudio[ext=m4a]";
 
 fn cache_dir(storage: &Storage) -> PathBuf {
     storage.join("cache/trailers")
@@ -103,8 +105,8 @@ fn is_valid_key(key: &str) -> bool {
 
 /// Download the trailer to the cache if it isn't there already and return its
 /// path. yt-dlp does the fetching itself — this matters because YouTube's stream
-/// URLs are bound to the player client yt-dlp used to obtain them, so handing
-/// those raw URLs to ffmpeg gets a 403. Letting yt-dlp download sidesteps that.
+/// URLs are bound to the player client yt-dlp used to obtain them, so fetching
+/// those raw URLs ourselves gets a 403. Letting yt-dlp download sidesteps that.
 ///
 /// YouTube is the primary source; when it fails and a `trailers-api` instance is
 /// configured we fall back to it (pulls high-res trailers straight from Apple TV
@@ -175,26 +177,55 @@ pub async fn ensure_cached(
     }
 }
 
-/// Run yt-dlp to download a YouTube video into `dest` as a faststart mp4.
+/// Download a YouTube video into `dest` as a faststart mp4. YouTube serves
+/// HD video and audio as separate streams; yt-dlp fetches them unmerged and
+/// GStreamer muxes them.
 async fn download_trailer(
     storage: &Storage,
     page_url: &str,
     dest: &Path,
     label: &str,
 ) -> Result<()> {
+    let video = dest.with_extension("video.mp4");
+    let audio = dest.with_extension("audio.m4a");
+    let result = async {
+        yt_dlp(storage, page_url, VIDEO_FORMAT, &video, label).await?;
+        // A progressive fallback already has audio; a missing audio stream
+        // just makes a silent trailer.
+        let audio = match yt_dlp(storage, page_url, AUDIO_FORMAT, &audio, label).await {
+            Ok(()) => Some(audio.as_path()),
+            Err(err) => {
+                tracing::debug!("No separate audio for {label}: {err}");
+                None
+            }
+        };
+        media::file::mux_mp4(&video, audio, dest).await?;
+        Ok(())
+    }
+    .await;
+    let _ = tokio::fs::remove_file(&video).await;
+    let _ = tokio::fs::remove_file(&audio).await;
+    result
+}
+
+/// Run yt-dlp to download one format of a YouTube video into `dest`.
+async fn yt_dlp(
+    storage: &Storage,
+    page_url: &str,
+    format: &str,
+    dest: &Path,
+    label: &str,
+) -> Result<()> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.args([
         "-f",
-        FORMAT,
-        "--merge-output-format",
-        "mp4",
+        format,
         "--no-playlist",
         "--no-progress",
         "--quiet",
-        // Move the moov atom to the front so the browser can start playing (and
-        // seeking) as soon as the file is served, rather than after fetching it all.
-        "--postprocessor-args",
-        "ffmpeg:-movflags +faststart",
+        // No post-processing: GStreamer remuxes the result.
+        "--fixup",
+        "never",
     ]);
     apply_cookies(&mut cmd, storage);
     apply_pot(&mut cmd);
@@ -348,60 +379,10 @@ pub async fn ensure_meta(storage: &Storage, key: &str) -> Result<TrailerMeta> {
     let Some(path) = cached_path(storage, key) else {
         return Ok(TrailerMeta { aspect: 16.0 / 9.0 });
     };
-    let aspect = detect_content_aspect(&path.to_string_lossy())
-        .await
-        .unwrap_or(16.0 / 9.0);
+    let aspect = media::content_aspect(&path).await.unwrap_or(16.0 / 9.0);
     let meta = TrailerMeta { aspect };
     if let Ok(bytes) = serde_json::to_vec(&meta) {
         let _ = tokio::fs::write(&meta_path, bytes).await;
     }
     Ok(meta)
-}
-
-async fn detect_content_aspect(input: &str) -> Option<f64> {
-    let output = tokio::process::Command::new("ffmpeg")
-        .args(["-hide_banner", "-nostats", "-ss", "3", "-i"])
-        .arg(input)
-        .args([
-            "-vf",
-            "cropdetect=24:2:0",
-            "-frames:v",
-            "300",
-            "-an",
-            "-f",
-            "null",
-            "-",
-        ])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .ok()?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let (w, h) = parse_largest_crop(&stderr)?;
-    (w > 0 && h > 0).then(|| w as f64 / h as f64)
-}
-
-fn parse_largest_crop(stderr: &str) -> Option<(i64, i64)> {
-    let mut best: Option<(i64, i64)> = None;
-    for line in stderr.lines() {
-        let Some(idx) = line.rfind("crop=") else {
-            continue;
-        };
-        let token: String = line[idx + 5..]
-            .chars()
-            .take_while(|c| c.is_ascii_digit() || *c == ':')
-            .collect();
-        let mut parts = token.split(':');
-        let (Some(Ok(w)), Some(Ok(h))) = (
-            parts.next().map(str::parse::<i64>),
-            parts.next().map(str::parse::<i64>),
-        ) else {
-            continue;
-        };
-        if w > 0 && h > 0 && best.is_none_or(|(bw, bh)| (h, w) > (bh, bw)) {
-            best = Some((w, h));
-        }
-    }
-    best
 }

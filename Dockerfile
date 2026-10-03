@@ -1,4 +1,9 @@
-FROM rust:1-bookworm AS chef
+FROM rust:1-trixie AS chef
+# GStreamer headers for the media crate's bindings.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	libgstreamer1.0-dev \
+	libgstreamer-plugins-base1.0-dev \
+	&& rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
 WORKDIR /app
 
@@ -22,11 +27,15 @@ RUN cargo build --locked --release
 
 RUN bun run --cwd frontend build
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
+# GStreamer does all media work: probing, HLS packaging, transcoding, and
+# muxing trailers. `ugly` brings x264, `libav` the broad set of decoders and
+# the AAC encoder; `bad` has the hardware encoders (NVENC, VA-API), which
+# light up when the container is given the GPU.
+#
 # Runtime deps for yt-dlp trailer fetching:
 #  - python3: the arch-agnostic `yt-dlp` release is a Python zipapp.
-#  - ffmpeg: muxing/remuxing downloaded streams.
 #  - deno: JS runtime yt-dlp needs for YouTube's nsig/JS challenges, and the
 #    runtime for the bgutil PO-token provider in script mode (below).
 #  - bgutil PO-token provider (plugin + server source): lets yt-dlp mint
@@ -37,7 +46,11 @@ FROM debian:bookworm-slim
 ENV POT_VERSION=1.3.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	ca-certificates \
-	ffmpeg \
+	gstreamer1.0-plugins-base \
+	gstreamer1.0-plugins-good \
+	gstreamer1.0-plugins-bad \
+	gstreamer1.0-plugins-ugly \
+	gstreamer1.0-libav \
 	python3 \
 	curl \
 	unzip \

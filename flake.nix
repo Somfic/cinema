@@ -33,9 +33,16 @@
 
             # Frontend
             bun
-            ffmpeg
             yt-dlp
             deno # JS runtime yt-dlp needs to solve YouTube's nsig/JS challenges
+
+            # GStreamer: headers for the media crate, plugins at runtime.
+            gst_all_1.gstreamer
+            gst_all_1.gst-plugins-base
+            gst_all_1.gst-plugins-good
+            gst_all_1.gst-plugins-bad
+            gst_all_1.gst-plugins-ugly
+            gst_all_1.gst-libav
 
             pkg-config
             openssl

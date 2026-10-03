@@ -20,6 +20,19 @@ const FancinessLevel = {
 
 const KEY = "cinema:fanciness";
 const DEFAULT = Fanciness.Ok;
+const CAST_KEY = "cinema:cast-capabilities";
+
+/** What the Chromecast in use can decode beyond H.264 and AAC. Older
+ *  Chromecasts do neither; a Chromecast with Google TV does all three. */
+export interface CastCapabilitySettings {
+	hevc: boolean;
+	/** AC-3 / E-AC-3, passed through to the TV or receiver. */
+	dolby: boolean;
+	/** 4K output. */
+	uhd: boolean;
+}
+
+const CAST_DEFAULT: CastCapabilitySettings = { hevc: false, dolby: false, uhd: false };
 
 function isFanciness(v: unknown): v is Fanciness {
 	return typeof v === "string" && v in FancinessLevel;
@@ -27,17 +40,29 @@ function isFanciness(v: unknown): v is Fanciness {
 
 class Settings {
 	fanciness = $state<Fanciness>(DEFAULT);
+	cast = $state<CastCapabilitySettings>({ ...CAST_DEFAULT });
 	animations = new Animations(this);
 
 	constructor() {
 		if (!browser) return;
 		const stored = localStorage.getItem(KEY);
 		if (isFanciness(stored)) this.fanciness = stored;
+		try {
+			const cast = JSON.parse(localStorage.getItem(CAST_KEY) ?? "null");
+			if (cast && typeof cast === "object") this.cast = { ...CAST_DEFAULT, ...cast };
+		} catch {
+			// Keep the defaults.
+		}
 	}
 
 	setFanciness(v: Fanciness): void {
 		this.fanciness = v;
 		if (browser) localStorage.setItem(KEY, v);
+	}
+
+	setCast(v: Partial<CastCapabilitySettings>): void {
+		this.cast = { ...this.cast, ...v };
+		if (browser) localStorage.setItem(CAST_KEY, JSON.stringify(this.cast));
 	}
 }
 

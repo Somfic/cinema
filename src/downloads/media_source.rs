@@ -3,17 +3,15 @@
 //! Two backing stores exist: the torrent engine (blocks on missing pieces
 //! while a download is in flight) and the on-disk file (a completed download
 //! is just a file). This type unifies both behind a single interface so
-//! consumers - HTTP range serving, ffmpeg-fed transcodes, codec probes - can
-//! stay agnostic about which one they're reading from.
+//! consumers - HTTP range serving, transcodes, probes - can stay agnostic
+//! about which one they're reading from.
 //!
 //! Produced by [`MediaSource::ensure_and_locate`], which
 //! guarantees that for the `Engine` variant the torrent is loaded and the file
 //! is selected; and for the `Disk` variant that the file exists on disk.
 
 use std::path::{Path, PathBuf};
-
-use tokio::io::AsyncWriteExt;
-use tokio::process::ChildStdin;
+use std::sync::Arc;
 
 use super::{TorrentEngine, TorrentFileReader};
 use crate::app::Result;
@@ -24,23 +22,14 @@ pub enum MediaSource {
     Disk { path: PathBuf },
     /// Download is in progress. The engine has the torrent loaded and the
     /// file selected. `sparse_path` points to the on-disk file backing the
-    /// torrent - safe to hand to ffprobe (which is happy with holes), but
-    /// reads that need coherent bytes must go through [`open_reader`], which
-    /// blocks on missing pieces.
+    /// torrent, which has holes where pieces are missing: reads that need
+    /// coherent bytes must go through [`open_reader`], which blocks on
+    /// missing pieces.
     Engine {
         info_hash: String,
         file_idx: usize,
         sparse_path: PathBuf,
     },
-}
-
-/// How to hand this source to ffmpeg's `-i`.
-pub enum FfmpegInputSpec<'a> {
-    /// `-i <path>`: the file is on disk and ffmpeg reads it directly.
-    Path(&'a Path),
-    /// `-i pipe:0`: caller must configure `stdin(Stdio::piped())` and drive
-    /// [`MediaSource::spawn_stdin_pump`] on the resulting `ChildStdin`.
-    Pipe,
 }
 
 impl MediaSource {
@@ -79,38 +68,37 @@ impl MediaSource {
         })
     }
 
-    /// A path safe to hand to ffprobe. Works in both modes because the on-disk
-    /// file exists in `Engine` mode too - it's just sparse.
-    pub fn probe_path(&self) -> &Path {
+    /// Where the file lives on disk. For a download in progress this is the
+    /// sparse file the torrent is filling in.
+    pub fn path(&self) -> &Path {
         match self {
             Self::Disk { path } => path,
             Self::Engine { sparse_path, .. } => sparse_path,
         }
     }
 
-    /// A coherent source specifier for ffmpeg-family probes that need to seek
-    /// or read past a torrent's missing pieces. For `Disk`, this is the on-disk
-    /// path; for `Engine`, a loopback HTTP URL through the blocking stream
-    /// reader (the raw sparse file would trip up e.g. a moov-atom seek).
-    pub fn coherent_input(&self, config: &crate::config::Config) -> String {
+    /// The source as input for a media pipeline. A download in progress is
+    /// read through the torrent stream, so a pipeline waits for missing
+    /// pieces instead of reading holes.
+    pub async fn media_input(&self) -> Result<media::Input> {
         match self {
-            Self::Disk { path, .. } => path.to_string_lossy().into_owned(),
+            Self::Disk { path } => Ok(media::Input::File(path.clone())),
             Self::Engine {
                 info_hash,
                 file_idx,
                 ..
-            } => format!(
-                "http://127.0.0.1:{}/api/stream/{}/{}",
-                config.port, info_hash, file_idx
-            ),
-        }
-    }
-
-    /// How to attach this source as ffmpeg's input.
-    pub fn ffmpeg_input_spec(&self) -> FfmpegInputSpec<'_> {
-        match self {
-            Self::Disk { path, .. } => FfmpegInputSpec::Path(path),
-            Self::Engine { .. } => FfmpegInputSpec::Pipe,
+            } => {
+                let len = open_stream(info_hash, *file_idx).await?.len;
+                let opener = TorrentOpener {
+                    info_hash: info_hash.clone(),
+                    file_idx: *file_idx,
+                    len,
+                };
+                Ok(media::Input::stream(
+                    Arc::new(opener),
+                    format!("{info_hash}/{file_idx}"),
+                ))
+            }
         }
     }
 
@@ -128,32 +116,47 @@ impl MediaSource {
             } => TorrentEngine::get().stream(info_hash, *file_idx),
         }
     }
+}
 
-    /// Spawn a background task that copies bytes from this source into
-    /// `stdin`. Intended for `Engine` sources feeding `-i pipe:0` - for `Disk`
-    /// sources you don't need a pump (ffmpeg reads the file itself).
-    pub async fn spawn_stdin_pump(&self, stdin: ChildStdin) -> Result<tokio::task::JoinHandle<()>> {
-        let reader = self.open_reader().await?;
-        let span = tracing::Span::current();
-        Ok(tokio::spawn(tracing::Instrument::instrument(
-            async move {
-                use tokio::io::AsyncReadExt;
-                let mut reader = reader;
-                let mut stdin = stdin;
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
-                    match reader.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if stdin.write_all(&buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            },
-            span,
-        )))
+/// How long a torrent may take to finish initialising (checking the pieces
+/// already on disk) before a stream on it gives up.
+const INITIALISING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Opens a stream, waiting out a torrent that is still initialising: right
+/// after a (re)start librqbit refuses streams until it has checked its files.
+async fn open_stream(info_hash: &str, file_idx: usize) -> Result<TorrentFileReader> {
+    let deadline = tokio::time::Instant::now() + INITIALISING_TIMEOUT;
+    loop {
+        match TorrentEngine::get().stream(info_hash, file_idx) {
+            Err(err)
+                if err.to_string().contains("initializing")
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
+struct TorrentOpener {
+    info_hash: String,
+    file_idx: usize,
+    len: u64,
+}
+
+impl media::Opener for TorrentOpener {
+    fn size(&self) -> u64 {
+        self.len
+    }
+
+    fn open(&self) -> futures::future::BoxFuture<'static, std::io::Result<media::BoxReader>> {
+        let (info_hash, file_idx) = (self.info_hash.clone(), self.file_idx);
+        Box::pin(async move {
+            open_stream(&info_hash, file_idx)
+                .await
+                .map(|reader| Box::pin(reader) as media::BoxReader)
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        })
     }
 }

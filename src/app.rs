@@ -42,6 +42,16 @@ pub enum CinemaError {
     JsonError(#[from] serde_json::Error),
 }
 
+impl From<media::Error> for CinemaError {
+    fn from(err: media::Error) -> Self {
+        match err {
+            media::Error::NotFound(msg) => CinemaError::NotFound(msg),
+            media::Error::Io(err) => CinemaError::IoError(err),
+            other => CinemaError::Generic(other.to_string()),
+        }
+    }
+}
+
 // draad 0.2 returns the trait's `Result<_, Error>` straight to axum, so the
 // error type owns its HTTP mapping (0.1 routed it through a generated shim).
 // The body shape — `{ kind, message }` — matches the frontend's
@@ -135,9 +145,9 @@ impl Storage {
         self.join("pretranscoded")
     }
 
-    /// Parent directory for live HLS session subdirectories
-    /// (`hls/{session_id}/playlist.m3u8` + segments). Populated by the live
-    /// transcoding manager; cleaned up when a session ends.
+    /// Parent directory for live HLS session subdirectories (packaged
+    /// segments, per session). Populated by the live transcoding manager;
+    /// cleaned up when a session ends.
     pub fn hls_dir(&self) -> std::path::PathBuf {
         self.join("hls")
     }

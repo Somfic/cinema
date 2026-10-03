@@ -34,7 +34,7 @@ pub trait Urls {
     fn external_subtitles(url: String);
 
     /// An embedded subtitle track of a torrent file, rendered as WebVTT.
-    /// `{stream_index}` is the ffmpeg stream index (the number encoded in the
+    /// `{stream_index}` is the index among the file's subtitle tracks (the number encoded in the
     /// frontend's `embedded:<n>` track ids).
     #[get("/api/subtitles/embedded/{info_hash}/{file_idx}/{stream_index}")]
     fn embedded_subtitles(info_hash: String, file_idx: i64, stream_index: i64);

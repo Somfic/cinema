@@ -34,16 +34,30 @@ pub struct Config {
     #[serde(default = "default_torrent_validation_timeout")]
     pub torrent_validation_timeout: Duration,
 
-    #[serde(default = "default_ffmpeg_max_startup_duration")]
-    pub ffmpeg_max_startup_duration: Duration,
-    #[serde(default = "default_ffmpeg_startup_poll_interval")]
-    pub ffmpeg_startup_poll_interval: Duration,
-    #[serde(default = "default_ffmpeg_hwaccel")]
-    pub ffmpeg_hwaccel: String,
-    #[serde(default = "default_ffmpeg_video_preset")]
-    pub ffmpeg_video_preset: String,
-    #[serde(default = "default_ffmpeg_video_crf")]
-    pub ffmpeg_video_crf: u8,
+    /// Video encoder family: `auto`, `none` (software x264), `nvidia`,
+    /// `vaapi` or `videotoolbox`.
+    #[serde(default = "default_transcode_hardware")]
+    pub transcode_hardware: String,
+    /// x264 speed preset, used when encoding in software.
+    #[serde(default = "default_transcode_preset")]
+    pub transcode_preset: String,
+    /// Constant-quality target on the CRF scale (lower is better).
+    #[serde(default = "default_transcode_crf")]
+    pub transcode_crf: u8,
+    /// Re-encoded video is scaled down to at most this height.
+    #[serde(default = "default_transcode_max_height")]
+    pub transcode_max_height: u32,
+}
+
+impl Config {
+    pub fn encoder(&self) -> media::EncoderSettings {
+        media::EncoderSettings {
+            hardware: self.transcode_hardware.parse().unwrap_or_default(),
+            preset: self.transcode_preset.clone(),
+            crf: self.transcode_crf,
+            max_height: self.transcode_max_height,
+        }
+    }
 }
 
 impl Config {
@@ -94,26 +108,21 @@ impl Config {
         {
             self.torrent_validation_timeout = Duration::from_millis(d_ms);
         }
-        if let Ok(v) = env::var("CINEMA_FFMPEG_MAX_STARTUP_DURATION_MS")
-            && let Ok(d_ms) = v.parse()
-        {
-            self.ffmpeg_max_startup_duration = Duration::from_millis(d_ms);
+        if let Ok(v) = env::var("CINEMA_TRANSCODE_HARDWARE") {
+            self.transcode_hardware = v;
         }
-        if let Ok(v) = env::var("CINEMA_FFMPEG_STARTUP_POLL_INTERVAL_MS")
-            && let Ok(d_ms) = v.parse()
-        {
-            self.ffmpeg_startup_poll_interval = Duration::from_millis(d_ms);
+        if let Ok(v) = env::var("CINEMA_TRANSCODE_PRESET") {
+            self.transcode_preset = v;
         }
-        if let Ok(v) = env::var("CINEMA_FFMPEG_HWACCEL") {
-            self.ffmpeg_hwaccel = v;
-        }
-        if let Ok(v) = env::var("CINEMA_FFMPEG_VIDEO_PRESET") {
-            self.ffmpeg_video_preset = v;
-        }
-        if let Ok(v) = env::var("CINEMA_FFMPEG_VIDEO_CRF")
+        if let Ok(v) = env::var("CINEMA_TRANSCODE_CRF")
             && let Ok(n) = v.parse()
         {
-            self.ffmpeg_video_crf = n;
+            self.transcode_crf = n;
+        }
+        if let Ok(v) = env::var("CINEMA_TRANSCODE_MAX_HEIGHT")
+            && let Ok(n) = v.parse()
+        {
+            self.transcode_max_height = n;
         }
     }
 }
@@ -135,8 +144,8 @@ fn default_max_concurrent_downloads() -> usize {
 }
 
 fn default_max_concurrent_pretranscodings() -> usize {
-    // ffmpeg + a single GPU is the bottleneck for full transcodes, and
-    // only-audio jobs are cheap enough not to need a bigger cap.
+    // A single GPU is the bottleneck for full transcodes, and only-audio
+    // jobs are cheap enough not to need a bigger cap.
     1
 }
 
@@ -160,25 +169,20 @@ fn default_torrent_validation_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
-fn default_ffmpeg_max_startup_duration() -> Duration {
-    // Generous because the bottleneck at startup is the torrent delivering the
-    // head of the file (a cold 4K stream can take >10s to buffer the first
-    // segment), not the now hardware-accelerated encode.
-    Duration::from_secs(45)
-}
-
-fn default_ffmpeg_startup_poll_interval() -> Duration {
-    Duration::from_millis(100)
-}
-
-fn default_ffmpeg_hwaccel() -> String {
+fn default_transcode_hardware() -> String {
     "auto".to_string()
 }
 
-fn default_ffmpeg_video_preset() -> String {
+fn default_transcode_preset() -> String {
+    // Software encoding has to keep up with playback on small machines (a
+    // Raspberry Pi 5 has no hardware encoder).
     "ultrafast".to_string()
 }
 
-fn default_ffmpeg_video_crf() -> u8 {
+fn default_transcode_crf() -> u8 {
     23
+}
+
+fn default_transcode_max_height() -> u32 {
+    1080
 }

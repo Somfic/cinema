@@ -85,14 +85,14 @@ async fn external_subtitles(
 }
 
 /// WebVTT for a subtitle track embedded in a torrent file. Extraction reads
-/// through the loopback stream route, so a still-downloading file works.
+/// through the torrent stream, so a still-downloading file works.
 async fn embedded_subtitles(
     State(ctx): State<AppContext>,
     Path((info_hash, file_idx, stream_index)): Path<(String, i64, i64)>,
 ) -> Result<axum::response::Response, RawError> {
-    let url = ctx.stream_url(&info_hash, file_idx);
-    let cues =
-        crate::downloads::TorrentEngine::extract_subtitle_cues(&url, stream_index as usize).await;
+    let cues = ctx
+        .embedded_subtitle_cues(&info_hash, file_idx, stream_index)
+        .await?;
     Ok(vtt_response(&cues))
 }
 
@@ -112,7 +112,7 @@ async fn serve_trailer(
 ) -> Result<axum::response::Response, RawError> {
     // Download via yt-dlp on the first request (no-op once cached), then range-serve
     // the file so seeking works. yt-dlp does the fetching so client-bound YouTube
-    // CDN URLs — which 403 when handed straight to ffmpeg — resolve correctly.
+    // CDN URLs — which 403 when fetched by anyone else — resolve correctly.
     let path = crate::trailer::ensure_cached(
         &ctx.storage,
         &key,
@@ -241,37 +241,14 @@ async fn hls_serve(
     State(ctx): State<AppContext>,
     Path((session_id, file)): Path<(String, String)>,
 ) -> Result<axum::response::Response, RawError> {
-    if file.contains("..") || file.contains('/') {
-        return Err(CinemaError::Generic("Invalid path".into()).into());
-    }
-
-    let dir = ctx
-        .transcodings
-        .live_session_dir(&session_id)
-        .await
-        .ok_or_else(|| CinemaError::NotFound("HLS session not found".into()))?;
-    ctx.transcodings.touch_live(&session_id).await;
-
-    let full_path = dir.join(&file);
-    let bytes = match tokio::fs::read(&full_path).await {
-        Ok(b) => b,
-        Err(_) => {
-            if let Some(error) = ctx.transcodings.live_session_error(&session_id).await {
-                return Err(CinemaError::Generic(format!(
-                    "Stream failed (ffmpeg exited): {error}"
-                ))
-                .into());
-            }
-            return Err(CinemaError::NotFound(format!("HLS file not found: {file}")).into());
-        }
-    };
-
-    let (content_type, cache) = if file.ends_with(".m3u8") {
-        ("application/vnd.apple.mpegurl", "no-cache")
+    let (bytes, content_type) = ctx.transcodings.serve_live(&session_id, &file).await?;
+    // Playlists list the whole file and never change, segments are
+    // immutable; but both belong to one session, so cache only for its life.
+    let cache = if file.ends_with(".m3u8") {
+        "no-cache"
     } else {
-        ("video/mp2t", "public, max-age=3600")
+        "private, max-age=3600"
     };
-
     Ok(axum::http::Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)

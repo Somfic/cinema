@@ -3,26 +3,27 @@
 //! until the requested state is observable in both the process table and the DB.
 //!
 //! On top of the pretranscoding lifecycle, `Handle` also manages live HLS
-//! sessions in an in-memory session map. Live sessions occupy a slot in the
-//! same [`SupervisorPool`] at [`TranscodingPriority::Live`] and pre-empt
-//! background pretranscodings via the pool's eviction path. Live sessions are
-//! intentionally *not* DB-backed: a session is a running ffmpeg process
-//! serving a viewer and cannot survive a restart (the process dies, the temp
-//! segments are stale, the browser reconnects to a fresh one).
+//! sessions in an in-memory session map. A live session that re-encodes
+//! video occupies a slot in the same [`SupervisorPool`] at
+//! [`TranscodingPriority::Live`] and pre-empts background pretranscodings via
+//! the pool's eviction path; sessions that only repackage are cheap and take
+//! no slot. Live sessions are intentionally *not* DB-backed: a session is a
+//! pipeline serving a viewer and cannot survive a restart.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
+use std::sync::{Arc, Mutex};
 
 use crate::app::{CinemaError, Pool, Storage};
 use crate::config::Config;
 use crate::transcodings::PretranscodingOutputPath;
-use crate::transcodings::session::SessionMap;
 use crate::transcodings::types::PretranscodingStatus;
 use crate::utils::supervisor_pool::SupervisorPool;
 
 mod background;
 mod live;
+
+pub use live::{ClientCapabilities, Playback};
 
 /// Priority ranking for the transcoding [`SupervisorPool`]. A live viewer session pre-empts
 /// any background pretranscoding, background pretranscodings never evict
@@ -38,15 +39,6 @@ pub enum TranscodingPriority {
     Pretranscoding = 0,
 }
 
-/// Handle returned from `Handle::start_playback`. The session is owned by the
-/// manager; consumers use `session_id` to address it (touch / stop / stream
-/// segments) and `playlist_url` to hand off to the video element.
-#[derive(Debug, Clone)]
-pub struct PlaybackSession {
-    pub session_id: String,
-    pub playlist_url: String,
-}
-
 /// Cheap, cloneable handle to the transcoding subsystem.
 #[derive(Clone)]
 pub struct Handle(Arc<Inner>);
@@ -58,8 +50,12 @@ struct Inner {
     config: Arc<Config>,
     storage: Storage,
     supervisor_pool: SupervisorPool,
+    /// Pretranscodes suspended by a pause or a live eviction, by row id.
+    parked: crate::transcodings::supervisor::ParkedJobs,
     /// In-memory live-session map, keyed by session_id.
-    sessions: SessionMap,
+    sessions: Mutex<HashMap<String, live::LiveSession>>,
+    /// Probe results by file, so repeated playback calls don't re-demux.
+    probes: Mutex<HashMap<String, Arc<media::MediaInfo>>>,
     /// Monotonic negative counter for `SupervisorPool` keys used by live
     /// sessions. Pretranscoding IDs are Postgres SERIAL (always > 0), so
     /// staying negative guarantees no collision.
@@ -83,7 +79,9 @@ impl Handle {
             config,
             storage,
             supervisor_pool,
-            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            parked: Default::default(),
+            sessions: Mutex::new(HashMap::new()),
+            probes: Mutex::new(HashMap::new()),
             live_pool_id: AtomicI32::new(-1),
         });
 
@@ -105,26 +103,33 @@ impl Handle {
     }
 
     /// Cancel all in-flight supervisors and wait for them to drain. Also
-    /// tears down every live HLS session so their ffmpeg children die and
-    /// their temp segment directories are removed.
+    /// tears down every live HLS session.
     pub async fn shutdown(&self) {
         self.stop_all_live().await;
-        self.0.supervisor_pool.shutdown().await
+        self.0.supervisor_pool.shutdown().await;
+        self.0.parked.lock().unwrap().clear();
     }
 
-    /// Boot-time recovery. A partial MP4 without its moov atom is unusable, so
-    /// any row left mid-flight from a previous run is marked failed and its
-    /// segment files are scrubbed. Also picks up any `queued` rows. Rows in
-    /// `paused` state are left alone: their segments were finalized cleanly
-    /// on the pause SIGINT path and are safe to resume.
+    /// Boot-time recovery. Jobs run in-process, so anything left mid-flight
+    /// (or suspended) by a previous run is gone: running rows go back to the
+    /// queue and start over, paused rows start over when resumed. Also
+    /// picks up any `queued` rows.
     pub async fn boot(&self) -> crate::app::Result<()> {
-        // Collect the rows we're about to fail so we can also delete their
-        // partial output files.
+        // Warm the encoder choice up front: the first lookup runs test
+        // encodes, which shouldn't land on the first stream's startup.
+        let encoder = self.0.config.encoder();
+        match tokio::task::spawn_blocking(move || media::h264_encoder_name(&encoder)).await {
+            Ok(Some(name)) => tracing::info!(encoder = name, "Video encoder selected"),
+            _ => tracing::warn!("No working H.264 encoder; video transcoding will fail"),
+        }
+
         let interrupted = sqlx::query!(
             r#"
-                SELECT pt.id, pt.download_id, pt.only_audio, pt.audio_index
-                FROM pretranscodings pt
-                WHERE pt.status = 'transcoding'
+                UPDATE pretranscodings
+                SET status = CASE WHEN status = 'transcoding' THEN 'queued'::pretranscoding_status ELSE status END,
+                    transcoded_ms = 0
+                WHERE status IN ('transcoding', 'paused')
+                RETURNING download_id, only_audio, audio_index
             "#,
         )
         .fetch_all(&self.0.db)
@@ -132,28 +137,24 @@ impl Handle {
         .map_err(CinemaError::DatabaseError)?;
 
         for row in &interrupted {
-            let path = PretranscodingOutputPath::new(
+            PretranscodingOutputPath::new(
                 &self.0.storage,
                 row.download_id,
                 row.only_audio,
                 row.audio_index,
-            );
-            path.remove_all_segments().await;
+            )
+            .remove()
+            .await;
         }
-
-        let reset = sqlx::query!(
-            "UPDATE pretranscodings SET status = 'failed', error = 'Interrupted at restart' WHERE status = 'transcoding'",
-        )
-        .execute(&self.0.db)
-        .await
-        .map_err(CinemaError::DatabaseError)?;
-
-        if reset.rows_affected() > 0 {
+        if !interrupted.is_empty() {
             tracing::info!(
-                count = reset.rows_affected(),
-                "Marked interrupted pretranscodings as failed"
+                count = interrupted.len(),
+                "Restarting pretranscodings interrupted by the restart"
             );
         }
+
+        // Live sessions don't survive a restart either.
+        let _ = tokio::fs::remove_dir_all(self.0.storage.hls_dir()).await;
 
         self.refresh().await;
 
@@ -183,6 +184,28 @@ impl Handle {
                 }
             });
         }
+    }
+
+    /// Probes a file, caching the result per `key`. Only successful probes
+    /// with a known duration are cached: a torrent that hasn't delivered its
+    /// header yet probes better later.
+    pub(crate) async fn media_info(
+        &self,
+        key: &str,
+        input: &media::Input,
+    ) -> crate::app::Result<Arc<media::MediaInfo>> {
+        if let Some(info) = self.0.probes.lock().unwrap().get(key) {
+            return Ok(info.clone());
+        }
+        let info = Arc::new(media::probe(input).await?);
+        if info.duration.is_some() {
+            let mut probes = self.0.probes.lock().unwrap();
+            if probes.len() > 512 {
+                probes.clear();
+            }
+            probes.insert(key.to_string(), info.clone());
+        }
+        Ok(info)
     }
 
     fn emit_status_update(&self, id: i32, download_id: i32, new_status: PretranscodingStatus) {

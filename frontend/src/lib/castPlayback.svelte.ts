@@ -1,10 +1,11 @@
-// Bridges a `PlaybackSession` to a Chromecast session: forces the stream into
-// a form a receiver can play, pushes it there, and keeps captions in sync.
+// Bridges a `PlaybackSession` to a Chromecast session: replans the stream for
+// the receiver's decoders, pushes it there, and keeps captions in sync.
 //
 // Both players mount this — the standalone play route and the in-page player
 // the details page opens — so casting behaves the same wherever playback
 // started from.
 
+import { untrack } from "svelte";
 import { api } from "$lib/api";
 import { cast, castAbsoluteUrl, type CastTextTrack } from "$lib/cast.svelte";
 import type { PlaybackSession } from "$lib/playback.svelte";
@@ -49,27 +50,18 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 		}));
 	});
 
-	// A receiver can't play the raw container, so casting always runs off an
-	// HLS session — but it doesn't need the video re-encoded. Audio-only
-	// transcode copies the video stream through and just normalises audio to
-	// stereo AAC, which is nearly free and keeps the source quality intact.
-	//
-	// Applied once when a session connects; a later choice in the player's
-	// transcoding menu is the user's, so it isn't overridden. If a particular
-	// file won't play on the receiver (a codec it can't decode), switching to
-	// "Audio + video" there re-encodes it.
-	let appliedCastTranscoding = false;
+	// What the receiver can decode differs from the browser, so connecting
+	// replans the stream for the Chromecast (and disconnecting replans it
+	// for the browser). Usually the video is copied either way and at most
+	// the audio is re-encoded.
+	let castTarget = false;
 	$effect(() => {
-		if (!cast.connected) {
-			appliedCastTranscoding = false;
-			return;
-		}
-		if (appliedCastTranscoding || !session.streamUrl) return;
-		appliedCastTranscoding = true;
-		if (session.transcoding.enabled && session.transcoding.onlyAudio) return;
-		session.transcoding.enabled = true;
-		session.transcoding.onlyAudio = true;
-		session.toggleTranscoding(true, true, ctx.currentTime());
+		const connected = cast.connected;
+		if (connected === castTarget) return;
+		castTarget = connected;
+		untrack(() => {
+			session.retarget(connected ? "cast" : "browser", ctx.currentTime());
+		});
 	});
 
 	let loadedUrl: string | null = null;
@@ -91,50 +83,45 @@ export function castPlayback(ctx: CastPlaybackContext): void {
 	});
 
 	// Push media to the receiver whenever the thing being played changes — a
-	// new playlist (source switch, audio switch, seek-restart) or a fresh cast
-	// session. The last-loaded url keeps an unrelated state change from
+	// new stream (source switch, audio switch, transcoding change) or a fresh
+	// cast session. The last-loaded url keeps an unrelated state change from
 	// reloading the receiver mid-playback.
 	$effect(() => {
 		if (!cast.connected) {
 			loadedUrl = null;
 			return;
 		}
+		// Wait for the stream planned for the receiver.
+		if (session.target !== "cast") return;
 		const url = session.streamUrl;
-		if (!url || !session.hlsSessionId) return;
+		const playback = session.playback;
+		if (!url || !playback) return;
 		const tracks = textTracks;
 		// Subtitles resolve a moment after playback starts, so a cast that
 		// began with none reloads once to pick them up — captions can't be
 		// added to media the receiver has already loaded.
 		if (url === loadedUrl && tracks.length === loadedTrackCount) return;
 
-		// Where the receiver should pick up. A reload that keeps the same url
-		// (captions arriving) resumes at the live position; a new url is a new
-		// HLS session, and then the live position is the *old* session's — the
-		// place a seek just moved away from. Loading there is what made a seek
-		// snap back to where playback already was, so a seek-restart uses its
-		// target, and any other new session its timeline origin (clamped up to
-		// the live position, for a session that started before the receiver
-		// joined).
-		const resumeAt =
-			url === loadedUrl
-				? ctx.currentTime()
-				: (session.hlsSeekTarget ??
-					Math.max(ctx.currentTime(), session.hlsStartAt));
-		// The session's playlist runs from zero; `resumeAt` is a position in
-		// the file, so drop the session's origin back off it.
-		const startAt = Math.max(0, resumeAt - session.hlsStartAt);
+		// Positions are positions in the file for every stream. A reload of
+		// the same url (captions arriving) resumes at the live position; a new
+		// stream starts where the one it replaced was.
+		const startAt = untrack(() =>
+			url === loadedUrl ? ctx.currentTime() : (session.resumeAt ?? ctx.currentTime()),
+		);
 		const activeIndex = session.subtitleTracks.findIndex(
 			(t) => t.url === session.activeTrackUrl,
 		);
 		loadedUrl = url;
 		loadedTrackCount = tracks.length;
+		const hls = playback.kind === "Hls";
 		cast
 			.load({
 				url: castAbsoluteUrl(url),
-				contentType: "application/x-mpegurl",
+				contentType: hls ? "application/x-mpegurl" : "video/mp4",
+				hls,
 				title: ctx.title(),
 				subtitle: ctx.subtitle(),
-				currentTime: startAt,
+				currentTime: Math.max(0, startAt),
 				tracks,
 				activeTrackId: activeIndex >= 0 ? tracks[activeIndex]?.id : null,
 			})

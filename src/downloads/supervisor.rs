@@ -138,8 +138,8 @@ impl Supervisor {
             // the file selection landing. Marking the row completed there
             // persists an `output_path` to a file that is still a hole on
             // disk, and every later read takes the "it's on disk" fast path
-            // and gets zeroes (ffmpeg: "Invalid data found when processing
-            // input"). Require actual bytes before believing it.
+            // and gets zeroes (demuxers: "Invalid data"). Require actual
+            // bytes before believing it.
             let complete = stats.finished
                 && stats.total_bytes > 0
                 && stats.progress_bytes >= stats.total_bytes;

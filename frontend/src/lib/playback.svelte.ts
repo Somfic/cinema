@@ -1,15 +1,22 @@
 import { api } from "$lib/api";
+import { browserCapabilities, castCapabilities } from "$lib/capabilities";
 import { downloadManager } from "$lib/downloads.svelte";
+import { settings } from "$lib/settings.svelte";
 import type {
 	AudioTrack,
 	Chapter,
 	EmbeddedSubtitleTrack,
 	MediaItem,
+	Playback,
 	StreamStats,
 	SubtitleCue,
 	SubtitleTrack,
 	TranscodingOption,
 } from "$lib/schema";
+
+/** Where the stream is being played: its decoders decide what the server
+ *  has to re-encode. */
+export type PlaybackTarget = "browser" | "cast";
 
 export interface PlaybackContext {
 	item: () => MediaItem | null;
@@ -21,8 +28,13 @@ export interface PlaybackContext {
 
 /**
  * Shared playback orchestration: subtitle loading, audio-track polling,
- * stream-stats subscriptions, HLS remux lifecycle, transcoding toggle, and
- * progress saving.
+ * stream-stats subscriptions, the playback session lifecycle, transcoding
+ * toggle, and progress saving.
+ *
+ * The server decides how little work gets a file playing on the target (the
+ * file as is, or HLS with only the undecodable streams re-encoded). HLS
+ * playlists cover the whole file, so the player seeks natively and positions
+ * are positions in the file throughout.
  *
  * Inputs are passed as getter callbacks so the session reacts to the
  * surrounding route's reactive state (e.g. the details page can switch
@@ -30,7 +42,10 @@ export interface PlaybackContext {
  */
 export class PlaybackSession {
 	streamUrl = $state<string | null>(null);
-	playingLocal = $state(false);
+	/** How the current stream reaches the player. */
+	playback = $state<Playback | null>(null);
+	/** Who decodes the stream; casting replans for the Chromecast. */
+	target = $state<PlaybackTarget>("browser");
 
 	subtitleTracks = $state<SubtitleTrack[]>([]);
 	activeCues = $state<SubtitleCue[]>([]);
@@ -44,14 +59,10 @@ export class PlaybackSession {
 	mediaDuration = $state(0);
 
 	hlsSessionId = $state<string | null>(null);
-	/** Absolute time the current HLS session's timeline begins at: everything
-	 *  before it was never transcoded, so nothing can seek there. */
-	hlsStartAt = $state(0);
-	/** Set only when the current session exists because of a seek, and holds
-	 *  the position playback is meant to resume at. Consumers that (re)start a
-	 *  player need it: the position they can observe is the pre-seek one the
-	 *  old session left behind, and starting there undoes the seek. */
-	hlsSeekTarget = $state<number | null>(null);
+	/** Position to continue from when the stream is replaced mid-playback
+	 *  (audio switch, transcoding change, cast handoff). The player's own
+	 *  position at that moment belongs to the old stream. */
+	resumeAt = $state<number | null>(null);
 	transcoding = $state({ enabled: false, onlyAudio: false });
 
 	streamStats = $state<StreamStats | null>(null);
@@ -92,34 +103,14 @@ export class PlaybackSession {
 		await this.#stopStream();
 
 		const { startAt = 0, transcoding } = options ?? {};
-		this.hlsSeekTarget = null;
-
-		if (transcoding === "Enabled" || transcoding === "OnlyAudio") {
-			const onlyAudio = transcoding === "OnlyAudio";
-			this.transcoding.enabled = true;
-			this.transcoding.onlyAudio = onlyAudio;
-			await this.#startHlsRemux(stream.info_hash, stream.file_idx, 0, onlyAudio, startAt);
-			// #startHlsRemux clears hlsSessionId when the stream was superseded or errored.
-			if (!this.hlsSessionId) return;
-		} else {
-			const result = await api.streams.start(stream.info_hash, stream.file_idx);
-			// Discard if the route switched streams while we awaited.
-			const cur = this.ctx.currentStream();
-			if (
-				!cur ||
-				cur.info_hash !== stream.info_hash ||
-				cur.file_idx !== stream.file_idx
-			)
-				return;
-			this.streamUrl = result.url;
-			this.playingLocal = result.local;
-			this.hlsStartAt = 0;
-			this.#currentlyPlaying = stream;
-		}
+		this.transcoding.enabled = transcoding === "Enabled" || transcoding === "OnlyAudio";
+		this.transcoding.onlyAudio = transcoding === "OnlyAudio";
+		await this.#play(stream.info_hash, stream.file_idx, 0, startAt > 0 ? startAt : null);
+		// #play leaves streamUrl unset when the stream was superseded or failed.
+		if (!this.streamUrl) return;
 
 		this.#pollAudioTracks(stream.info_hash, stream.file_idx);
-		if (!this.playingLocal)
-			this.#pollStreamStats(stream.info_hash, stream.file_idx);
+		this.#pollStreamStats(stream.info_hash, stream.file_idx);
 	}
 
 	stop(): void {
@@ -150,7 +141,7 @@ export class PlaybackSession {
 	// transcoding toggle, etc.) and `stop()`.
 	#resetState(): void {
 		this.streamUrl = null;
-		this.playingLocal = false;
+		this.playback = null;
 		this.subtitleTracks = [];
 		this.activeCues = [];
 		this.activeTrackUrl = undefined;
@@ -162,8 +153,7 @@ export class PlaybackSession {
 		this.mediaDuration = 0;
 		this.transcoding.enabled = false;
 		this.transcoding.onlyAudio = false;
-		this.hlsStartAt = 0;
-		this.hlsSeekTarget = null;
+		this.resumeAt = null;
 		this.streamStats = null;
 		this.pieceMap = [];
 	}
@@ -209,7 +199,7 @@ export class PlaybackSession {
 			const stream = this.ctx.currentStream();
 			if (track.id.startsWith("embedded:") && stream) {
 				// Embedded cues are extracted on demand over RPC, keyed by the
-				// ffmpeg stream index encoded in the track id.
+				// subtitle track index encoded in the track id.
 				const streamIndex = Number(track.id.slice("embedded:".length));
 				this.activeCues = await api.streams.embeddedSubtitles(
 					stream.info_hash,
@@ -315,37 +305,15 @@ export class PlaybackSession {
 		}
 	}
 
-	// Audio switching / seeking / transcoding
+	// Audio switching / transcoding / cast handoff
+	//
+	// Each replaces the stream and picks up where playback was.
 
 	async switchAudio(idx: number, currentTime: number): Promise<void> {
 		const stream = this.ctx.currentStream();
 		if (!stream) return;
 		this.activeAudioIdx = idx;
-		this.hlsSeekTarget = null;
-		await this.#startHlsRemux(
-			stream.info_hash,
-			stream.file_idx,
-			idx,
-			this.transcoding.onlyAudio,
-			currentTime,
-		);
-	}
-
-	// Seek beyond the transcoded window: restart the HLS transcode at the
-	// target time. `-ss`/`-copyts` keep currentTime aligned to the absolute
-	// timeline, so the player resumes at the sought position once the new
-	// playlist loads.
-	async seekRestart(time: number): Promise<void> {
-		const stream = this.ctx.currentStream();
-		if (!stream) return;
-		this.hlsSeekTarget = time;
-		await this.#startHlsRemux(
-			stream.info_hash,
-			stream.file_idx,
-			this.activeAudioIdx,
-			this.transcoding.onlyAudio,
-			time,
-		);
+		await this.#play(stream.info_hash, stream.file_idx, idx, currentTime);
 	}
 
 	async toggleTranscoding(
@@ -354,69 +322,64 @@ export class PlaybackSession {
 		currentTime: number,
 	): Promise<void> {
 		const stream = this.ctx.currentStream();
+		this.transcoding.enabled = enabled;
+		this.transcoding.onlyAudio = enabled && onlyAudio;
 		if (!stream) return;
-		this.hlsSeekTarget = null;
-		if (enabled) {
-			await this.#startHlsRemux(
-				stream.info_hash,
-				stream.file_idx,
-				this.activeAudioIdx,
-				onlyAudio,
-				currentTime,
-			);
-		} else {
-			this.stopHlsSession();
-			const result = await api.streams.start(stream.info_hash, stream.file_idx);
-			this.streamUrl = result.url;
-			this.hlsStartAt = 0;
-		}
+		await this.#play(stream.info_hash, stream.file_idx, this.activeAudioIdx, currentTime);
 	}
 
-	async #startHlsRemux(
+	/** Moves playback to another decoder (the browser, or a Chromecast):
+	 *  what needs re-encoding depends on who decodes it. */
+	async retarget(target: PlaybackTarget, currentTime: number): Promise<void> {
+		if (this.target === target) return;
+		this.target = target;
+		const stream = this.ctx.currentStream();
+		if (!stream || !this.streamUrl) return;
+		await this.#play(stream.info_hash, stream.file_idx, this.activeAudioIdx, currentTime);
+	}
+
+	#mode(): TranscodingOption {
+		if (!this.transcoding.enabled) return "Disabled";
+		return this.transcoding.onlyAudio ? "OnlyAudio" : "Enabled";
+	}
+
+	async #play(
 		hash: string,
 		idx: number,
 		audioIdx: number,
-		onlyAudio: boolean,
-		startAt = 0,
+		resumeAt: number | null,
 	): Promise<void> {
 		await this.stopHlsSession();
 		this.streamUrl = null;
 		if (this.#currentlyPlaying && (this.#currentlyPlaying.info_hash !== hash || this.#currentlyPlaying.file_idx !== idx)) {
 			await this.#stopStream();
 		}
+		const client =
+			this.target === "cast" ? castCapabilities(settings.cast) : browserCapabilities();
 		try {
-			const session = await api.streams.remux(
-				hash,
-				idx,
-				audioIdx,
-				startAt,
-				onlyAudio,
-			);
-			// The remux call blocks until the first segment exists; the user
-			// may have switched streams in the meantime. Drop the orphan
-			// session so its playlist doesn't leak into the new stream.
+			const playback = await api.streams.play(hash, idx, audioIdx, client, this.#mode());
+			// The user may have switched streams while this was in flight.
+			// Drop the orphan session so it doesn't leak into the new stream.
 			const cur = this.ctx.currentStream();
 			if (!cur || cur.info_hash !== hash || cur.file_idx !== idx) {
-				api.hls.stop(session.session_id).catch(() => { });
+				if (playback.session_id) api.hls.stop(playback.session_id).catch(() => { });
 				return;
 			}
-			this.hlsSessionId = session.session_id;
-			this.hlsStartAt = startAt;
-			this.streamUrl = session.playlist_url;
-			this.#currentlyPlaying = {
-				info_hash: hash,
-				file_idx: idx
-			}
+			this.playback = playback;
+			this.hlsSessionId = playback.session_id;
+			this.resumeAt = resumeAt;
+			if (playback.duration) this.mediaDuration = playback.duration;
+			this.streamUrl = playback.url;
+			this.#currentlyPlaying = { info_hash: hash, file_idx: idx };
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : String(e);
 			this.ctx.onError?.(msg);
 		}
 	}
 
-	// Resolves once the server has actually torn the session down. Live
-	// transcode slots are exclusive — capacity defaults to 1 and a Live job
-	// can't evict another Live job — so anything starting a new session has to
-	// await this first, or the next `remux` is rejected with "No capacity".
+	// Resolves once the server has torn the session down. A session that
+	// re-encodes video holds a capacity slot (one by default), so anything
+	// starting a new session has to await this first.
 	async stopHlsSession(): Promise<void> {
 		const sessionId = this.hlsSessionId;
 		if (!sessionId) return;

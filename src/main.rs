@@ -118,6 +118,9 @@ async fn run() -> Result<()> {
 
     let config = Arc::new(config);
 
+    // Fail fast on a broken GStreamer install rather than on the first stream.
+    media::init().map_err(|e| app::CinemaError::Generic(e.to_string()))?;
+
     // Initialize core services
     let pool = app::create_pool(&config).await?;
     let storage = app::create_storage(&config).await?;
@@ -222,7 +225,7 @@ async fn run() -> Result<()> {
 
     hls_session_reaper.abort();
     // Shutdown. `transcodings.shutdown()` also stops every live HLS
-    // session, so ffmpeg children die before we drop the torrent engine.
+    // session, so their pipelines stop reading before the torrent engine goes.
     ctx.transcodings.shutdown().await;
     ctx.downloads.shutdown().await;
     downloads::TorrentEngine::get().shutdown().await;

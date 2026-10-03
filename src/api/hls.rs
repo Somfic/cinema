@@ -3,7 +3,7 @@ use crate::app::CinemaError;
 
 #[draad::api(namespace = "hls")]
 pub trait HlsApi {
-    /// Stops an HLS transcoding session and tears down its ffmpeg process
+    /// Stops an HLS session and tears down its pipeline
     #[delete]
     async fn stop(&self, session_id: String) -> Result<(), CinemaError>;
 

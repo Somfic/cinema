@@ -254,6 +254,12 @@
 					icon: "Sparkles",
 					content: appearanceTab,
 				},
+				{
+					id: "casting",
+					label: "Casting",
+					icon: "Cast",
+					content: castingTab,
+				},
 			]}
 		/>
 	</SettingsShell>
@@ -525,6 +531,30 @@
 				/>
 			</span>
 		</Field>
+	</SettingsSection>
+{/snippet}
+
+{#snippet castingTab()}
+	<SettingsSection
+		title="Chromecast"
+		description="What your Chromecast can play, stored in this browser. Cinema re-encodes only what the Chromecast can't decode, so turn on what it supports to save work and keep the original quality. A Chromecast with Google TV supports all three; older models none."
+		variant="plain"
+	>
+		<ToggleInput
+			label="HEVC (H.265) video"
+			checked={settings.cast.hevc}
+			onChange={(v) => settings.setCast({ hevc: v })}
+		/>
+		<ToggleInput
+			label="Dolby audio (AC-3 / E-AC-3)"
+			checked={settings.cast.dolby}
+			onChange={(v) => settings.setCast({ dolby: v })}
+		/>
+		<ToggleInput
+			label="4K video"
+			checked={settings.cast.uhd}
+			onChange={(v) => settings.setCast({ uhd: v })}
+		/>
 	</SettingsSection>
 {/snippet}
 

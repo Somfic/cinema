@@ -32,12 +32,12 @@ pub trait TranscodingsApi {
     /// row for the same (download, only_audio, audio_index) is returned unchanged.
     async fn enqueue(&self, request: EnqueuePretranscoding) -> Result<i32, CinemaError>;
 
-    /// Pause a running or queued pretranscoding. ffmpeg is signalled cleanly
-    /// so the partial segment stays valid; `resume` continues from where it
-    /// left off.
+    /// Pause a running or queued pretranscoding. The job is suspended in
+    /// place; `resume` continues from where it left off (or from the start,
+    /// if the server restarted in between).
     async fn pause(&self, id: i32) -> Result<(), CinemaError>;
 
-    /// Resume a paused pretranscoding, picking up from its saved checkpoint.
+    /// Resume a paused pretranscoding.
     async fn resume(&self, id: i32) -> Result<(), CinemaError>;
 
     /// Cancel a running or queued pretranscoding. The partial output file is
