@@ -5,12 +5,6 @@ use std::time::{Duration, Instant};
 use crate::api::watch::TranscodingOption;
 use crate::utils::supervisor_pool::Acquire;
 
-/// How many times to re-check for a freed capacity slot before reporting that
-/// the pool is full, and how long to wait between checks. Sized to cover a
-/// session teardown, not to paper over a genuinely busy pool.
-const RELEASE_RETRIES: usize = 20;
-const RELEASE_RETRY_INTERVAL: Duration = Duration::from_millis(100);
-
 /// What the playing client can decode, in short codec names (`h264`,
 /// `hevc`, `aac`, `eac3`, ...) and container names (`mp4`, `webm`, ...).
 #[draad::ty]
@@ -68,9 +62,10 @@ pub struct Playback {
 pub(super) struct LiveSession {
     pub(super) session: Arc<media::hls::Session>,
     pub(super) last_access: Instant,
-    /// The [`SupervisorPool`] key reserving this session's capacity slot;
-    /// only sessions that re-encode video hold one. Negative, so it can't
-    /// collide with pretranscoding row ids.
+    /// The [`SupervisorPool`] key reserving this session's capacity slot.
+    /// Only sessions that re-encode video take one, and only while one is
+    /// free: live streams are never refused. Negative, so it can't collide
+    /// with pretranscoding row ids.
     ///
     /// [`SupervisorPool`]: crate::utils::supervisor_pool::SupervisorPool
     pub(super) pool_id: Option<i32>,
@@ -197,12 +192,14 @@ impl super::Handle {
         })
         .await?;
 
-        // Re-encoding video is the expensive part; only that competes for
-        // a capacity slot (evicting a background pretranscode if needed).
+        // Re-encoding video is the expensive part, so it pushes background
+        // pretranscodes out of the way. It never waits for other live
+        // streams, though.
         let pool_id = if video == media::VideoAction::Transcode {
             let pool_id = self.0.live_pool_id.fetch_sub(1, Ordering::Relaxed);
-            self.reserve_live_slot(pool_id, session_id.clone()).await?;
-            Some(pool_id)
+            self.reserve_live_slot(pool_id, session_id.clone())
+                .await?
+                .then_some(pool_id)
         } else {
             None
         };
@@ -297,33 +294,22 @@ impl super::Handle {
         Ok(None)
     }
 
-    /// Holds a Live capacity slot for `session_id` until the session stops.
-    async fn reserve_live_slot(&self, pool_id: i32, session_id: String) -> crate::app::Result<()> {
-        // Live cannot evict Live (both priority 255); a second concurrent
-        // transcode when all slots are Live returns NoCapacity. Stopping a
-        // session only *signals* its keeper, so a client that stops one and
-        // immediately starts another (audio switch, mode change) gets a
-        // moment for the old slot to free up.
-        let mut acquire = self.acquire_live_slot(pool_id).await?;
-        for _ in 0..RELEASE_RETRIES {
-            if !matches!(acquire, Acquire::NoCapacity) {
-                break;
-            }
-            tokio::time::sleep(RELEASE_RETRY_INTERVAL).await;
-            acquire = self.acquire_live_slot(pool_id).await?;
-        }
-        let slot = match acquire {
+    /// Holds a Live capacity slot for `session_id` until the session stops,
+    /// evicting a background pretranscode if that's what it takes. False when
+    /// every slot is already held by a live stream: the session then runs
+    /// without one rather than being refused.
+    async fn reserve_live_slot(
+        &self,
+        pool_id: i32,
+        session_id: String,
+    ) -> crate::app::Result<bool> {
+        let slot = match self.acquire_live_slot(pool_id).await? {
             Acquire::Acquired(slot) => slot,
+            Acquire::NoCapacity => return Ok(false),
             Acquire::AlreadyRunning => {
                 return Err(crate::app::CinemaError::Generic(format!(
                     "Live session pool id collision ({pool_id})"
                 )));
-            }
-            Acquire::NoCapacity => {
-                return Err(crate::app::CinemaError::Generic(
-                    "No capacity for another transcoded stream. Close another stream and retry"
-                        .into(),
-                ));
             }
         };
 
@@ -335,7 +321,7 @@ impl super::Handle {
             cancel.cancelled().await;
             handle.remove_session(&session_id);
         });
-        Ok(())
+        Ok(true)
     }
 
     async fn acquire_live_slot(&self, pool_id: i32) -> crate::app::Result<Acquire> {

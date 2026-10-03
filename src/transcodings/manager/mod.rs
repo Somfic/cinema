@@ -4,10 +4,11 @@
 //!
 //! On top of the pretranscoding lifecycle, `Handle` also manages live HLS
 //! sessions in an in-memory session map. A live session that re-encodes
-//! video occupies a slot in the same [`SupervisorPool`] at
-//! [`TranscodingPriority::Live`] and pre-empts background pretranscodings via
-//! the pool's eviction path; sessions that only repackage are cheap and take
-//! no slot. Live sessions are intentionally *not* DB-backed: a session is a
+//! video takes a slot in the same [`SupervisorPool`] at
+//! [`TranscodingPriority::Live`], pre-empting background pretranscodings via
+//! the pool's eviction path. Live sessions are never refused: when every
+//! slot is held by another live session, one runs without a slot. Sessions
+//! that only repackage are cheap and take no slot. Live sessions are intentionally *not* DB-backed: a session is a
 //! pipeline serving a viewer and cannot survive a restart.
 
 use std::collections::HashMap;

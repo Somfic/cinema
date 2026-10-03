@@ -95,7 +95,7 @@ CLI flags and env vars override anything in `cinema.toml` (path via `--config` /
 | `CINEMA_STREAM_SOURCES` | Comma-separated stream source URLs | `https://torrentio.strem.fun` |
 | `CINEMA_SUBTITLE_LANGUAGES` | Comma-separated subtitle languages | `en` |
 | `CINEMA_MAX_CONCURRENT_DOWNLOADS` | Max concurrent background downloads | `2` |
-| `CINEMA_MAX_CONCURRENT_PRETRANSCODINGS` | Max concurrent background pretranscodes. A single GPU is the bottleneck for full transcodes. | `1` |
+| `CINEMA_MAX_CONCURRENT_PRETRANSCODINGS` | Max concurrent background pretranscodes. A single GPU is the bottleneck for full transcodes. Live streams are never limited: a re-encoding stream pauses background pretranscodes to make room. | `1` |
 | `CINEMA_TORRENT_PORT` | Torrent listen port | `6881` |
 | `CINEMA_USE_DHT` | Enable DHT for peer discovery | `true` |
 | `CINEMA_TORRENT_VALIDATION_TIMEOUT_MS` | Maximum torrent validation timeout. Configure this if Cinema is run on limited hardware. | 30 seconds |

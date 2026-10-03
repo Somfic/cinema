@@ -377,9 +377,8 @@ export class PlaybackSession {
 		}
 	}
 
-	// Resolves once the server has torn the session down. A session that
-	// re-encodes video holds a capacity slot (one by default), so anything
-	// starting a new session has to await this first.
+	// Resolves once the server has torn the session down, so the replaced
+	// session's pipeline stops competing with the new one.
 	async stopHlsSession(): Promise<void> {
 		const sessionId = this.hlsSessionId;
 		if (!sessionId) return;
