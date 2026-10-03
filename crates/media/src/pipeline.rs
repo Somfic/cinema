@@ -331,30 +331,37 @@ pub(crate) fn h264_encoder(settings: &EncoderSettings, live: bool) -> Result<gst
 }
 
 /// Raw video in, H.264 out: scale down to `max_height`, convert to 8-bit
-/// 4:2:0, encode, parse. `source_size` is the probed (width, height).
+/// 4:2:0, encode, parse. An HDR source is tone mapped to SDR on the way:
+/// 8-bit H.264 can't carry HDR, and skipping it leaves the picture washed
+/// out. `source` is the probed video stream.
 pub(crate) fn video_encode_chain(
     settings: &EncoderSettings,
-    source_size: Option<(u32, u32)>,
+    source: Option<&crate::VideoTrack>,
     live: bool,
 ) -> Result<(Vec<gst::Element>, gst::Element)> {
-    let mut caps = "video/x-raw,format=NV12".to_string();
-    if let Some((w, h)) = source_size
-        && h > settings.max_height
-        && h > 0
+    let mut size = String::new();
+    if let Some(v) = source
+        && v.height > settings.max_height
+        && v.height > 0
     {
         let height = settings.max_height & !1;
-        let width = ((w as u64 * height as u64 / h as u64) as u32) & !1;
-        caps.push_str(&format!(",width={width},height={height}"));
+        let width = ((v.width as u64 * height as u64 / v.height as u64) as u32) & !1;
+        size = format!(",width={width},height={height}");
     }
-    let convert = make("videoconvertscale").or_else(|_| make("videoconvert"))?;
+    let convert = || make("videoconvertscale").or_else(|_| make("videoconvert"));
+    let mut chain = vec![make("queue")?, convert()?];
+    if source.is_some_and(|v| v.hdr.is_some()) {
+        // Scale first (in 10 bits), so the tone mapper sees fewer pixels.
+        chain.push(capsfilter(&format!("video/x-raw,format=I420_10LE{size}"))?);
+        chain.push(crate::tonemap::ToneMap::new());
+        chain.push(convert()?);
+        chain.push(capsfilter("video/x-raw,format=NV12")?);
+    } else {
+        chain.push(capsfilter(&format!("video/x-raw,format=NV12{size}"))?);
+    }
     let enc = h264_encoder(settings, live)?;
-    let chain = vec![
-        make("queue")?,
-        convert,
-        capsfilter(&caps)?,
-        enc.clone(),
-        make("h264parse")?,
-    ];
+    chain.push(enc.clone());
+    chain.push(make("h264parse")?);
     Ok((chain, enc))
 }
 

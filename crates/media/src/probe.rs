@@ -36,6 +36,8 @@ pub struct VideoTrack {
     pub bit_depth: u32,
     /// `4:2:0`, `4:2:2`, `4:4:4`, when the parser reports it.
     pub chroma_format: Option<String>,
+    /// Set for HDR video, by transfer function.
+    pub hdr: Option<crate::Hdr>,
     /// RFC 6381 codec string (`avc1.640028`), for HLS `CODECS`.
     pub mime_codec: Option<String>,
 }
@@ -215,6 +217,7 @@ async fn run(pipeline: &gst::Pipeline, input: &Input) -> Result<MediaInfo> {
                     .or_else(|| profile_bit_depth(s.get::<&str>("profile").ok()))
                     .unwrap_or(8),
                 chroma_format: s.get::<String>("chroma-format").ok(),
+                hdr: crate::Hdr::from_caps(&caps),
                 mime_codec,
             });
         } else if kind.starts_with("audio/") {

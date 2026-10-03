@@ -14,6 +14,7 @@ mod pipeline;
 mod plan;
 mod probe;
 mod subtitles;
+mod tonemap;
 
 pub mod file;
 pub mod hls;
@@ -26,6 +27,7 @@ pub use pipeline::{EncoderSettings, Hardware, h264_encoder_name};
 pub use plan::{AudioAction, ClientCaps, Plan, PlanRequest, VideoAction, plan};
 pub use probe::{AudioTrack, Chapter, MediaInfo, SubtitleTrack, VideoTrack, probe};
 pub use subtitles::{Cue, extract_subtitles};
+pub use tonemap::Hdr;
 
 static INIT: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
 

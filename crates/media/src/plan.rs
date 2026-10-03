@@ -23,6 +23,9 @@ pub struct PlanRequest {
     pub force_video_transcode: bool,
     /// Re-encode audio even when the client could decode it.
     pub force_audio_transcode: bool,
+    /// Deliver HDR sources as SDR: re-encoded and tone mapped, even when the
+    /// client decodes the original.
+    pub sdr: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +66,7 @@ pub fn plan(info: &MediaInfo, caps: &ClientCaps, req: &PlanRequest) -> Plan {
             // consumer-grade decodes chroma beyond 4:2:0.
             && !(v.codec == "h264" && v.bit_depth > 8)
             && v.chroma_format.as_deref().is_none_or(|c| c == "4:2:0")
+            && !(req.sdr && v.hdr.is_some())
             && caps.max_height.is_none_or(|max| v.height <= max)
     }) && !req.force_video_transcode;
 
@@ -107,6 +111,7 @@ mod tests {
                 height: 1080,
                 bit_depth: 8,
                 chroma_format: None,
+                hdr: None,
                 mime_codec: None,
             }],
             audio: audio
@@ -185,6 +190,20 @@ mod tests {
         };
         let p = plan(&info("mp4", "h264", &["aac", "aac"]), &browser(), &req);
         assert!(matches!(p, Plan::Hls { .. }));
+    }
+
+    #[test]
+    fn hdr_is_copied_unless_sdr_is_asked_for() {
+        let mut i = info("matroska", "hevc", &["aac"]);
+        i.video[0].hdr = Some(crate::Hdr::Pq);
+        let keep = plan(&i, &browser(), &PlanRequest::default());
+        assert!(matches!(keep, Plan::Hls { video: VideoAction::Copy, .. }));
+        let sdr = PlanRequest {
+            sdr: true,
+            ..Default::default()
+        };
+        let p = plan(&i, &browser(), &sdr);
+        assert!(matches!(p, Plan::Hls { video: VideoAction::Transcode, .. }));
     }
 
     #[test]

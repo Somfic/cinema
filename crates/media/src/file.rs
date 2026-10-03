@@ -145,11 +145,9 @@ impl FileTranscode {
                     VideoAction::Copy => pipeline::video_copy_chain(
                         info.video.first().map(|v| v.codec.as_str()).unwrap_or(""),
                     ),
-                    VideoAction::Transcode => pipeline::video_encode_chain(
-                        &encoder,
-                        info.video.first().map(|v| (v.width, v.height)),
-                        false,
-                    )
+                    VideoAction::Transcode => {
+                        pipeline::video_encode_chain(&encoder, info.video.first(), false)
+                    }
                     .map(|(chain, _)| chain),
                 };
                 (chain, mux_video.clone())
