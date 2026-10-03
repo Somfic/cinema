@@ -68,9 +68,10 @@ pub trait StreamsApi {
     /// as little work as possible: the original file when the client plays
     /// it, otherwise an HLS session that copies every stream it can and
     /// re-encodes the rest. `mode` forces re-encoding (`Enabled`: video and
-    /// audio, `OnlyAudio`: audio). The HLS playlist covers the whole file, so
-    /// seeking is the player's own business. Callers stop the previous
-    /// session first.
+    /// audio, `OnlyAudio`: audio), and `hdr: false` delivers HDR sources
+    /// tone mapped to SDR. The HLS playlist covers the whole file, so seeking
+    /// is the player's own business. Callers stop the previous session
+    /// first.
     #[post]
     async fn play(
         &self,
@@ -79,6 +80,7 @@ pub trait StreamsApi {
         audio: i32,
         client: crate::transcodings::ClientCapabilities,
         mode: crate::api::watch::TranscodingOption,
+        hdr: bool,
     ) -> Result<crate::transcodings::Playback, CinemaError>;
 
     /// Current torrent download stats for a stream.
@@ -231,9 +233,10 @@ impl StreamsApi for AppContext {
         audio: i32,
         client: crate::transcodings::ClientCapabilities,
         mode: crate::api::watch::TranscodingOption,
+        hdr: bool,
     ) -> Result<crate::transcodings::Playback, CinemaError> {
         self.transcodings
-            .start_playback(&info_hash, file_idx, audio, client, mode)
+            .start_playback(&info_hash, file_idx, audio, client, mode, hdr)
             .await
     }
 

@@ -14,6 +14,7 @@
 	import { remote, type PlayerControls } from "$lib/remote.svelte";
 	import { PlaybackSession } from "$lib/playback.svelte";
 	import { castPlayback } from "$lib/castPlayback.svelte";
+	import { settings } from "$lib/settings.svelte";
 
 	let item = $state<MediaItem | null>(null);
 	let error = $state<string | null>(null);
@@ -351,6 +352,8 @@
 			bind:transcoding={session.transcoding}
 			hasAudioPretranscoding={session.hasAudioPretranscoding}
 			hasFullPretranscoding={session.hasFullPretranscoding}
+			hdr={session.playback?.source_hdr ? settings.keepHdr : null}
+			onHdrChange={(on) => session.setHdr(on, playerTime)}
 			onTranscodingChange={(enabled, onlyAudio) =>
 				session.toggleTranscoding(enabled, onlyAudio, playerTime)}
 			subtitleTracks={session.subtitleTracks}

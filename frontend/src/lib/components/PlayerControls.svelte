@@ -34,6 +34,8 @@
 		transcoding = { enabled: false, onlyAudio: false },
 		hasAudioPretranscoding = false,
 		hasFullPretranscoding = false,
+		hdr = null,
+		onHdrChange,
 		streamStats = null,
 		pieceMap = [],
 		loadingSubtitles = false,
@@ -78,6 +80,9 @@
 		/** Tint the "Audio + video" transcoding radio icon - signals a
 		 *  completed full pretranscoding for the current stream is ready. */
 		hasFullPretranscoding?: boolean;
+		/** Set for HDR sources: whether HDR is on. Off tone maps to SDR. */
+		hdr?: boolean | null;
+		onHdrChange?: (on: boolean) => void;
 		streamStats?: { total_bytes: number; finished: boolean } | null;
 		pieceMap?: number[];
 		loadingSubtitles?: boolean;
@@ -234,6 +239,19 @@
 						iconOnly: true,
 						onChange: setTranscodingMode,
 					},
+					...(hdr !== null && onHdrChange
+						? [
+								{
+									kind: "toggle" as const,
+									label: "HDR",
+									description: hdr
+										? "Off converts to SDR, for screens that show HDR badly"
+										: "Converted to SDR",
+									checked: hdr,
+									onChange: onHdrChange,
+								},
+							]
+						: []),
 				]
 			: [],
 	);

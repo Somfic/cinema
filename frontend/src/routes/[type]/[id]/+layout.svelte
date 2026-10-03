@@ -742,6 +742,8 @@
 					bind:transcoding={session.transcoding}
 					hasAudioPretranscoding={session.hasAudioPretranscoding}
 					hasFullPretranscoding={session.hasFullPretranscoding}
+					hdr={session.playback?.source_hdr ? settings.keepHdr : null}
+					onHdrChange={(on) => session.setHdr(on, playerTime)}
 					onTranscodingChange={(enabled, onlyAudio) =>
 						session.toggleTranscoding(enabled, onlyAudio, playerTime)}
 					{streams}

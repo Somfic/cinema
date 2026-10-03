@@ -57,6 +57,10 @@ pub struct Playback {
     pub audio: StreamAction,
     /// Seconds, when known.
     pub duration: Option<f64>,
+    /// The original video is HDR, so the player can offer to turn it off.
+    pub source_hdr: bool,
+    /// The stream as delivered is HDR (the original, copied).
+    pub hdr: bool,
 }
 
 pub(super) struct LiveSession {
@@ -93,6 +97,7 @@ impl super::Handle {
         audio_index: i32,
         caps: ClientCapabilities,
         mode: TranscodingOption,
+        keep_hdr: bool,
     ) -> crate::app::Result<Playback> {
         let audio_index = audio_index.max(0) as usize;
 
@@ -136,9 +141,10 @@ impl super::Handle {
                 mode,
                 TranscodingOption::Enabled | TranscodingOption::OnlyAudio
             ),
-            sdr: false,
+            sdr: !keep_hdr,
         };
         let duration = info.duration.map(|d| d.as_secs_f64());
+        let source_hdr = info.video.first().is_some_and(|v| v.hdr.is_some());
         // Re-encoded video never exceeds what the client can display.
         let mut encoder = self.0.config.encoder();
         if let Some(max) = caps.max_height {
@@ -160,6 +166,8 @@ impl super::Handle {
                         StreamAction::Copy
                     },
                     duration,
+                    source_hdr,
+                    hdr: source_hdr,
                 });
             }
             media::Plan::Hls { video, audio } => (video, audio),
@@ -240,6 +248,9 @@ impl super::Handle {
                 a => action(a == media::AudioAction::Transcode),
             },
             duration,
+            source_hdr,
+            // Re-encoded video is always tone mapped to SDR.
+            hdr: source_hdr && video == media::VideoAction::Copy,
         })
     }
 

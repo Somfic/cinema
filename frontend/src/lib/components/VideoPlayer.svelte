@@ -60,6 +60,8 @@
 		transcoding = $bindable({ enabled: true, onlyAudio: false }),
 		hasAudioPretranscoding = false,
 		hasFullPretranscoding = false,
+		hdr = null,
+		onHdrChange,
 		onTranscodingChange,
 		currentTime = $bindable(0),
 		duration = $bindable(0),
@@ -113,6 +115,9 @@
 		};
 		hasAudioPretranscoding?: boolean;
 		hasFullPretranscoding?: boolean;
+		/** Set for HDR sources: whether HDR is on. Off tone maps to SDR. */
+		hdr?: boolean | null;
+		onHdrChange?: (on: boolean) => void;
 		onTranscodingChange?: (enabled: boolean, onlyAudio: boolean) => void;
 		paused?: boolean;
 		volume?: number;
@@ -806,6 +811,8 @@
 				{transcoding}
 				{hasAudioPretranscoding}
 				{hasFullPretranscoding}
+				{hdr}
+				{onHdrChange}
 				{streamStats}
 				{pieceMap}
 				{loadingSubtitles}

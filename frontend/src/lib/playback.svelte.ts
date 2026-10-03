@@ -328,6 +328,15 @@ export class PlaybackSession {
 		await this.#play(stream.info_hash, stream.file_idx, this.activeAudioIdx, currentTime);
 	}
 
+	/** Turns HDR on or off for HDR sources; off tone maps to SDR. The
+	 *  choice is remembered for later streams. */
+	async setHdr(on: boolean, currentTime: number): Promise<void> {
+		settings.setKeepHdr(on);
+		const stream = this.ctx.currentStream();
+		if (!stream || !this.playback?.source_hdr) return;
+		await this.#play(stream.info_hash, stream.file_idx, this.activeAudioIdx, currentTime);
+	}
+
 	/** Moves playback to another decoder (the browser, or a Chromecast):
 	 *  what needs re-encoding depends on who decodes it. */
 	async retarget(target: PlaybackTarget, currentTime: number): Promise<void> {
@@ -357,7 +366,14 @@ export class PlaybackSession {
 		const client =
 			this.target === "cast" ? castCapabilities(settings.cast) : browserCapabilities();
 		try {
-			const playback = await api.streams.play(hash, idx, audioIdx, client, this.#mode());
+			const playback = await api.streams.play(
+				hash,
+				idx,
+				audioIdx,
+				client,
+				this.#mode(),
+				settings.keepHdr,
+			);
 			// The user may have switched streams while this was in flight.
 			// Drop the orphan session so it doesn't leak into the new stream.
 			const cur = this.ctx.currentStream();
