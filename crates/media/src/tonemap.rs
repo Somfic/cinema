@@ -207,7 +207,7 @@ glib::wrapper! {
 }
 
 impl ToneMap {
-    pub(crate) fn new() -> gst::Element {
+    pub(crate) fn element() -> gst::Element {
         glib::Object::new::<ToneMap>().upcast()
     }
 }
@@ -295,7 +295,12 @@ mod imp {
             // Same geometry either way; only format and colorimetry change.
             let mut other = caps.clone();
             for s in other.make_mut().iter_mut() {
-                s.remove_fields(["colorimetry", "chroma-site", "mastering-display-info", "content-light-level"]);
+                s.remove_fields([
+                    "colorimetry",
+                    "chroma-site",
+                    "mastering-display-info",
+                    "content-light-level",
+                ]);
                 match direction {
                     gst::PadDirection::Sink => {
                         s.set("format", gst_video::VideoFormat::I420.to_str());
@@ -337,7 +342,12 @@ mod imp {
             input: &gst_video::VideoFrameRef<&gst::BufferRef>,
             output: &mut gst_video::VideoFrameRef<&mut gst::BufferRef>,
         ) -> Result<gst::FlowSuccess, gst::FlowError> {
-            let lut = self.lut.lock().unwrap().clone().ok_or(gst::FlowError::NotNegotiated)?;
+            let lut = self
+                .lut
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(gst::FlowError::NotNegotiated)?;
             let (width, height) = (input.width() as usize, input.height() as usize);
             let in_data = |p: u32| input.plane_data(p).map_err(|_| gst::FlowError::Error);
             let in_stride = |p: usize| input.plane_stride()[p] as usize;
@@ -359,7 +369,9 @@ mod imp {
 
             // Work in bands of chroma rows (two luma rows each), one per thread.
             let chroma_rows = height.div_ceil(2);
-            let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
+            let threads = std::thread::available_parallelism()
+                .map_or(4, |n| n.get())
+                .min(8);
             let band = chroma_rows.div_ceil(threads).max(1);
             let to_u8 = |v: f32| v.round().clamp(0.0, 255.0) as u8;
 
@@ -425,7 +437,10 @@ mod tests {
         let white = map_pixel(Hdr::Pq, 1000.0, white_code, 512.0, 512.0);
         assert!(white[0] > 150.0 && white[0] < 235.0, "{white:?}");
         // Neutral stays neutral.
-        assert!((white[1] - 128.0).abs() < 1.0 && (white[2] - 128.0).abs() < 1.0, "{white:?}");
+        assert!(
+            (white[1] - 128.0).abs() < 1.0 && (white[2] - 128.0).abs() < 1.0,
+            "{white:?}"
+        );
         // The peak maps to (about) full white, not beyond.
         let peak = map_pixel(Hdr::Pq, 1000.0, 64.0 + 876.0 * 0.7518, 512.0, 512.0);
         assert!(peak[0] > 225.0 && peak[0] <= 235.5, "{peak:?}");
@@ -438,7 +453,10 @@ mod tests {
             let direct = map_pixel(Hdr::Pq, 1000.0, y as f64, cb as f64, cr as f64);
             let interp = lut.get(y, cb, cr);
             for k in 0..3 {
-                assert!((direct[k] - interp[k]).abs() < 3.0, "{direct:?} vs {interp:?}");
+                assert!(
+                    (direct[k] - interp[k]).abs() < 3.0,
+                    "{direct:?} vs {interp:?}"
+                );
             }
         }
     }

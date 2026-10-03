@@ -197,13 +197,25 @@ mod tests {
         let mut i = info("matroska", "hevc", &["aac"]);
         i.video[0].hdr = Some(crate::Hdr::Pq);
         let keep = plan(&i, &browser(), &PlanRequest::default());
-        assert!(matches!(keep, Plan::Hls { video: VideoAction::Copy, .. }));
+        assert!(matches!(
+            keep,
+            Plan::Hls {
+                video: VideoAction::Copy,
+                ..
+            }
+        ));
         let sdr = PlanRequest {
             sdr: true,
             ..Default::default()
         };
         let p = plan(&i, &browser(), &sdr);
-        assert!(matches!(p, Plan::Hls { video: VideoAction::Transcode, .. }));
+        assert!(matches!(
+            p,
+            Plan::Hls {
+                video: VideoAction::Transcode,
+                ..
+            }
+        ));
     }
 
     #[test]

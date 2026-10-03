@@ -252,8 +252,7 @@ fn branch(
                     pipeline::video_copy_chain(video.map(|v| v.codec.as_str()).unwrap_or(""))?
                 }
                 VideoAction::Transcode => {
-                    let (chain, encoder) =
-                        pipeline::video_encode_chain(&spec.encoder, video, true)?;
+                    let (chain, encoder) = pipeline::video_encode_chain(&spec.encoder, video)?;
                     pipeline::force_keyframes(
                         &encoder.static_pad("sink").expect("encoder sink"),
                         spec.boundaries.clone(),

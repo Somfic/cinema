@@ -127,7 +127,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         video,
         audio,
         audio_index: 0,
-        encoder: media::EncoderSettings::default(),
+        encoder: media::EncoderSettings {
+            // `x264` as the fourth argument forces software encoding.
+            hardware: if args.get(4).map(String::as_str) == Some("x264") {
+                media::Hardware::None
+            } else {
+                media::Hardware::Auto
+            },
+            ..Default::default()
+        },
         dir,
         on_seek: None,
     })
@@ -150,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let init_v = session.init(Track::Video).await?;
     let init_a = session.init(Track::Audio).await?;
-    let far = n * 2 / 3;
+    let far = n / 5;
     let order: Vec<usize> = [0, 1, 2, 3, far, far + 1, far + 2, 1, 4]
         .into_iter()
         .filter(|&i| i < n)
@@ -163,9 +171,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let start = tfdt_seconds(init, &seg).unwrap_or(f64::NAN);
             let off = start - starts[i];
             worst = worst.max(off.abs());
+            let dur = starts.get(i + 1).copied().unwrap_or(start + 4.0) - starts[i];
             println!(
-                "{track:?} {i:>4}: {:>8} bytes in {:>6.3}s, starts {start:>9.3} (playlist {:>9.3}, {off:+.3})",
+                "{track:?} {i:>4}: {:>8} bytes ({:>5.1} Mbit/s) in {:>6.3}s, starts {start:>9.3} (playlist {:>9.3}, {off:+.3})",
                 seg.len(),
+                seg.len() as f64 * 8.0 / dur / 1e6,
                 t.elapsed().as_secs_f64(),
                 starts[i],
             );

@@ -44,8 +44,9 @@ pub struct Config {
     /// Constant-quality target on the CRF scale (lower is better).
     #[serde(default = "default_transcode_crf")]
     pub transcode_crf: u8,
-    /// Re-encoded video is scaled down to at most this height.
-    #[serde(default = "default_transcode_max_height")]
+    /// Re-encoded video is scaled down to at most this height; 0 keeps the
+    /// source resolution.
+    #[serde(default)]
     pub transcode_max_height: u32,
 }
 
@@ -55,7 +56,10 @@ impl Config {
             hardware: self.transcode_hardware.parse().unwrap_or_default(),
             preset: self.transcode_preset.clone(),
             crf: self.transcode_crf,
-            max_height: self.transcode_max_height,
+            max_height: match self.transcode_max_height {
+                0 => u32::MAX,
+                h => h,
+            },
         }
     }
 }
@@ -174,15 +178,13 @@ fn default_transcode_hardware() -> String {
 }
 
 fn default_transcode_preset() -> String {
-    // Software encoding has to keep up with playback on small machines (a
-    // Raspberry Pi 5 has no hardware encoder).
-    "ultrafast".to_string()
+    // `ultrafast` would turn off x264's deblocking filter, which shows as
+    // blocks on a big screen. Slow machines (a Raspberry Pi 5) can still
+    // opt into it.
+    "veryfast".to_string()
 }
 
 fn default_transcode_crf() -> u8 {
-    23
-}
-
-fn default_transcode_max_height() -> u32 {
-    1080
+    // Visually lossless; there's bandwidth to spare on a home network.
+    18
 }

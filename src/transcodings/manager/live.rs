@@ -136,8 +136,14 @@ impl super::Handle {
                 mode,
                 TranscodingOption::Enabled | TranscodingOption::OnlyAudio
             ),
+            sdr: false,
         };
         let duration = info.duration.map(|d| d.as_secs_f64());
+        // Re-encoded video never exceeds what the client can display.
+        let mut encoder = self.0.config.encoder();
+        if let Some(max) = caps.max_height {
+            encoder.max_height = encoder.max_height.min(max);
+        }
         let plan = media::plan(&info, &caps.into(), &request);
         tracing::info!(info_hash, file_idx, audio_index, ?plan, "Playback plan");
 
@@ -186,7 +192,7 @@ impl super::Handle {
             video,
             audio,
             audio_index,
-            encoder: self.0.config.encoder(),
+            encoder,
             dir: self.0.storage.hls_dir().join(&session_id),
             on_seek,
         })

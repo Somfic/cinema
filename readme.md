@@ -100,8 +100,8 @@ CLI flags and env vars override anything in `cinema.toml` (path via `--config` /
 | `CINEMA_USE_DHT` | Enable DHT for peer discovery | `true` |
 | `CINEMA_TORRENT_VALIDATION_TIMEOUT_MS` | Maximum torrent validation timeout. Configure this if Cinema is run on limited hardware. | 30 seconds |
 | `CINEMA_TRANSCODE_HARDWARE` | Video encoder family: `auto` (first that works: VideoToolbox, NVENC, VA-API, then x264), `none` (x264 only), `nvidia`, `vaapi` or `videotoolbox`. Decoding always uses the best available decoder. | `auto` |
-| `CINEMA_TRANSCODE_PRESET` | x264 speed preset, for software encoding. Faster presets reduce CPU; on Pi 5 keep at `ultrafast`. | `ultrafast` |
-| `CINEMA_TRANSCODE_CRF` | Quality target on the CRF scale. Higher = faster + lower quality. Try `28`–`30` on Pi 5 for native-4K transcoding. | `23` |
-| `CINEMA_TRANSCODE_MAX_HEIGHT` | Re-encoded video is scaled down to at most this height. | `1080` |
+| `CINEMA_TRANSCODE_PRESET` | x264 speed preset, for software encoding. Faster presets reduce CPU but cost quality (`ultrafast` disables deblocking, which shows as blocks); on a Pi 5 use `ultrafast` with `CINEMA_TRANSCODE_MAX_HEIGHT=1080`. | `veryfast` |
+| `CINEMA_TRANSCODE_CRF` | Quality target on the CRF scale (also used for NVENC and VA-API). Lower = better quality, more bits; 18 is visually lossless even on a large 4K screen. Raise it on slow hardware. | `18` |
+| `CINEMA_TRANSCODE_MAX_HEIGHT` | Re-encoded video is scaled down to at most this height. `0` keeps the source resolution (scaled down only for clients that can't take it, like a non-4K Chromecast). | `0` |
 
 Most playback needs no encoding at all: Cinema plays a file as is when the client supports it, and otherwise repackages it as HLS, re-encoding only the streams the client can't decode (usually just the audio). Note: the RPi 5 has no hardware H.264 encoder, so re-encoding video remains CPU-bound. If real-time playback isn't met, raise `CINEMA_TRANSCODE_CRF` (lower quality, faster encode).

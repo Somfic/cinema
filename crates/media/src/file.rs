@@ -146,9 +146,9 @@ impl FileTranscode {
                         info.video.first().map(|v| v.codec.as_str()).unwrap_or(""),
                     ),
                     VideoAction::Transcode => {
-                        pipeline::video_encode_chain(&encoder, info.video.first(), false)
+                        { pipeline::video_encode_chain(&encoder, info.video.first()) }
+                            .map(|(chain, _)| chain)
                     }
-                    .map(|(chain, _)| chain),
                 };
                 (chain, mux_video.clone())
             } else if pad.name().starts_with("audio")

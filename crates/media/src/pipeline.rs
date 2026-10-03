@@ -35,9 +35,27 @@ pub(crate) fn capsfilter(caps: &str) -> Result<gst::Element> {
 /// Sets a property only when the element has it. Encoders from different
 /// plugins (and plugin versions) disagree on names; a tuning knob that is
 /// missing is never worth failing a stream over.
-pub(crate) fn try_set(element: &gst::Element, name: &str, value: &str) {
-    if element.find_property(name).is_some() {
-        element.set_property_from_str(name, value);
+pub(crate) fn try_set(element: &gst::Element, name: &str, value: &str) -> bool {
+    let Some(pspec) = element.find_property(name) else {
+        return false;
+    };
+    // Validated first: an enum value one plugin version lacks would
+    // otherwise panic.
+    match gst::glib::Value::deserialize_with_pspec(value, &pspec) {
+        Ok(value) => {
+            element.set_property_from_value(name, &value);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Sets the first of `values` the element accepts.
+fn try_set_first(element: &gst::Element, name: &str, values: &[&str]) {
+    for value in values {
+        if try_set(element, name, value) {
+            return;
+        }
     }
 }
 
@@ -199,7 +217,8 @@ pub struct EncoderSettings {
     pub preset: String,
     /// Constant-quality target on the CRF scale (lower is better).
     pub crf: u8,
-    /// Output height cap; taller sources are scaled down.
+    /// Output height cap; taller sources are scaled down. Unlimited by
+    /// default: re-encoded video keeps the source resolution.
     pub max_height: u32,
 }
 
@@ -208,8 +227,8 @@ impl Default for EncoderSettings {
         Self {
             hardware: Hardware::Auto,
             preset: "veryfast".into(),
-            crf: 23,
-            max_height: 1080,
+            crf: 18,
+            max_height: u32::MAX,
         }
     }
 }
@@ -285,46 +304,72 @@ fn candidates(settings: &EncoderSettings) -> impl Iterator<Item = &'static str> 
         .map(|(f, _)| *f)
 }
 
-/// Picks the first working H.264 encoder for the preference. Software x264
-/// is always the last resort. Blocking: may run a test encode.
-pub(crate) fn h264_encoder(settings: &EncoderSettings, live: bool) -> Result<gst::Element> {
+/// Bitrate (kbit/s) for encoders that can only target one: generous enough
+/// that a big screen shows no blocking, still easy for a home network.
+fn bitrate_for(height: u32) -> u32 {
+    match height {
+        0..=576 => 5_000,
+        577..=720 => 9_000,
+        721..=1080 => 16_000,
+        1081..=1440 => 25_000,
+        _ => 40_000,
+    }
+}
+
+/// Picks the first working H.264 encoder for the preference and tunes it for
+/// quality: every encoder runs faster than playback, so nothing is traded
+/// for latency. `height` is the output height.
+pub(crate) fn h264_encoder(settings: &EncoderSettings, height: u32) -> Result<gst::Element> {
     let factory = h264_encoder_name(settings)
         .ok_or_else(|| Error::MissingElement("an H.264 encoder (x264enc)".into()))?;
-
     let enc = make(factory)?;
+    let crf = settings.crf.to_string();
+    let bitrate = bitrate_for(height);
+    // Keyframes are forced at segment boundaries; this only caps the gap
+    // where a segment runs long.
+    let gop = "250";
     match factory {
         "x264enc" => {
             try_set(&enc, "speed-preset", &settings.preset);
-            // Constant quality rather than a bitrate.
-            try_set(&enc, "pass", "quant");
-            try_set(&enc, "quantizer", &settings.crf.to_string());
-            // Keyframes are forced at segment boundaries; this only caps the
-            // gap where a segment is long.
-            try_set(&enc, "key-int-max", "250");
-            if live {
-                try_set(&enc, "tune", "zerolatency");
-            }
+            // CRF: constant perceived quality, bits where the picture needs them.
+            try_set(&enc, "pass", "qual");
+            try_set(&enc, "quantizer", &crf);
+            // In quality mode `bitrate` is a ceiling, and its 2 Mbit/s default
+            // would starve the CRF; leave room for demanding scenes.
+            try_set(&enc, "bitrate", &(bitrate * 2).to_string());
+            try_set(&enc, "key-int-max", gop);
         }
         f if f.starts_with("vtenc") => {
-            try_set(&enc, "realtime", if live { "true" } else { "false" });
-            try_set(&enc, "allow-frame-reordering", "false");
-            // VideoToolbox quality is 0..1; map CRF 18..30 onto 0.75..0.45.
-            let quality =
-                (0.75 - (settings.crf.clamp(18, 30) as f64 - 18.0) * 0.025).clamp(0.3, 0.9);
-            try_set(&enc, "quality", &format!("{quality:.2}"));
+            // No constant-quality mode here, so a target bitrate it is.
+            try_set(&enc, "realtime", "false");
+            try_set(&enc, "allow-frame-reordering", "true");
+            try_set(&enc, "rate-control", "abr");
+            try_set(&enc, "bitrate", &bitrate.to_string());
+            try_set(&enc, "quality", "0.9");
+            try_set(&enc, "max-keyframe-interval", gop);
         }
         f if f.starts_with("nv") => {
-            try_set(&enc, "preset", if live { "low-latency-hq" } else { "hq" });
-            try_set(&enc, "zerolatency", if live { "true" } else { "false" });
-            try_set(&enc, "rc-mode", "vbr");
-            try_set(&enc, "const-quality", &settings.crf.to_string());
-            try_set(&enc, "gop-size", "-1");
+            // Legacy `nvh264enc` and the newer `nvcudah264enc` name things
+            // differently; whichever is present takes its own values.
+            try_set_first(&enc, "preset", &["p5", "hq"]);
+            try_set(&enc, "tune", "high-quality");
+            try_set_first(&enc, "rc-mode", &["vbr"]);
+            try_set_first(&enc, "rate-control", &["vbr"]);
+            try_set(&enc, "const-quality", &crf);
+            try_set(&enc, "bitrate", "0");
+            try_set(&enc, "max-bitrate", &(bitrate * 2).to_string());
+            try_set(&enc, "bframes", "3");
+            try_set(&enc, "gop-size", gop);
         }
         _ => {
+            // VA-API: constant QP at the CRF value, best-quality usage.
             try_set(&enc, "rate-control", "cqp");
-            try_set(&enc, "qpi", &settings.crf.to_string());
-            try_set(&enc, "qpp", &settings.crf.to_string());
-            try_set(&enc, "key-int-max", "0");
+            try_set(&enc, "qpi", &crf);
+            try_set(&enc, "qpp", &crf);
+            try_set(&enc, "qpb", &crf);
+            try_set(&enc, "target-usage", "1");
+            try_set(&enc, "b-frames", "2");
+            try_set(&enc, "key-int-max", gop);
         }
     }
     Ok(enc)
@@ -337,14 +382,14 @@ pub(crate) fn h264_encoder(settings: &EncoderSettings, live: bool) -> Result<gst
 pub(crate) fn video_encode_chain(
     settings: &EncoderSettings,
     source: Option<&crate::VideoTrack>,
-    live: bool,
 ) -> Result<(Vec<gst::Element>, gst::Element)> {
     let mut size = String::new();
+    let mut height = source.map(|v| v.height).unwrap_or(1080);
     if let Some(v) = source
         && v.height > settings.max_height
         && v.height > 0
     {
-        let height = settings.max_height & !1;
+        height = settings.max_height & !1;
         let width = ((v.width as u64 * height as u64 / v.height as u64) as u32) & !1;
         size = format!(",width={width},height={height}");
     }
@@ -353,13 +398,13 @@ pub(crate) fn video_encode_chain(
     if source.is_some_and(|v| v.hdr.is_some()) {
         // Scale first (in 10 bits), so the tone mapper sees fewer pixels.
         chain.push(capsfilter(&format!("video/x-raw,format=I420_10LE{size}"))?);
-        chain.push(crate::tonemap::ToneMap::new());
+        chain.push(crate::tonemap::ToneMap::element());
         chain.push(convert()?);
         chain.push(capsfilter("video/x-raw,format=NV12")?);
     } else {
         chain.push(capsfilter(&format!("video/x-raw,format=NV12{size}"))?);
     }
-    let enc = h264_encoder(settings, live)?;
+    let enc = h264_encoder(settings, height)?;
     chain.push(enc.clone());
     chain.push(make("h264parse")?);
     Ok((chain, enc))
