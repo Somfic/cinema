@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE pretranscodings\n                SET status = 'transcoding',\n                    error = NULL,\n                    transcoded_ms = CASE WHEN $2 THEN 0 ELSE transcoded_ms END\n                WHERE id = $1 AND status = 'queued'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4c7d81ef25d2c60b370f70956d7ef60e4ad15f32c4fced53ab09355125e2da9a"
+}

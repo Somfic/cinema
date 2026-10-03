@@ -1,21 +1,10 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT pt.id, pt.download_id, pt.only_audio, pt.audio_index\n                FROM pretranscodings pt\n                WHERE pt.status = 'transcoding'\n            ",
+  "query": "\n                UPDATE pretranscodings\n                SET status = CASE WHEN status = 'transcoding' THEN 'queued'::pretranscoding_status ELSE status END,\n                    transcoded_ms = 0\n                WHERE status IN ('transcoding', 'paused')\n                RETURNING download_id, only_audio, audio_index\n            ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
-        "type_info": "Int4",
-        "origin": {
-          "Table": {
-            "table": "pretranscodings",
-            "name": "id"
-          }
-        }
-      },
-      {
-        "ordinal": 1,
         "name": "download_id",
         "type_info": "Int4",
         "origin": {
@@ -26,7 +15,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 1,
         "name": "only_audio",
         "type_info": "Bool",
         "origin": {
@@ -37,7 +26,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "audio_index",
         "type_info": "Int4",
         "origin": {
@@ -54,9 +43,8 @@
     "nullable": [
       false,
       false,
-      false,
       false
     ]
   },
-  "hash": "d14cb74d3f53090ec22451f7b27f6111397b726efc13c363a5680a8f2d95dad0"
+  "hash": "15cece5b07e4e8e94ee4e8c11cfdb0ffef2c698adcd214a823f4b2265d5f2cfc"
 }

@@ -46,10 +46,10 @@
               "Enum": [
                 "queued",
                 "transcoding",
+                "paused",
                 "completed",
                 "cancelled",
-                "failed",
-                "paused"
+                "failed"
               ]
             }
           }
