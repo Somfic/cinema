@@ -103,6 +103,9 @@ export class PlaybackSession {
 		await this.#stopStream();
 
 		const { startAt = 0, transcoding } = options ?? {};
+		// Download stats from the start: a torrent that just started can take
+		// a while to deliver enough to play, and this is what shows progress.
+		this.#pollStreamStats(stream.info_hash, stream.file_idx);
 		this.transcoding.enabled = transcoding === "Enabled" || transcoding === "OnlyAudio";
 		this.transcoding.onlyAudio = transcoding === "OnlyAudio";
 		await this.#play(stream.info_hash, stream.file_idx, 0, startAt > 0 ? startAt : null);
@@ -110,7 +113,6 @@ export class PlaybackSession {
 		if (!this.streamUrl) return;
 
 		this.#pollAudioTracks(stream.info_hash, stream.file_idx);
-		this.#pollStreamStats(stream.info_hash, stream.file_idx);
 	}
 
 	stop(): void {

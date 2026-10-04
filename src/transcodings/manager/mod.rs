@@ -55,8 +55,9 @@ struct Inner {
     parked: crate::transcodings::supervisor::ParkedJobs,
     /// In-memory live-session map, keyed by session_id.
     sessions: Mutex<HashMap<String, live::LiveSession>>,
-    /// Probe results by file, so repeated playback calls don't re-demux.
-    probes: Mutex<HashMap<String, Arc<media::MediaInfo>>>,
+    /// Probe results by file, so repeated playback calls don't re-demux. A
+    /// probe in flight is shared: callers for the same file wait on it.
+    probes: Mutex<HashMap<String, Arc<tokio::sync::OnceCell<Arc<media::MediaInfo>>>>>,
     /// Monotonic negative counter for `SupervisorPool` keys used by live
     /// sessions. Pretranscoding IDs are Postgres SERIAL (always > 0), so
     /// staying negative guarantees no collision.
@@ -187,26 +188,35 @@ impl Handle {
         }
     }
 
-    /// Probes a file, caching the result per `key`. Only successful probes
-    /// with a known duration are cached: a torrent that hasn't delivered its
-    /// header yet probes better later.
+    /// Probes a file, caching the result per `key`. Concurrent callers share
+    /// one probe: a torrent that is still downloading can take minutes to
+    /// deliver its header, and the player asks repeatedly meanwhile. Failed
+    /// probes and ones without a duration aren't kept, so the next call
+    /// tries again.
     pub(crate) async fn media_info(
         &self,
         key: &str,
         input: &media::Input,
     ) -> crate::app::Result<Arc<media::MediaInfo>> {
-        if let Some(info) = self.0.probes.lock().unwrap().get(key) {
-            return Ok(info.clone());
-        }
-        let info = Arc::new(media::probe(input).await?);
-        if info.duration.is_some() {
+        let cell = {
             let mut probes = self.0.probes.lock().unwrap();
             if probes.len() > 512 {
-                probes.clear();
+                probes.retain(|_, cell| !cell.initialized());
             }
-            probes.insert(key.to_string(), info.clone());
+            probes.entry(key.to_string()).or_default().clone()
+        };
+        let info = cell
+            .get_or_try_init(|| async { media::probe(input).await.map(Arc::new) })
+            .await
+            .cloned();
+        let keep = info.as_ref().is_ok_and(|i| i.duration.is_some());
+        if !keep {
+            let mut probes = self.0.probes.lock().unwrap();
+            if probes.get(key).is_some_and(|c| Arc::ptr_eq(c, &cell)) {
+                probes.remove(key);
+            }
         }
-        Ok(info)
+        Ok(info?)
     }
 
     fn emit_status_update(&self, id: i32, download_id: i32, new_status: PretranscodingStatus) {

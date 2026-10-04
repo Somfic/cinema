@@ -15,7 +15,10 @@ use gst::prelude::*;
 use crate::pipeline::{codec_name, is_text_subtitle, make, wait_bus};
 use crate::{Input, Result};
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a probe may take. A file on disk answers in milliseconds; a
+/// torrent still downloading waits for the swarm to deliver the header.
+const PROBE_TIMEOUT_FILE: Duration = Duration::from_secs(30);
+const PROBE_TIMEOUT_STREAM: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug, Default)]
 pub struct MediaInfo {
@@ -133,7 +136,11 @@ async fn run(pipeline: &gst::Pipeline, input: &Input) -> Result<MediaInfo> {
         }
     };
     tokio::pin!(ready);
-    let watch = wait_bus(&bus, PROBE_TIMEOUT, "probing media", |msg| {
+    let timeout = match input {
+        Input::File(_) => PROBE_TIMEOUT_FILE,
+        Input::Stream { .. } => PROBE_TIMEOUT_STREAM,
+    };
+    let watch = wait_bus(&bus, timeout, "probing media", |msg| {
         match msg.view() {
             gst::MessageView::Toc(t) => *toc_slot.lock().unwrap() = Some(t.toc().0),
             gst::MessageView::StreamCollection(c) => {
