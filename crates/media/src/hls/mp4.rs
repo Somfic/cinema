@@ -29,13 +29,48 @@ pub(super) fn timescale(init: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(mdhd.get(at..at + 4)?.try_into().ok()?)).filter(|&t| t > 0)
 }
 
-/// Start of a media fragment in nanoseconds, from its `tfdt`.
+/// Display time of a media fragment's first frame, in nanoseconds: its
+/// decode time (`tfdt`) plus the first sample's composition offset. With
+/// reordered frames the two differ - in open-GOP HEVC the keyframe decodes
+/// a few frames before it is shown - and segments are cut on display time.
 pub(super) fn start_ns(fragment: &[u8], timescale: u32) -> Option<u64> {
     let tfdt = find(fragment, b"tfdt")?;
     let decode_time = if *tfdt.first()? == 1 {
         u64::from_be_bytes(tfdt.get(4..12)?.try_into().ok()?)
     } else {
         u32::from_be_bytes(tfdt.get(4..8)?.try_into().ok()?) as u64
-    };
-    Some((decode_time as u128 * 1_000_000_000 / timescale as u128) as u64)
+    } as i128;
+    let start = decode_time + first_composition_offset(fragment).unwrap_or(0) as i128;
+    Some((start.max(0) as u128 * 1_000_000_000 / timescale as u128) as u64)
+}
+
+/// The first sample's composition offset from `trun`, if it carries them.
+fn first_composition_offset(fragment: &[u8]) -> Option<i64> {
+    let trun = find(fragment, b"trun")?;
+    let version = *trun.first()?;
+    let flags = u32::from_be_bytes(trun.get(0..4)?.try_into().ok()?) & 0x00FF_FFFF;
+    if flags & 0x800 == 0 {
+        return None;
+    }
+    // version/flags, sample count, then the optional fields before the
+    // per-sample entries.
+    let mut at = 8;
+    if flags & 0x1 != 0 {
+        at += 4; // data offset
+    }
+    if flags & 0x4 != 0 {
+        at += 4; // first sample flags
+    }
+    // Within the first sample's entry: duration, size, flags, then the offset.
+    for bit in [0x100, 0x200, 0x400] {
+        if flags & bit != 0 {
+            at += 4;
+        }
+    }
+    let raw = u32::from_be_bytes(trun.get(at..at + 4)?.try_into().ok()?);
+    Some(if version == 1 {
+        raw as i32 as i64
+    } else {
+        raw as i64
+    })
 }
