@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use gst::prelude::*;
 
-use crate::pipeline::{codec_name, is_text_subtitle, make, wait_bus};
+use crate::pipeline::{codec_name, is_text_subtitle, make, play, wait_bus};
 use crate::{Input, Result};
 
 /// How long a probe may take. A file on disk answers in milliseconds; a
@@ -111,7 +111,7 @@ async fn run(pipeline: &gst::Pipeline, input: &Input) -> Result<MediaInfo> {
     });
 
     let bus = pipeline.bus().expect("pipeline bus");
-    pipeline.set_state(gst::State::Playing)?;
+    play(&pipeline)?;
 
     let toc: Arc<Mutex<Option<gst::Toc>>> = Default::default();
     let toc_slot = toc.clone();

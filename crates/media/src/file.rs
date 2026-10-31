@@ -182,7 +182,7 @@ impl FileTranscode {
             }
         });
 
-        pipeline.set_state(gst::State::Playing)?;
+        pipeline::play(&pipeline)?;
         Ok(Self {
             pipeline,
             source_pad: src.static_pad("src").expect("source pad"),
@@ -398,7 +398,7 @@ async fn mux(
     }
 
     let bus = pipeline.bus().expect("pipeline bus");
-    pipeline.set_state(gst::State::Playing)?;
+    pipeline::play(&pipeline)?;
     let result = pipeline::wait_bus(&bus, Duration::from_secs(120), "muxing", |msg| {
         matches!(msg.view(), gst::MessageView::Eos(_)).then_some(())
     })

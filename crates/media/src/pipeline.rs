@@ -95,6 +95,22 @@ pub(crate) async fn wait_bus<T>(
         .map_err(|_| Error::Timeout(what))?
 }
 
+/// Sets a pipeline playing. A failed state change says only that it failed;
+/// the element that refused posts why on the bus, so that is reported
+/// instead.
+pub(crate) fn play(pipeline: &gst::Pipeline) -> Result<()> {
+    let Err(failed) = pipeline.set_state(gst::State::Playing) else {
+        return Ok(());
+    };
+    let posted = pipeline
+        .bus()
+        .and_then(|bus| bus.pop_filtered(&[gst::MessageType::Error]));
+    match posted.as_ref().map(|m| m.view()) {
+        Some(gst::MessageView::Error(err)) => Err(error_message(err)),
+        _ => Err(failed.into()),
+    }
+}
+
 pub(crate) fn error_message(err: &gst::message::Error) -> Error {
     let source = err
         .src()

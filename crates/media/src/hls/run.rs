@@ -208,6 +208,9 @@ pub(super) fn start(spec: RunSpec, output: impl Fn(Output) + Send + Sync + 'stat
     let output_bus = output.clone();
     let decodebin_bus = decodebin.downgrade();
     let audio_index = spec_audio_index;
+    // The first error, for when it stops the pipeline from starting at all.
+    let first_error: Arc<Mutex<Option<String>>> = Default::default();
+    let first_error_bus = first_error.clone();
     bus.set_sync_handler(move |_, msg| {
         match msg.view() {
             gst::MessageView::StreamCollection(sc) => {
@@ -216,14 +219,21 @@ pub(super) fn start(spec: RunSpec, output: impl Fn(Output) + Send + Sync + 'stat
                 }
             }
             gst::MessageView::Error(err) => {
-                output_bus(Output::Error(pipeline::error_message(err).to_string()));
+                let err = pipeline::error_message(err).to_string();
+                first_error_bus.lock().unwrap().get_or_insert_with(|| err.clone());
+                output_bus(Output::Error(err));
             }
             _ => {}
         }
         gst::BusSyncReply::Drop
     });
 
-    pipeline.set_state(gst::State::Playing)?;
+    if let Err(failed) = pipeline.set_state(gst::State::Playing) {
+        return Err(match first_error.lock().unwrap().take() {
+            Some(err) => crate::Error::Pipeline(err),
+            None => failed.into(),
+        });
+    }
 
     Ok(Run {
         start: next[0].load(Ordering::Relaxed),

@@ -130,7 +130,7 @@ async fn run(
         }
     });
 
-    pipeline.set_state(gst::State::Playing)?;
+    pipeline::play(&pipeline)?;
     pipeline::wait_bus(&bus, timeout, "extracting subtitles", |msg| {
         matches!(msg.view(), gst::MessageView::Eos(_)).then_some(())
     })

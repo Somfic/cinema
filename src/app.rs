@@ -76,6 +76,11 @@ impl axum::response::IntoResponse for CinemaError {
             CinemaError::Generic(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Generic"),
             CinemaError::JsonError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Json"),
         };
+        // Client errors are the caller's business; the rest would otherwise
+        // only ever reach the frontend.
+        if status.is_server_error() {
+            tracing::error!(kind, "{self}");
+        }
         let body = axum::Json(serde_json::json!({
             "kind": kind,
             "message": self.to_string(),
