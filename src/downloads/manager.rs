@@ -170,9 +170,33 @@ impl Handle {
         .ok_or_else(|| CinemaError::NotFound(format!("Download {id} not found")))?;
 
         if row.status == DownloadStatus::Completed {
-            return Ok(StartOutcome::AlreadyComplete {
-                output_path: row.output_path,
-            });
+            // The row outlives the file when storage is cleaned up behind our
+            // back. Handing a vanished path to a pipeline only surfaces as an
+            // opaque "Element failed to change its state", so fetch it again.
+            let missing = match row.output_path.as_deref() {
+                Some(path) => !tokio::fs::try_exists(self.0.storage.join(path))
+                    .await
+                    .unwrap_or(false),
+                None => false,
+            };
+            if !missing {
+                return Ok(StartOutcome::AlreadyComplete {
+                    output_path: row.output_path,
+                });
+            }
+
+            tracing::warn!(
+                id,
+                path = ?row.output_path,
+                "Completed download is missing on disk, downloading it again"
+            );
+            sqlx::query(
+                "UPDATE downloads SET status = 'queued', output_path = NULL, \
+                 completed_at = NULL, downloaded_bytes = 0, error = NULL WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&self.0.db)
+            .await?;
         }
 
         // Claim the supervisor slot. Any concurrent start (for same download) will early return.
